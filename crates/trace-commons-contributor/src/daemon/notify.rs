@@ -178,7 +178,7 @@ fn applescript_string(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::queue::{QueueEntry, QueueState, entry_id_for};
+    use crate::daemon::queue::{QueueEntry, entry_id_for};
     use std::path::PathBuf;
 
     fn at(s: &str) -> DateTime<Utc> {
@@ -194,28 +194,12 @@ mod tests {
             entry_id: entry_id_for(label),
             session_hash: format!("sha256:{label}"),
             source: "claude-code".into(),
-            declared_source: None,
             project_key: format!("/Users/z/code/{label}"),
-            project_path: None,
-            session_cwd: None,
             project_label: label.into(),
             path: PathBuf::from("/Users/z/.claude/projects/x/s.jsonl"),
             size_bytes: 10,
             discovered_at: at("2026-08-08T12:00:00Z"),
-            state: QueueState::Pending,
-            reason_label: None,
-            attempts: 0,
-            retry_after: None,
-            submission_id: None,
-            approved_scopes: None,
-            approved_verdict: None,
-            approved_correction: None,
-            approved_inputs: None,
-            previewed_envelope_digest: None,
-            approved_at: None,
-            subagent_count: 0,
-            subagents_dropped: 0,
-            observed_modified_at: None,
+            ..Default::default()
         }
     }
 

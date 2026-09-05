@@ -24,10 +24,17 @@ use uuid::Uuid;
 
 use crate::config::{ConfigStore, DAEMON_QUEUE_FILE};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QueueState {
     /// Waiting on the contributor.
+    ///
+    /// The `Default`, which exists for [`QueueEntry`]'s own derive and is
+    /// the only state a freshly-built entry could honestly be in. Nothing
+    /// in the serde contract changes: the enum has no `#[serde(default)]`,
+    /// so a queue line missing `state` is still refused rather than read as
+    /// `Pending`.
+    #[default]
     Pending,
     /// The contributor said yes; not yet uploaded.
     Approved,
@@ -47,7 +54,19 @@ pub enum QueueState {
     Superseded,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One session offered to the contributor.
+///
+/// `Default` is derived for the benefit of the tests: 26 fields make a full
+/// literal unreadable when a test cares about two of them, so fixtures spell
+/// the fields under test and finish with `..Default::default()`. Production
+/// construction sites deliberately do not use it -- an entry the daemon
+/// builds sets every field on purpose, and a `..Default::default()` there
+/// would let a newly added field default in silently.
+///
+/// The derive changes nothing about the wire or on-disk contract: no
+/// `#[serde(default)]` is added by it, so every field that was required in
+/// `daemon-queue.jsonl` is still required.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueueEntry {
     pub entry_id: Uuid,
     pub session_hash: String,
@@ -1176,28 +1195,12 @@ mod tests {
             entry_id: entry_id_for(hash),
             session_hash: hash.into(),
             source: "claude-code".into(),
-            declared_source: None,
             project_key: "/Users/z/code/proj".into(),
-            project_path: None,
-            session_cwd: None,
             project_label: "proj".into(),
             path: PathBuf::from("/Users/z/.claude/projects/x/s.jsonl"),
             size_bytes: 100,
             discovered_at: at(discovered),
-            state: QueueState::Pending,
-            reason_label: None,
-            attempts: 0,
-            retry_after: None,
-            submission_id: None,
-            approved_scopes: None,
-            approved_verdict: None,
-            approved_correction: None,
-            approved_inputs: None,
-            previewed_envelope_digest: None,
-            approved_at: None,
-            subagent_count: 0,
-            subagents_dropped: 0,
-            observed_modified_at: None,
+            ..Default::default()
         }
     }
 
