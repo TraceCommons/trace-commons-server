@@ -546,7 +546,7 @@ public sealed partial class MainWindow : Window
     {
         // Do not replace an enrollment, consent decision, or NEAR operation.
         // Keep incoming invites until the existing onboarding window closes.
-        if (!_activationReady || _onboarding is not null || _redirectedInvites.Count == 0) return;
+        if (_closed || !_activationReady || _onboarding is not null || _redirectedInvites.Count == 0) return;
         if (ViewModel.NeedsSessionRoots) return;
         var onboarding = OpenOnboarding(OnboardingState.Default());
         onboarding.OfferInvite(_redirectedInvites.Dequeue());
