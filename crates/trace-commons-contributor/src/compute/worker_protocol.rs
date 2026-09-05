@@ -181,7 +181,26 @@ mod tests {
     fn source_derived_vectors_pin_both_directions_and_reject_tampering() {
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../../tests/fixtures/worker_ipc_v0.json")).unwrap();
-        for case in fixture["cases"].as_array().unwrap() {
+        verify_compatibility_vectors(&fixture);
+    }
+
+    #[test]
+    fn orchard_generated_vectors_pin_both_seeds_and_reject_tampering() {
+        // Orchard 4d222766 is an UNMERGED local checkpoint; see compute-local-adapter.md.
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/orchard_worker_ipc_v0.json"
+        ))
+        .unwrap();
+        let cases = fixture["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 2);
+        assert_ne!(cases[0]["seed_hex"], cases[1]["seed_hex"]);
+        verify_compatibility_vectors(&fixture);
+    }
+
+    fn verify_compatibility_vectors(fixture: &serde_json::Value) {
+        let cases = fixture["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 2);
+        for case in cases {
             let seed: [u8; 32] = hex::decode(case["seed_hex"].as_str().unwrap())
                 .unwrap()
                 .try_into()

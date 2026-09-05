@@ -91,12 +91,55 @@ remain closed until those gates and real-device lifecycle validation pass.
 
 ## Evidence scope and local credential boundary
 
-The IPC vectors were derived from reading revision
+The original `worker_ipc_v0.json` vectors were derived from reading revision
 `ef4e6e2479e8395f7d972d3342bad97851f2104e`. They are reproducible local protocol
 fixtures, not captured responses or upstream-generated interoperability evidence.
 The signed fake-worker child exercises real endpoint publication, request checking,
 readiness, state transitions and drain, but implements the same source-derived
-model. An independently generated upstream transcript remains a release gate.
+model. A running upstream worker transcript remains a release gate.
+
+### Orchard-generated compatibility fixture (UNMERGED source)
+
+`crates/trace-commons-contributor/tests/fixtures/orchard_worker_ipc_v0.json`
+contains exact bytes generated in the `nearai/orchard` repository
+(configured remote `https://github.com/nearai/orchard.git`, now redirected by
+GitHub to `https://github.com/nearai/holonear.git`) at revision
+`4d2227661d9a0feab8aa1e1f0baeea011b11d001`, branch
+`resume/worker-ipc-protocol`, based on main
+`e366e5c8d3ff705d10cc7e738191ae6fa2bc5e26`. **This generating revision is
+UNMERGED**; its protocol proposal still requires Orchard
+maintainer approval. The branch is published for reproduction, but is not an
+approved upstream release or dependency.
+
+In a checkout containing that revision, reproduce with:
+
+```sh
+scripts/generate-worker-ipc-vectors.sh
+```
+
+The script runs `UPDATE_WORKER_IPC_VECTORS=1 cargo test -p holonear-protocol
+--lib worker_ipc::tests::orchard_generated_vectors_are_stable --locked`.
+Copy `crates/holonear-protocol/tests/fixtures/worker_ipc/orchard_v0.json`
+without reformatting. Its SHA-256 is
+`eb7a86d64173203a39e332f40cc795da5f3e631c0951526b523258b88c30b23b`.
+The fixture also records the generator module's SHA-256 and the original
+worker implementation revision `7d6f70512fb6cd9faf936fc27ca367a5cd539de5`.
+The generating Orchard protocol crate is licensed MIT OR Apache-2.0.
+
+Orchard's actual `holonear-crypto` / ed25519-dalek path generated these
+signatures using two distinct public fixed test seeds for Status and Drain.
+The Trace `orchard_generated_vectors_pin_both_seeds_and_reject_tampering`
+test calls its production ring request signer and response verifier: exact
+request signatures and serialized bodies must agree, and wrong direction,
+nonce, version, instance or payload must fail. Both crypto implementations
+therefore agree on these messages; the original source-derived fixture remains
+separate and retains its existing test.
+
+This is cross-implementation message compatibility, not a running-node
+transcript, pool assignment, completed workload, signed package, independently
+trusted package manifest, release provenance or production launch authorization.
+No test executes Orchard code or needs an Orchard checkout or network access.
+Production compute and its remaining release gates stay unchanged.
 
 The per-launch seed is passed through the child process environment. After spawn,
 the parent removes the credential from its `Command` configuration and clears the
