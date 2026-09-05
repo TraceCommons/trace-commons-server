@@ -1156,6 +1156,21 @@ const MIGRATIONS: &[(i32, &str, &str)] = &[
         "trace_gate_decision_dedup_signal_version",
         include_str!("../../../../migrations/V57__trace_gate_decision_dedup_signal_version.sql"),
     ),
+    (
+        58,
+        "near_account_provisioning",
+        include_str!("../../../../migrations/V58__near_account_provisioning.sql"),
+    ),
+    (
+        59,
+        "trace_admission_ledger",
+        include_str!("../../../../migrations/V59__trace_admission_ledger.sql"),
+    ),
+    (
+        60,
+        "onboarding_retention",
+        include_str!("../../../../migrations/V60__onboarding_retention.sql"),
+    ),
 ];
 
 #[async_trait]
@@ -1338,68 +1353,6 @@ impl Database for PgBackend {
                     )
                     .await?;
             }
-        }
-
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&58_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V58__near_account_provisioning.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&58_i32, &"near_account_provisioning"],
-                )
-                .await?;
-        }
-
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&59_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V59__trace_admission_ledger.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&59_i32, &"trace_admission_ledger"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&60_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V60__onboarding_retention.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&60_i32, &"onboarding_retention"],
-                )
-                .await?;
         }
         Ok(())
     }
