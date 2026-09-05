@@ -3040,7 +3040,7 @@ pub fn render_witness(app: &Rc<App>) {
     // pins on a witness that does not exist is not a shorter sentence but a
     // wrong one. Nothing is drawn in its place -- no placeholder, no dash.
     if let Some(line) = status.pinned_measurement_line() {
-        style::append_meta(&view, &line);
+        style::append_meta(view, &line);
     }
 
     let settings = &app.settings;
