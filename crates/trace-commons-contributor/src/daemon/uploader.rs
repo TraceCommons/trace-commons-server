@@ -534,9 +534,7 @@ mod tests {
     use crate::source::claude_code::ClaudeCodeSource;
     use std::path::PathBuf;
 
-    fn at(s: &str) -> DateTime<Utc> {
-        s.parse().unwrap()
-    }
+    use crate::daemon::test_support::at;
 
     fn settings() -> DaemonSettings {
         DaemonSettings::default()

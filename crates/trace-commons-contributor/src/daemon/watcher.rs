@@ -883,9 +883,7 @@ mod tests {
         }
     }
 
-    fn at(s: &str) -> DateTime<Utc> {
-        s.parse().unwrap()
-    }
+    use crate::daemon::test_support::at;
 
     /// A daemon whose session roots are a tempdir, so a test never reads the
     /// developer's real transcripts.

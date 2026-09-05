@@ -181,9 +181,7 @@ mod tests {
     use crate::daemon::queue::{QueueEntry, entry_id_for};
     use std::path::PathBuf;
 
-    fn at(s: &str) -> DateTime<Utc> {
-        s.parse().unwrap()
-    }
+    use crate::daemon::test_support::at;
 
     fn labels(names: &[&str]) -> BTreeSet<String> {
         names.iter().map(|n| (*n).to_string()).collect()

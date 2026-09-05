@@ -1186,9 +1186,7 @@ mod tests {
     use super::*;
     use crate::config::tests_support::temp_store;
 
-    fn at(s: &str) -> DateTime<Utc> {
-        s.parse().unwrap()
-    }
+    use crate::daemon::test_support::at;
 
     fn entry(hash: &str, discovered: &str) -> QueueEntry {
         QueueEntry {

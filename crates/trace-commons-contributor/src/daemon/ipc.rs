@@ -4553,9 +4553,7 @@ mod tests {
         }
     }
 
-    fn at(s: &str) -> chrono::DateTime<Utc> {
-        s.parse().unwrap()
-    }
+    use crate::daemon::test_support::at;
 
     /// A real directory on this machine whose canonical path is an
     /// admissible project key. `set_project_mode` no longer accepts a key
