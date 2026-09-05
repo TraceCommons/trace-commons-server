@@ -91,7 +91,7 @@ impl ImportOutcome {
     /// For callers that only care whether the whole run succeeded.
     /// Only this module's tests call it; the command renders the outcome
     /// rather than collapsing it to a `Result`.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn into_result(self) -> Result<ImportSummary> {
         match self.error {
             Some(e) => Err(e),

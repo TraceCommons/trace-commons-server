@@ -56,16 +56,16 @@ pub(crate) struct TrajectoryDescription {
     // than address it, so the import path needs none of them -- but a
     // parse that quietly stopped populating them would be a real
     // regression in what the fixtures pin.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub trajectory_id: String,
     pub workspace_uri: Option<String>,
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub git_root: Option<String>,
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub git_branch: Option<String>,
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub summary: Option<String>,
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub step_count: Option<u32>,
 }
 

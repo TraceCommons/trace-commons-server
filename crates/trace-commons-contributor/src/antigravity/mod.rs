@@ -6,15 +6,10 @@
 //! Trajectory-v1 records, and `import` stages those through the existing
 //! `trajectory` source instead.
 //!
-//! A few items here are read only by this module's own tests -- five
-//! descriptive fields on `TrajectoryDescription` and `ImportOutcome`'s
-//! `into_result`. Each carries its own `allow(dead_code)` rather than the
-//! module-wide one this used to have: the wide allow also covered whatever
-//! else went unread, and the note explaining it had already gone stale
-//! (`Candidate` is named there as dead and is in fact used by
-//! `endpoint::candidates_from` and `probe_candidates`). The fields are part
-//! of the API surface the recorded fixtures pin, so they are kept and
-//! asserted rather than dropped.
+//! Descriptive listing fields and `ImportOutcome::into_result` are exercised
+//! by fixtures but not read by the production import path. Their non-test
+//! builds carry item-level dead-code allowances; the rest of the module
+//! remains checked, including endpoint candidate discovery.
 
 mod client;
 mod convert;
