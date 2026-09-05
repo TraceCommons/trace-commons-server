@@ -206,12 +206,15 @@ enum TC {
     /// labels are heavy, uppercase and tracked, which is the site's
     /// `.eyebrow` / `th` / `.kpi .label` treatment (12px, weight 800,
     /// uppercase) rendered in SF instead of Inter.
-    /// Where a macOS text style's default size already equals the size the
-    /// mockups state, the text style is used, so the scale still answers to
-    /// Dynamic Type. macOS `title2` is 17, `title3` 15, `headline`/`body` 13,
-    /// `callout` 12, `subheadline` 11, `footnote`/`caption`/`caption2` 10.
-    /// Where the mockups ask for a size no text style carries -- 20, 18, 16,
-    /// 12.5, 10.5 -- an exact size is given instead.
+    /// Every face is a text style, so the whole scale answers to the
+    /// system text size. macOS `title` is 22, `title2` 17, `title3` 15,
+    /// `headline`/`body` 13, `callout` 12, `subheadline` 11,
+    /// `footnote`/`caption`/`caption2` 10. Where the mockups ask for a size
+    /// no text style carries -- 20, 18, 16, 12.5, 10.5 -- the nearest style
+    /// is used and the delta is noted on the face. Those five used to be
+    /// `Font.system(size:)`, which is fixed: a person who had turned text
+    /// size up got larger prose beside stat figures, button labels and
+    /// footnotes that stayed exactly where they were.
     enum Font_ {
         /// Spec `title.screen`, 15/700. Content-header titles: "Waiting",
         /// "History", "Settings".
@@ -225,31 +228,35 @@ enum TC {
         static let sectionTitle = Font.title2.weight(.bold)
         /// Spec `title.card`, 13/600. The name of the thing a card is about.
         static let cardTitle = Font.headline
-        /// Spec `metric.value`, 20/700. Stat-card numbers.
-        static let metricValue = Font.system(size: 20, weight: .bold)
-        /// Spec `metric.value.mono`, 18/700 mono. Credit figures.
-        static let metricValueMono = Font.system(size: 18, weight: .bold, design: .monospaced)
-        /// Spec `heading.alert`, 16/700. "2 matches".
-        static let headingAlert = Font.system(size: 16, weight: .bold)
+        /// Spec `metric.value`, 20/700. Stat-card numbers. `title` (22): a
+        /// step above `sectionTitle`, which is what the spec's 20 was for.
+        static let metricValue = Font.title.weight(.bold)
+        /// Spec `metric.value.mono`, 18/700 mono. Credit figures. `title2`
+        /// (17); pair with `.monospacedDigit()` at the call site as before.
+        static let metricValueMono = Font.system(.title2, design: .monospaced).weight(.bold)
+        /// Spec `heading.alert`, 16/700. "2 matches". `title3` (15).
+        static let headingAlert = Font.title3.weight(.bold)
         /// Spec `body`, 13/400. The opening prompt -- the text that actually
         /// identifies a session to the person who wrote it. Was `callout`
         /// (12pt).
         static let body = Font.body
-        /// Spec `body.dense`, 12.5/600. The undo bar's headline.
-        static let bodyDense = Font.system(size: 12.5, weight: .semibold)
-        /// Spec `body.dense` at 400. Disclosure rows.
-        static let disclosure = Font.system(size: 12.5)
+        /// Spec `body.dense`, 12.5/600. The undo bar's headline. `callout`
+        /// (12).
+        static let bodyDense = Font.callout.weight(.semibold)
+        /// Spec `body.dense` at 400. Disclosure rows. `callout` (12).
+        static let disclosure = Font.callout
         /// Spec `label.control`, 12/500. Secondary buttons.
-        static let labelControl = Font.system(size: 12, weight: .medium)
+        static let labelControl = Font.callout.weight(.medium)
         /// Spec `label.control.primary`, 12/600. Filled buttons.
-        static let labelControlPrimary = Font.system(size: 12, weight: .semibold)
+        static let labelControlPrimary = Font.callout.weight(.semibold)
         /// Spec `caption`, 11/400. Attribution, timestamps, agent names,
         /// supporting sentences. Was `callout` (12pt).
         static let meta = Font.subheadline
         /// Spec `caption`, 11/400, under the spec's own name.
         static let caption = Font.subheadline
-        /// Spec `caption.small`, 10.5/400. The read-gate footnote.
-        static let captionSmall = Font.system(size: 10.5)
+        /// Spec `caption.small`, 10.5/400. The read-gate footnote. `caption2`
+        /// (10).
+        static let captionSmall = Font.caption2
         /// Spec `eyebrow`, 10/800 uppercase, tracked. Field labels on the
         /// manifest strip. See `Tracking.eyebrow`.
         static let fieldLabel = Font.caption2.weight(.heavy)
