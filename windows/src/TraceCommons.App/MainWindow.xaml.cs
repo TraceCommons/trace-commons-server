@@ -88,6 +88,11 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private readonly DispatcherQueueTimer _visibilityDebounceTimer;
 
+    private OnboardingWindow? _onboarding;
+    private readonly Queue<string> _redirectedInvites = new();
+    private bool _activationReady;
+    private bool _closed;
+
     private bool _quitConfirmed;
 
     /// <summary>
@@ -309,6 +314,7 @@ public sealed partial class MainWindow : Window
 
         await RefreshTrayAsync();
         await ShowOnboardingIfNeededAsync();
+        OfferNextRedirectedInvite();
     }
 
     /// <summary>
@@ -522,10 +528,43 @@ public sealed partial class MainWindow : Window
         _host.Dispatcher.TryEnqueue(async () => await ViewModel.ResumeAsync());
     }
 
-    private void BringForward()
+    internal void BringForward()
     {
         AppWindow.Show();
         Activate();
+    }
+
+    internal void ReceiveActivation(string? invite)
+    {
+        if (_closed) return;
+        BringForward();
+        if (invite is not null) _redirectedInvites.Enqueue(invite);
+        OfferNextRedirectedInvite();
+    }
+
+    private void OfferNextRedirectedInvite()
+    {
+        // Do not replace an enrollment, consent decision, or NEAR operation.
+        // Keep incoming invites until the existing onboarding window closes.
+        if (!_activationReady || _onboarding is not null || _redirectedInvites.Count == 0) return;
+        if (ViewModel.NeedsSessionRoots) return;
+        var onboarding = OpenOnboarding(OnboardingState.Default());
+        onboarding.OfferInvite(_redirectedInvites.Dequeue());
+        onboarding.Activate();
+    }
+
+    private OnboardingWindow OpenOnboarding(OnboardingState state)
+    {
+        if (_onboarding is not null) return _onboarding;
+        var onboarding = new OnboardingWindow(_host, state);
+        _onboarding = onboarding;
+        onboarding.Closed += async (_, _) =>
+        {
+            await onboarding.CloseCompletion;
+            if (ReferenceEquals(_onboarding, onboarding)) _onboarding = null;
+            DispatcherQueue.TryEnqueue(OfferNextRedirectedInvite);
+        };
+        return onboarding;
     }
 
     private void OnTrayQuitRequested()
@@ -577,6 +616,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        _activationReady = true;
         string? tenantId = null;
         bool loggedIn = false;
         if (status.Result is JsonElement element)
@@ -596,7 +636,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var onboarding = new OnboardingWindow(_host, state);
+        var onboarding = OpenOnboarding(state);
         if (App.PendingInvite is string invite)
         {
             onboarding.OfferInvite(invite);
@@ -744,6 +784,7 @@ public sealed partial class MainWindow : Window
         {
             onboarding.ViewModel.GetStarted();
         }
+
         onboarding.Activate();
     }
 
@@ -1223,6 +1264,9 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private async void OnClosed(object sender, WindowEventArgs args)
     {
+        _closed = true;
+        _activationReady = false;
+        _redirectedInvites.Clear();
         // Before the daemon teardown, and synchronously: an icon left in the
         // notification area after the process exits is a ghost the shell only
         // reaps when someone hovers over it, and it would claim a watcher

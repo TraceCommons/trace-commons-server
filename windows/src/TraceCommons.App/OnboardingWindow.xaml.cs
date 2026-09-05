@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using TraceCommons.App.ViewModels;
@@ -30,10 +31,11 @@ public sealed partial class OnboardingWindow : Window
         ViewModel = new OnboardingViewModel(host, state);
         ViewModel.Finished += OnFinished;
         ((FrameworkElement)Content).Loaded += async (_, _) => await ViewModel.NearAccount.InitializeAsync();
-        Closed += async (_, _) => await ViewModel.NearAccount.CloseAsync();
+        Closed += async (_, _) => await (CloseCompletion = ViewModel.NearAccount.CloseAsync());
     }
 
     public OnboardingViewModel ViewModel { get; }
+    internal Task CloseCompletion { get; private set; } = Task.CompletedTask;
 
     /// <summary>
     /// Fills the invite from a deep link and opens on Connect.
