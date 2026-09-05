@@ -56,8 +56,7 @@ pub enum QueueState {
 
 /// One session offered to the contributor.
 ///
-/// `Default` is derived for the benefit of the tests: 26 fields make a full
-/// literal unreadable when a test cares about two of them, so fixtures spell
+/// `Default` supports focused test fixtures, which spell
 /// the fields under test and finish with `..Default::default()`. Production
 /// construction sites deliberately do not use it -- an entry the daemon
 /// builds sets every field on purpose, and a `..Default::default()` there
@@ -1603,6 +1602,19 @@ mod tests {
             .unwrap();
         q.save(&store).unwrap();
         assert_eq!(Queue::load(&store).unwrap(), q);
+    }
+
+    #[test]
+    fn fixture_defaults_do_not_fill_missing_persisted_identity_or_state() {
+        let original = serde_json::to_value(entry("sha256:aa", "2026-08-08T12:00:00Z")).unwrap();
+        for field in ["entry_id", "session_hash", "state", "discovered_at"] {
+            let mut incomplete = original.clone();
+            incomplete.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<QueueEntry>(incomplete).is_err(),
+                "persisted entries must still require {field}"
+            );
+        }
     }
 
     #[test]
