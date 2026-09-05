@@ -1021,11 +1021,17 @@ enum ProbeOutcome {
     Unknown,
 }
 
-/// The declaration as `set_settings` takes it, or `null` for off.
-///
 /// `token_dir` is left out when the box is empty rather than sent as an
 /// empty string: the daemon refuses an empty string outright, and absence
 /// is what falls back to the conventional location.
+fn insert_token_dir(map: &mut serde_json::Map<String, serde_json::Value>, token_dir: &str) {
+    let dir = token_dir.trim();
+    if !dir.is_empty() {
+        map.insert("token_dir".to_string(), serde_json::json!(dir));
+    }
+}
+
+/// The declaration as `set_settings` takes it, or `null` for off.
 fn routing_param(on: bool, port: u16, token_dir: &str) -> serde_json::Value {
     if !on {
         return serde_json::Value::Null;
@@ -1033,10 +1039,7 @@ fn routing_param(on: bool, port: u16, token_dir: &str) -> serde_json::Value {
     let mut declaration = serde_json::Map::new();
     declaration.insert("mode".to_string(), serde_json::json!("watch"));
     declaration.insert("port".to_string(), serde_json::json!(port));
-    let dir = token_dir.trim();
-    if !dir.is_empty() {
-        declaration.insert("token_dir".to_string(), serde_json::json!(dir));
-    }
+    insert_token_dir(&mut declaration, token_dir);
     serde_json::Value::Object(declaration)
 }
 
@@ -1054,10 +1057,7 @@ fn routing_settings_params(on: bool, port: u16, token_dir: &str) -> serde_json::
 fn probe_params(port: u16, token_dir: &str) -> serde_json::Value {
     let mut params = serde_json::Map::new();
     params.insert("port".to_string(), serde_json::json!(port));
-    let dir = token_dir.trim();
-    if !dir.is_empty() {
-        params.insert("token_dir".to_string(), serde_json::json!(dir));
-    }
+    insert_token_dir(&mut params, token_dir);
     serde_json::Value::Object(params)
 }
 
@@ -1110,12 +1110,7 @@ fn probe_line(outcome: &ProbeOutcome) -> String {
 /// it like the off line and held would paint it like the normal one, and it
 /// is neither.
 fn routing_tone(state: &str) -> Tone {
-    match copy::ironwire_state_tone(state) {
-        copy::StateTone::Held => Tone::Held,
-        copy::StateTone::Clear => Tone::Clear,
-        copy::StateTone::Attention => Tone::Attention,
-        copy::StateTone::Neutral => Tone::Neutral,
-    }
+    state_tone(copy::ironwire_state_tone(state))
 }
 
 /// Fill the declaration controls from the daemon's own answer, and say one
@@ -2761,6 +2756,18 @@ pub(super) fn witness_read(dir: &std::path::Path) -> WitnessStatus {
             pinned_measurements: Vec::new(),
         },
         Err(_) => unreadable(),
+    }
+}
+
+/// The shared daemon-state tone onto this shell's palette. Used by
+/// `routing_tone`; see its doc comment for why each arm reads the way it
+/// does.
+fn state_tone(tone: copy::StateTone) -> Tone {
+    match tone {
+        copy::StateTone::Held => Tone::Held,
+        copy::StateTone::Clear => Tone::Clear,
+        copy::StateTone::Attention => Tone::Attention,
+        copy::StateTone::Neutral => Tone::Neutral,
     }
 }
 
