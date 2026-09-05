@@ -1078,100 +1078,8 @@ pub fn handle_request(shared: &DaemonShared, req: &Request) -> Response {
             }),
         ),
         "status" => Response::ok(req.id, shared.status_value()),
-        "list_pending" => {
-            let queue = shared.queue.lock().expect("queue lock");
-            let entries: Vec<serde_json::Value> =
-                queue.pending().iter().map(|e| entry_value(e)).collect();
-            Response::ok(req.id, serde_json::json!({ "pending": entries }))
-        }
-        // Every project the daemon knows about -- configured *and* merely
-        // discovered -- with the mode actually in force for each.
-        //
-        // It used to report `policy.projects` alone, which meant a project
-        // the daemon had seen but the contributor had never ruled on was
-        // invisible here. That is precisely the set an onboarding "which of
-        // these should never be uploaded" screen has to show: a project
-        // becomes configured only by being ruled on, so listing only
-        // configured projects lists only the ones already decided. A
-        // contributor could not exclude their employer's repository before
-        // anything was sent, because the screen could not name it.
-        //
-        // A discovered row carries `configured: false` and `added_at:
-        // null`; its `mode` is the effective one, which for an unruled
-        // project is the notify-only default. Nothing new crosses the
-        // socket: the label and the id are the same two daemon-derived
-        // fields the queue entry for that project already carries.
-        //
-        // `is_unresolved_bucket` marks the row holding sessions whose
-        // working directory had no usable final segment. Clients show it
-        // with a permanent note that these can never be armed -- which is
-        // enforcement they are REPORTING, not performing: `Policy` refuses
-        // `auto_upload` for this key independently of any client.
-        //
-        // The daemon says so explicitly because it is the only side that
-        // knows it for free. A client deriving it would have to re-implement
-        // `project_id_for`'s hash to compare ids, and a client matching on
-        // `project_label` would break the day that string is reworded --
-        // which every shell does to it, because the raw label is a slug no
-        // contributor should read. Clients MUST NOT recognise this row by
-        // label.
-        "list_projects" => {
-            let policy = shared.policy.lock().expect("policy lock");
-            let queue = shared.queue.lock().expect("queue lock");
-            let known = known_keys(&policy, queue.all().iter().map(|e| e.project_key.clone()));
-            let discovered: std::collections::BTreeMap<String, Option<String>> = queue
-                .all()
-                .iter()
-                .map(|e| (e.project_key.clone(), e.project_path.clone()))
-                .filter(|(key, _)| !policy.projects.contains_key(key))
-                .collect();
-            let projects: Vec<serde_json::Value> = policy
-                .projects
-                .iter()
-                .map(|(key, entry)| {
-                    let shown = entry.display_path.as_deref().unwrap_or(key);
-                    serde_json::json!({
-                        "project_id": project_id_for(key),
-                        "project_label": disambiguated_label(key, entry.display_path.as_deref(), &known),
-                        "project_path": display_path(shown),
-                        "mode": policy.resolve(key),
-                        "added_at": entry.added_at,
-                        "configured": true,
-                        "is_unresolved_bucket": key == UNKNOWN_PROJECT_KEY,
-                    })
-                })
-                .chain(discovered.iter().map(|(key, shown)| {
-                    serde_json::json!({
-                        "project_id": project_id_for(key),
-                        "project_label": disambiguated_label(key, shown.as_deref(), &known),
-                        "project_path": display_path(shown.as_deref().unwrap_or(key)),
-                        "mode": policy.resolve(key),
-                        "added_at": serde_json::Value::Null,
-                        "configured": false,
-                        "is_unresolved_bucket": key == UNKNOWN_PROJECT_KEY,
-                    })
-                }))
-                .collect();
-            Response::ok(req.id, serde_json::json!({ "projects": projects }))
-        }
-        // Two ways to name a project, for two different callers.
-        //
-        // `project_id` is for anything that learned about the project over
-        // this socket -- a queue entry or a `list_projects` row. It is the
-        // only identifier such a caller holds, because keys are paths and
-        // paths do not cross this socket. Without it this method was
-        // unreachable from every GUI: a label is not an admissible key, and
-        // the only writer of `policy.projects` is this method itself, so
-        // there was no way in.
-        //
-        // `project_key` is for a caller standing in a terminal, where the
-        // human types the path: `daemon project <path> --mode ignore`. That
-        // flow must keep working *before* the project's first session,
-        // which is exactly when the daemon has no id to offer for it -- it
-        // cannot mint one for a project it has never discovered. So both
-        // are supported, deliberately, rather than one replacing the other.
-        //
-        // `project_id` wins when both are sent.
+        "list_pending" => handle_list_pending(shared, req),
+        "list_projects" => handle_list_projects(shared, req),
         // The one project worth offering to arm right now, or nothing.
         //
         // A read, with no side effect: asking does not consume the offer.
@@ -1228,171 +1136,7 @@ pub fn handle_request(shared: &DaemonShared, req: &Request) -> Response {
                 Err(e) => Response::err(req.id, ERR_UNAVAILABLE, &e.to_string()),
             }
         }
-        "set_project_mode" => {
-            let id_param = req.params.get("project_id").and_then(|v| v.as_str());
-            let key_param = req.params.get("project_key").and_then(|v| v.as_str());
-            if id_param.is_none() && key_param.is_none() {
-                return Response::err(req.id, ERR_BAD_PARAMS, "project_id-or-project_key-required");
-            }
-            let mode: ProjectMode = match req
-                .params
-                .get("mode")
-                .cloned()
-                .map(serde_json::from_value::<ProjectMode>)
-            {
-                Some(Ok(m)) => m,
-                _ => return Response::err(req.id, ERR_BAD_PARAMS, "mode-invalid"),
-            };
-            // A `label` param is accepted on the wire for compatibility with
-            // older clients and then IGNORED. It used to be stored verbatim
-            // and echoed back by `list_projects` and written into
-            // `daemon-audit.jsonl`, so any socket client could inject a
-            // path, a token, or a transcript fragment into both of the
-            // sinks this crate's label-only rule exists to protect. The
-            // label is now derived from the key inside `set_mode`.
-            // Lock order is policy before queue, as everywhere else.
-            let mut policy = shared.policy.lock().expect("policy lock");
-            let (key, audit_label) = {
-                let queue = shared.queue.lock().expect("queue lock");
-                let known = known_keys(&policy, queue.all().iter().map(|e| e.project_key.clone()));
-                // Whichever way the project was named, what comes out of
-                // here is a key the daemon itself already holds or has just
-                // corroborated on disk -- never a caller's string. That is
-                // what keeps the derived label, and so `list_projects` and
-                // `daemon-audit.jsonl`, un-injectable.
-                let key = match id_param {
-                    Some(id) => match project_key_for_id(id, &known) {
-                        Some(key) => key,
-                        None => {
-                            return Response::err(
-                                req.id,
-                                ERR_BAD_PARAMS,
-                                ERR_PROJECT_ID_UNRECOGNIZED,
-                            );
-                        }
-                    },
-                    None => {
-                        let key = key_param.unwrap_or_default();
-                        if !project_key_is_admissible(key, &known) {
-                            return Response::err(
-                                req.id,
-                                ERR_BAD_PARAMS,
-                                ERR_PROJECT_KEY_UNRECOGNIZED,
-                            );
-                        }
-                        key.to_string()
-                    }
-                };
-                let shown = crate::daemon::policy::display_path_for_key(&key);
-                let label = disambiguated_label(&key, shown.as_deref(), &known);
-                (key, label)
-            };
-
-            // The audit entry goes down FIRST, before anything is armed,
-            // the way `acknowledge_near_ai_notice` does it.
-            //
-            // The reverse order looked equivalent and was not. It saved the
-            // policy, then appended, then on an append failure restored the
-            // in-memory policy and wrote it back best-effort -- but the
-            // disk-full or permissions failure that broke the append breaks
-            // that write back just as reliably, and the daemon loads its
-            // policy from disk on restart. The fail-closed guarantee did not
-            // survive a reboot: autonomy stayed armed on disk with no record
-            // of it ever having been armed. Recording first means there is
-            // nothing to roll back, so nothing that has to succeed twice.
-            //
-            // This is visibility, not a security control -- see
-            // `daemon::audit` -- but it is the *only* visibility there is
-            // here, and the terminal-only restriction it replaced was
-            // itself a visibility mechanism.
-            //
-            // Both locks are dropped for the append itself: it is a
-            // whole-file read-modify-write on a synchronous socket handler,
-            // and the queue lock in particular is contended with the upload
-            // pass. The policy lock is retaken immediately after; a
-            // concurrent `set_project_mode` can only interleave two
-            // record-then-arm sequences, never produce an armed policy with
-            // no record.
-            if mode == ProjectMode::AutoUpload {
-                drop(policy);
-                if let Err(_e) = audit::append(
-                    &shared.store,
-                    &AuditEntry {
-                        at: Utc::now(),
-                        action: "armed-auto-upload".to_string(),
-                        project_label: Some(audit_label),
-                        detail: None,
-                    },
-                ) {
-                    return Response::err(req.id, ERR_UNAVAILABLE, "audit-write-failed");
-                }
-                policy = shared.policy.lock().expect("policy lock");
-            }
-
-            if let Err(e) = policy.set_mode(&key, mode, Utc::now()) {
-                return Response::err(req.id, ERR_BAD_PARAMS, &one_line_label(&e.to_string()));
-            }
-            if let Err(_e) = policy.save(&shared.store) {
-                return Response::err(req.id, ERR_UNAVAILABLE, "policy-write-failed");
-            }
-            // A newly-configured project can turn a previously-unique queue
-            // label into a collision (or vice versa) immediately -- e.g.
-            // configuring the client's "api" the moment after "api" was
-            // queued bare from the contributor's own repo. Relabel now
-            // rather than leaving the queue to lag until the next poll,
-            // which would leave two same-basename projects briefly
-            // indistinguishable in the one place uploads are approved from.
-            // Ignoring a project clears what it already has waiting. Doing
-            // it here rather than in the UI means Settings, onboarding and
-            // the CLI all get it: before this, ignoring from Settings left
-            // the contributor staring at the cards they had just declined.
-            //
-            // Pending only. See `refuse_pending_for_project`.
-            //
-            // Leaving `Ignore` undoes exactly that, and only that: see
-            // `clear_project_ignored`, which is what makes the
-            // confirmation's "You can undo this in Settings" true for a
-            // *finished* session -- the ordinary case, and the one the
-            // ignore was aimed at. It is the same arm because the two are
-            // one setting, and every route that can set it (Settings,
-            // onboarding, the CLI, the Waiting screen) must get both halves.
-            //
-            // The policy is already saved at this point, so a `queue.save`
-            // failure below leaves disk disagreeing with memory: the project
-            // is durably `Ignore` while its entries are still durably
-            // `Pending`, and a restart brings the cleared cards back. The
-            // error is reported and the daemon keeps the in-memory truth, so
-            // the contributor sees the right thing until then. Ordering the
-            // two writes the other way does not help -- the relabel below
-            // reads the *new* policy, so the queue cannot be written first --
-            // and a real fix wants both files under one atomic write, which
-            // the store does not offer.
-            let (queue_changed, purged) = {
-                let mut queue = shared.queue.lock().expect("queue lock");
-                let purged = if mode == ProjectMode::Ignore {
-                    queue.refuse_pending_for_project(&key)
-                } else {
-                    0
-                };
-                let restored = if mode == ProjectMode::Ignore {
-                    0
-                } else {
-                    queue.clear_project_ignored(&key)
-                };
-                let relabelled = relabel_queue_entries(&policy, &mut queue);
-                if relabelled || purged > 0 || restored > 0 {
-                    if let Err(_e) = queue.save(&shared.store) {
-                        return Response::err(req.id, ERR_UNAVAILABLE, "queue-write-failed");
-                    }
-                }
-                (relabelled || restored > 0, purged)
-            };
-            drop(policy);
-            if queue_changed || purged > 0 {
-                shared.publish(EVENT_QUEUE_CHANGED, serde_json::json!({}));
-            }
-            Response::ok(req.id, serde_json::json!({ "ok": true, "purged": purged }))
-        }
+        "set_project_mode" => handle_set_project_mode(shared, req),
         "dismiss" => {
             let id = try_response!(entry_id_param(req));
             // A dismissed entry is never previewed again, so drop any
@@ -1444,39 +1188,7 @@ pub fn handle_request(shared: &DaemonShared, req: &Request) -> Response {
         // synchronous path, and a shell can call it before it has anything
         // to declare.
         "discover_routing" => handle_discover_routing(req),
-        "pause" => {
-            // An optional timed pause, persisted so it survives a restart of
-            // either the daemon or the app that requested it -- an app-side
-            // timer alone would die with the app and silently fail to
-            // resume the daemon.
-            let until = match req.params.get("until").and_then(|v| v.as_str()) {
-                Some(s) => match s.parse::<chrono::DateTime<Utc>>() {
-                    Ok(dt) if dt > Utc::now() => Some(dt),
-                    // A deadline that has already passed would publish a
-                    // pause event for a pause the very next status call (or
-                    // is_paused check) clears -- reject it up front rather
-                    // than accept a pause that is a lie the instant it's
-                    // acknowledged.
-                    Ok(_) => return Response::err(req.id, ERR_BAD_PARAMS, "until-in-the-past"),
-                    Err(_) => return Response::err(req.id, ERR_BAD_PARAMS, "until-invalid"),
-                },
-                None => None,
-            };
-            shared.paused.store(true, Ordering::Relaxed);
-            {
-                let mut state = shared.state.lock().expect("state lock");
-                state.paused = true;
-                state.paused_until = until;
-                if state.save(&shared.store).is_err() {
-                    return Response::err(req.id, ERR_UNAVAILABLE, "state-write-failed");
-                }
-            }
-            shared.publish(EVENT_STATUS_CHANGED, serde_json::json!({}));
-            Response::ok(
-                req.id,
-                serde_json::json!({ "paused": true, "paused_until": until }),
-            )
-        }
+        "pause" => handle_pause(shared, req),
         "resume" => {
             shared.paused.store(false, Ordering::Relaxed);
             {
@@ -1490,116 +1202,8 @@ pub fn handle_request(shared: &DaemonShared, req: &Request) -> Response {
             shared.publish(EVENT_STATUS_CHANGED, serde_json::json!({}));
             Response::ok(req.id, serde_json::json!({ "paused": false }))
         }
-        "cancel" => {
-            // `project_id` is the batch form of `cancel`, mirroring
-            // `approve`'s selector shape so an Undo of a project-wide
-            // approval is one call with the same argument -- the daemon
-            // decides which entries it covers, rather than the shell
-            // deriving "what I saw pending minus what was reported
-            // skipped" and racing the queue to cancel them one at a time.
-            // `project_id` and `entry_id` are mutually exclusive;
-            // `project_id` wins when both are sent, the same precedence
-            // `approve` uses between its own selectors.
-            let project_id = req.params.get("project_id").and_then(|v| v.as_str());
-            if let Some(pid) = project_id {
-                // Unrecognized is refused exactly as `approve` refuses it
-                // for the same selector: a handle the caller never
-                // received is a client bug, and answering `canceled: 0`
-                // would be indistinguishable from "that project had
-                // nothing to cancel". Lock order is policy before queue,
-                // as everywhere else.
-                let policy = shared.policy.lock().expect("policy lock");
-                let mut queue = shared.queue.lock().expect("queue lock");
-                let known = known_keys(&policy, queue.all().iter().map(|e| e.project_key.clone()));
-                let Some(key) = project_key_for_id(pid, &known) else {
-                    return Response::err(req.id, ERR_BAD_PARAMS, ERR_PROJECT_ID_UNRECOGNIZED);
-                };
-                // Only `Approved`: those are the entries an Undo would be
-                // undoing. A `Pending` entry has nothing to cancel, and a
-                // project-wide call must not touch it. Matched by the id
-                // `entry_value` publishes, never `project_label`, same as
-                // `approve`.
-                let ids: Vec<Uuid> = queue
-                    .all()
-                    .iter()
-                    .filter(|e| e.project_key == key && e.state == QueueState::Approved)
-                    .map(|e| e.entry_id)
-                    .collect();
-                let project_audit_label = disambiguated_label(
-                    &key,
-                    crate::daemon::policy::display_path_for_key(&key).as_deref(),
-                    &known,
-                );
-                // Same ordering as `approve`'s `bulk-approved` row: written
-                // before anything is canceled, so a rollback never has to
-                // write to the disk that just refused a write. Undoing a
-                // batch is the same class of act as approving one -- bulk,
-                // unattended, previously terminal-only -- so it gets the
-                // same visibility. A selector that matched nothing writes
-                // no row, for the same reason `approve` writes none: no
-                // entries were canceled, and a shell polling an empty
-                // project would rotate real records out of a capped log.
-                if !ids.is_empty() {
-                    if let Err(_e) = audit::append(
-                        &shared.store,
-                        &AuditEntry {
-                            at: Utc::now(),
-                            action: "bulk-canceled".to_string(),
-                            project_label: Some(project_audit_label),
-                            detail: Some(ids.len().to_string()),
-                        },
-                    ) {
-                        return Response::err(req.id, ERR_UNAVAILABLE, "audit-write-failed");
-                    }
-                }
-                let mut canceled = 0usize;
-                for id in &ids {
-                    // Selection and cancellation happen under one
-                    // continuous hold of the queue lock, so every id
-                    // selected above is still `Approved` when `cancel`
-                    // runs on it; nothing else can have moved it.
-                    if queue.cancel(*id).is_ok() {
-                        canceled += 1;
-                    }
-                }
-                if let Err(_e) = queue.save(&shared.store) {
-                    return Response::err(req.id, ERR_UNAVAILABLE, "queue-write-failed");
-                }
-                drop(queue);
-                shared.publish(EVENT_QUEUE_CHANGED, serde_json::json!({}));
-                return Response::ok(req.id, serde_json::json!({ "canceled": canceled }));
-            }
-            let id = try_response!(entry_id_param(req));
-            let mut queue = shared.queue.lock().expect("queue lock");
-            if queue.cancel(id).is_err() {
-                return Response::err(req.id, ERR_BAD_PARAMS, "not-cancelable");
-            }
-            if let Err(_e) = queue.save(&shared.store) {
-                return Response::err(req.id, ERR_UNAVAILABLE, "queue-write-failed");
-            }
-            drop(queue);
-            shared.publish(EVENT_QUEUE_CHANGED, serde_json::json!({}));
-            Response::ok(req.id, serde_json::json!({ "ok": true }))
-        }
-        "list_audit" => {
-            // Same cap as `list_history`: the log is append-by-whole-file
-            // rewrite and otherwise unbounded.
-            let limit = req
-                .params
-                .get("limit")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(50)
-                .min(1000) as usize;
-            match audit::load(&shared.store) {
-                Ok(mut entries) => {
-                    // Newest first, matching `list_history`'s convention.
-                    entries.reverse();
-                    entries.truncate(limit);
-                    Response::ok(req.id, serde_json::json!({ "entries": entries }))
-                }
-                Err(_) => Response::err(req.id, ERR_UNAVAILABLE, "audit-read-failed"),
-            }
-        }
+        "cancel" => handle_cancel(shared, req),
+        "list_audit" => handle_list_audit(shared, req),
         // A count of `reason_label` across every entry currently on the
         // queue, whatever its state -- no state filter is applied, it is
         // simply whichever entries currently carry a label (in practice
@@ -1693,41 +1297,8 @@ pub fn handle_request(shared: &DaemonShared, req: &Request) -> Response {
             add_admission_setting(shared, &mut value);
             Response::ok(req.id, value)
         }
-        "set_settings" => {
-            let mut settings = shared.settings.lock().expect("settings lock");
-            // Captured before the write so the ledger is rebuilt only when
-            // the declaration actually moved. Rebuilding on every settings
-            // write would blank a warm snapshot whenever a contributor
-            // touched an unrelated slider.
-            let declared_before = settings.ironwire.clone();
-            // `apply_settings_object` is the same validation
-            // `tc_daemon_start_with_settings` (the C ABI's pre-start
-            // settings override) uses, so there is one definition of "a
-            // valid settings object" for both. See its doc for why an
-            // unrecognized key is rejected rather than ignored.
-            match super::settings::apply_settings_object(&mut settings, &req.params) {
-                Ok(false) => Response::err(req.id, ERR_BAD_PARAMS, "no-known-setting-supplied"),
-                Ok(true) => {
-                    if let Err(_e) = settings.save(&shared.store) {
-                        return Response::err(req.id, ERR_UNAVAILABLE, "settings-write-failed");
-                    }
-                    // Apply the proxy declaration to this running daemon.
-                    // Without this the contributor would have to restart the
-                    // daemon to make a port they just typed take effect,
-                    // which reads as the feature being broken. Done after
-                    // the save so a declaration that takes effect is always
-                    // one that survives a restart too.
-                    if settings.ironwire != declared_before {
-                        shared.rebuild_routing(settings.ironwire.as_ref());
-                    }
-                    let mut value = redacted_settings(&settings);
-                    drop(settings);
-                    add_admission_setting(shared, &mut value);
-                    Response::ok(req.id, value)
-                }
-                Err(label) => Response::err(req.id, ERR_BAD_PARAMS, label),
-            }
-        }
+        "set_settings" => handle_set_settings(shared, req),
+
         "shutdown" => {
             shared.shutdown.store(true, Ordering::Relaxed);
             shared.shutdown_signal.notify_one();
@@ -1754,6 +1325,442 @@ fn add_admission_setting(shared: &DaemonShared, value: &mut serde_json::Value) {
         ),
         Err(_) => serde_json::Value::Null,
     };
+}
+
+fn handle_list_pending(shared: &DaemonShared, req: &Request) -> Response {
+    let queue = shared.queue.lock().expect("queue lock");
+    let entries: Vec<serde_json::Value> = queue.pending().iter().map(|e| entry_value(e)).collect();
+    Response::ok(req.id, serde_json::json!({ "pending": entries }))
+}
+
+// Every project the daemon knows about -- configured *and* merely
+// discovered -- with the mode actually in force for each.
+//
+// It used to report `policy.projects` alone, which meant a project
+// the daemon had seen but the contributor had never ruled on was
+// invisible here. That is precisely the set an onboarding "which of
+// these should never be uploaded" screen has to show: a project
+// becomes configured only by being ruled on, so listing only
+// configured projects lists only the ones already decided. A
+// contributor could not exclude their employer's repository before
+// anything was sent, because the screen could not name it.
+//
+// A discovered row carries `configured: false` and `added_at:
+// null`; its `mode` is the effective one, which for an unruled
+// project is the notify-only default. Nothing new crosses the
+// socket: the label and the id are the same two daemon-derived
+// fields the queue entry for that project already carries.
+//
+// `is_unresolved_bucket` marks the row holding sessions whose
+// working directory had no usable final segment. Clients show it
+// with a permanent note that these can never be armed -- which is
+// enforcement they are REPORTING, not performing: `Policy` refuses
+// `auto_upload` for this key independently of any client.
+//
+// The daemon says so explicitly because it is the only side that
+// knows it for free. A client deriving it would have to re-implement
+// `project_id_for`'s hash to compare ids, and a client matching on
+// `project_label` would break the day that string is reworded --
+// which every shell does to it, because the raw label is a slug no
+// contributor should read. Clients MUST NOT recognise this row by
+// label.
+fn handle_list_projects(shared: &DaemonShared, req: &Request) -> Response {
+    let policy = shared.policy.lock().expect("policy lock");
+    let queue = shared.queue.lock().expect("queue lock");
+    let known = known_keys(&policy, queue.all().iter().map(|e| e.project_key.clone()));
+    let discovered: std::collections::BTreeMap<String, Option<String>> = queue
+        .all()
+        .iter()
+        .map(|e| (e.project_key.clone(), e.project_path.clone()))
+        .filter(|(key, _)| !policy.projects.contains_key(key))
+        .collect();
+    let projects: Vec<serde_json::Value> = policy
+        .projects
+        .iter()
+        .map(|(key, entry)| {
+            let shown = entry.display_path.as_deref().unwrap_or(key);
+            serde_json::json!({
+                "project_id": project_id_for(key),
+                "project_label": disambiguated_label(key, entry.display_path.as_deref(), &known),
+                "project_path": display_path(shown),
+                "mode": policy.resolve(key),
+                "added_at": entry.added_at,
+                "configured": true,
+                "is_unresolved_bucket": key == UNKNOWN_PROJECT_KEY,
+            })
+        })
+        .chain(discovered.iter().map(|(key, shown)| {
+            serde_json::json!({
+                "project_id": project_id_for(key),
+                "project_label": disambiguated_label(key, shown.as_deref(), &known),
+                "project_path": display_path(shown.as_deref().unwrap_or(key)),
+                "mode": policy.resolve(key),
+                "added_at": serde_json::Value::Null,
+                "configured": false,
+                "is_unresolved_bucket": key == UNKNOWN_PROJECT_KEY,
+            })
+        }))
+        .collect();
+    Response::ok(req.id, serde_json::json!({ "projects": projects }))
+}
+
+// Two ways to name a project, for two different callers.
+//
+// `project_id` is for anything that learned about the project over
+// this socket -- a queue entry or a `list_projects` row. It is the
+// only identifier such a caller holds, because keys are paths and
+// paths do not cross this socket. Without it this method was
+// unreachable from every GUI: a label is not an admissible key, and
+// the only writer of `policy.projects` is this method itself, so
+// there was no way in.
+//
+// `project_key` is for a caller standing in a terminal, where the
+// human types the path: `daemon project <path> --mode ignore`. That
+// flow must keep working *before* the project's first session,
+// which is exactly when the daemon has no id to offer for it -- it
+// cannot mint one for a project it has never discovered. So both
+// are supported, deliberately, rather than one replacing the other.
+//
+// `project_id` wins when both are sent.
+fn handle_set_project_mode(shared: &DaemonShared, req: &Request) -> Response {
+    let id_param = req.params.get("project_id").and_then(|v| v.as_str());
+    let key_param = req.params.get("project_key").and_then(|v| v.as_str());
+    if id_param.is_none() && key_param.is_none() {
+        return Response::err(req.id, ERR_BAD_PARAMS, "project_id-or-project_key-required");
+    }
+    let mode: ProjectMode = match req
+        .params
+        .get("mode")
+        .cloned()
+        .map(serde_json::from_value::<ProjectMode>)
+    {
+        Some(Ok(m)) => m,
+        _ => return Response::err(req.id, ERR_BAD_PARAMS, "mode-invalid"),
+    };
+    // A `label` param is accepted on the wire for compatibility with
+    // older clients and then IGNORED. It used to be stored verbatim
+    // and echoed back by `list_projects` and written into
+    // `daemon-audit.jsonl`, so any socket client could inject a
+    // path, a token, or a transcript fragment into both of the
+    // sinks this crate's label-only rule exists to protect. The
+    // label is now derived from the key inside `set_mode`.
+    // Lock order is policy before queue, as everywhere else.
+    let mut policy = shared.policy.lock().expect("policy lock");
+    let (key, audit_label) = {
+        let queue = shared.queue.lock().expect("queue lock");
+        let known = known_keys(&policy, queue.all().iter().map(|e| e.project_key.clone()));
+        // Whichever way the project was named, what comes out of
+        // here is a key the daemon itself already holds or has just
+        // corroborated on disk -- never a caller's string. That is
+        // what keeps the derived label, and so `list_projects` and
+        // `daemon-audit.jsonl`, un-injectable.
+        let key = match id_param {
+            Some(id) => match project_key_for_id(id, &known) {
+                Some(key) => key,
+                None => {
+                    return Response::err(req.id, ERR_BAD_PARAMS, ERR_PROJECT_ID_UNRECOGNIZED);
+                }
+            },
+            None => {
+                let key = key_param.unwrap_or_default();
+                if !project_key_is_admissible(key, &known) {
+                    return Response::err(req.id, ERR_BAD_PARAMS, ERR_PROJECT_KEY_UNRECOGNIZED);
+                }
+                key.to_string()
+            }
+        };
+        let shown = crate::daemon::policy::display_path_for_key(&key);
+        let label = disambiguated_label(&key, shown.as_deref(), &known);
+        (key, label)
+    };
+
+    // The audit entry goes down FIRST, before anything is armed,
+    // the way `acknowledge_near_ai_notice` does it.
+    //
+    // The reverse order looked equivalent and was not. It saved the
+    // policy, then appended, then on an append failure restored the
+    // in-memory policy and wrote it back best-effort -- but the
+    // disk-full or permissions failure that broke the append breaks
+    // that write back just as reliably, and the daemon loads its
+    // policy from disk on restart. The fail-closed guarantee did not
+    // survive a reboot: autonomy stayed armed on disk with no record
+    // of it ever having been armed. Recording first means there is
+    // nothing to roll back, so nothing that has to succeed twice.
+    //
+    // This is visibility, not a security control -- see
+    // `daemon::audit` -- but it is the *only* visibility there is
+    // here, and the terminal-only restriction it replaced was
+    // itself a visibility mechanism.
+    //
+    // Both locks are dropped for the append itself: it is a
+    // whole-file read-modify-write on a synchronous socket handler,
+    // and the queue lock in particular is contended with the upload
+    // pass. The policy lock is retaken immediately after; a
+    // concurrent `set_project_mode` can only interleave two
+    // record-then-arm sequences, never produce an armed policy with
+    // no record.
+    if mode == ProjectMode::AutoUpload {
+        drop(policy);
+        if let Err(_e) = audit::append(
+            &shared.store,
+            &AuditEntry {
+                at: Utc::now(),
+                action: "armed-auto-upload".to_string(),
+                project_label: Some(audit_label),
+                detail: None,
+            },
+        ) {
+            return Response::err(req.id, ERR_UNAVAILABLE, "audit-write-failed");
+        }
+        policy = shared.policy.lock().expect("policy lock");
+    }
+
+    if let Err(e) = policy.set_mode(&key, mode, Utc::now()) {
+        return Response::err(req.id, ERR_BAD_PARAMS, &one_line_label(&e.to_string()));
+    }
+    if let Err(_e) = policy.save(&shared.store) {
+        return Response::err(req.id, ERR_UNAVAILABLE, "policy-write-failed");
+    }
+    // A newly-configured project can turn a previously-unique queue
+    // label into a collision (or vice versa) immediately -- e.g.
+    // configuring the client's "api" the moment after "api" was
+    // queued bare from the contributor's own repo. Relabel now
+    // rather than leaving the queue to lag until the next poll,
+    // which would leave two same-basename projects briefly
+    // indistinguishable in the one place uploads are approved from.
+    // Ignoring a project clears what it already has waiting. Doing
+    // it here rather than in the UI means Settings, onboarding and
+    // the CLI all get it: before this, ignoring from Settings left
+    // the contributor staring at the cards they had just declined.
+    //
+    // Pending only. See `refuse_pending_for_project`.
+    //
+    // Leaving `Ignore` undoes exactly that, and only that: see
+    // `clear_project_ignored`, which is what makes the
+    // confirmation's "You can undo this in Settings" true for a
+    // *finished* session -- the ordinary case, and the one the
+    // ignore was aimed at. It is the same arm because the two are
+    // one setting, and every route that can set it (Settings,
+    // onboarding, the CLI, the Waiting screen) must get both halves.
+    //
+    // The policy is already saved at this point, so a `queue.save`
+    // failure below leaves disk disagreeing with memory: the project
+    // is durably `Ignore` while its entries are still durably
+    // `Pending`, and a restart brings the cleared cards back. The
+    // error is reported and the daemon keeps the in-memory truth, so
+    // the contributor sees the right thing until then. Ordering the
+    // two writes the other way does not help -- the relabel below
+    // reads the *new* policy, so the queue cannot be written first --
+    // and a real fix wants both files under one atomic write, which
+    // the store does not offer.
+    let (queue_changed, purged) = {
+        let mut queue = shared.queue.lock().expect("queue lock");
+        let purged = if mode == ProjectMode::Ignore {
+            queue.refuse_pending_for_project(&key)
+        } else {
+            0
+        };
+        let restored = if mode == ProjectMode::Ignore {
+            0
+        } else {
+            queue.clear_project_ignored(&key)
+        };
+        let relabelled = relabel_queue_entries(&policy, &mut queue);
+        if relabelled || purged > 0 || restored > 0 {
+            if let Err(_e) = queue.save(&shared.store) {
+                return Response::err(req.id, ERR_UNAVAILABLE, "queue-write-failed");
+            }
+        }
+        (relabelled || restored > 0, purged)
+    };
+    drop(policy);
+    if queue_changed || purged > 0 {
+        shared.publish(EVENT_QUEUE_CHANGED, serde_json::json!({}));
+    }
+    Response::ok(req.id, serde_json::json!({ "ok": true, "purged": purged }))
+}
+
+fn handle_pause(shared: &DaemonShared, req: &Request) -> Response {
+    // An optional timed pause, persisted so it survives a restart of
+    // either the daemon or the app that requested it -- an app-side
+    // timer alone would die with the app and silently fail to
+    // resume the daemon.
+    let until = match req.params.get("until").and_then(|v| v.as_str()) {
+        Some(s) => match s.parse::<chrono::DateTime<Utc>>() {
+            Ok(dt) if dt > Utc::now() => Some(dt),
+            // A deadline that has already passed would publish a
+            // pause event for a pause the very next status call (or
+            // is_paused check) clears -- reject it up front rather
+            // than accept a pause that is a lie the instant it's
+            // acknowledged.
+            Ok(_) => return Response::err(req.id, ERR_BAD_PARAMS, "until-in-the-past"),
+            Err(_) => return Response::err(req.id, ERR_BAD_PARAMS, "until-invalid"),
+        },
+        None => None,
+    };
+    shared.paused.store(true, Ordering::Relaxed);
+    {
+        let mut state = shared.state.lock().expect("state lock");
+        state.paused = true;
+        state.paused_until = until;
+        if state.save(&shared.store).is_err() {
+            return Response::err(req.id, ERR_UNAVAILABLE, "state-write-failed");
+        }
+    }
+    shared.publish(EVENT_STATUS_CHANGED, serde_json::json!({}));
+    Response::ok(
+        req.id,
+        serde_json::json!({ "paused": true, "paused_until": until }),
+    )
+}
+
+fn handle_cancel(shared: &DaemonShared, req: &Request) -> Response {
+    // `project_id` is the batch form of `cancel`, mirroring
+    // `approve`'s selector shape so an Undo of a project-wide
+    // approval is one call with the same argument -- the daemon
+    // decides which entries it covers, rather than the shell
+    // deriving "what I saw pending minus what was reported
+    // skipped" and racing the queue to cancel them one at a time.
+    // `project_id` and `entry_id` are mutually exclusive;
+    // `project_id` wins when both are sent, the same precedence
+    // `approve` uses between its own selectors.
+    let project_id = req.params.get("project_id").and_then(|v| v.as_str());
+    if let Some(pid) = project_id {
+        // Unrecognized is refused exactly as `approve` refuses it
+        // for the same selector: a handle the caller never
+        // received is a client bug, and answering `canceled: 0`
+        // would be indistinguishable from "that project had
+        // nothing to cancel". Lock order is policy before queue,
+        // as everywhere else.
+        let policy = shared.policy.lock().expect("policy lock");
+        let mut queue = shared.queue.lock().expect("queue lock");
+        let known = known_keys(&policy, queue.all().iter().map(|e| e.project_key.clone()));
+        let Some(key) = project_key_for_id(pid, &known) else {
+            return Response::err(req.id, ERR_BAD_PARAMS, ERR_PROJECT_ID_UNRECOGNIZED);
+        };
+        // Only `Approved`: those are the entries an Undo would be
+        // undoing. A `Pending` entry has nothing to cancel, and a
+        // project-wide call must not touch it. Matched by the id
+        // `entry_value` publishes, never `project_label`, same as
+        // `approve`.
+        let ids: Vec<Uuid> = queue
+            .all()
+            .iter()
+            .filter(|e| e.project_key == key && e.state == QueueState::Approved)
+            .map(|e| e.entry_id)
+            .collect();
+        let project_audit_label = disambiguated_label(
+            &key,
+            crate::daemon::policy::display_path_for_key(&key).as_deref(),
+            &known,
+        );
+        // Same ordering as `approve`'s `bulk-approved` row: written
+        // before anything is canceled, so a rollback never has to
+        // write to the disk that just refused a write. Undoing a
+        // batch is the same class of act as approving one -- bulk,
+        // unattended, previously terminal-only -- so it gets the
+        // same visibility. A selector that matched nothing writes
+        // no row, for the same reason `approve` writes none: no
+        // entries were canceled, and a shell polling an empty
+        // project would rotate real records out of a capped log.
+        if !ids.is_empty() {
+            if let Err(_e) = audit::append(
+                &shared.store,
+                &AuditEntry {
+                    at: Utc::now(),
+                    action: "bulk-canceled".to_string(),
+                    project_label: Some(project_audit_label),
+                    detail: Some(ids.len().to_string()),
+                },
+            ) {
+                return Response::err(req.id, ERR_UNAVAILABLE, "audit-write-failed");
+            }
+        }
+        let mut canceled = 0usize;
+        for id in &ids {
+            // Selection and cancellation happen under one
+            // continuous hold of the queue lock, so every id
+            // selected above is still `Approved` when `cancel`
+            // runs on it; nothing else can have moved it.
+            if queue.cancel(*id).is_ok() {
+                canceled += 1;
+            }
+        }
+        if let Err(_e) = queue.save(&shared.store) {
+            return Response::err(req.id, ERR_UNAVAILABLE, "queue-write-failed");
+        }
+        drop(queue);
+        shared.publish(EVENT_QUEUE_CHANGED, serde_json::json!({}));
+        return Response::ok(req.id, serde_json::json!({ "canceled": canceled }));
+    }
+    let id = try_response!(entry_id_param(req));
+    let mut queue = shared.queue.lock().expect("queue lock");
+    if queue.cancel(id).is_err() {
+        return Response::err(req.id, ERR_BAD_PARAMS, "not-cancelable");
+    }
+    if let Err(_e) = queue.save(&shared.store) {
+        return Response::err(req.id, ERR_UNAVAILABLE, "queue-write-failed");
+    }
+    drop(queue);
+    shared.publish(EVENT_QUEUE_CHANGED, serde_json::json!({}));
+    Response::ok(req.id, serde_json::json!({ "ok": true }))
+}
+
+fn handle_list_audit(shared: &DaemonShared, req: &Request) -> Response {
+    // Same cap as `list_history`: the log is append-by-whole-file
+    // rewrite and otherwise unbounded.
+    let limit = req
+        .params
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(50)
+        .min(1000) as usize;
+    match audit::load(&shared.store) {
+        Ok(mut entries) => {
+            // Newest first, matching `list_history`'s convention.
+            entries.reverse();
+            entries.truncate(limit);
+            Response::ok(req.id, serde_json::json!({ "entries": entries }))
+        }
+        Err(_) => Response::err(req.id, ERR_UNAVAILABLE, "audit-read-failed"),
+    }
+}
+
+fn handle_set_settings(shared: &DaemonShared, req: &Request) -> Response {
+    let mut settings = shared.settings.lock().expect("settings lock");
+    // Captured before the write so the ledger is rebuilt only when
+    // the declaration actually moved. Rebuilding on every settings
+    // write would blank a warm snapshot whenever a contributor
+    // touched an unrelated slider.
+    let declared_before = settings.ironwire.clone();
+    // `apply_settings_object` is the same validation
+    // `tc_daemon_start_with_settings` (the C ABI's pre-start
+    // settings override) uses, so there is one definition of "a
+    // valid settings object" for both. See its doc for why an
+    // unrecognized key is rejected rather than ignored.
+    match super::settings::apply_settings_object(&mut settings, &req.params) {
+        Ok(false) => Response::err(req.id, ERR_BAD_PARAMS, "no-known-setting-supplied"),
+        Ok(true) => {
+            if let Err(_e) = settings.save(&shared.store) {
+                return Response::err(req.id, ERR_UNAVAILABLE, "settings-write-failed");
+            }
+            // Apply the proxy declaration to this running daemon.
+            // Without this the contributor would have to restart the
+            // daemon to make a port they just typed take effect,
+            // which reads as the feature being broken. Done after
+            // the save so a declaration that takes effect is always
+            // one that survives a restart too.
+            if settings.ironwire != declared_before {
+                shared.rebuild_routing(settings.ironwire.as_ref());
+            }
+            let mut value = redacted_settings(&settings);
+            drop(settings);
+            add_admission_setting(shared, &mut value);
+            Response::ok(req.id, value)
+        }
+        Err(label) => Response::err(req.id, ERR_BAD_PARAMS, label),
+    }
+
 }
 
 /// The complete dispatcher: answers the async methods (`"approve"`,
