@@ -128,10 +128,8 @@ pub struct PgBackend {
     /// operator-provisioned `trace_pii_backstop_driver` role (NOLOGIN base,
     /// NOBYPASSRLS, permissive cross-tenant SELECT policies from migration
     /// V38). `None` keeps the backstop driver's enumeration path fail-closed.
-    /// NEVER aliased to `pool`. Mirrors `gate_driver_pool`. Query methods
-    /// against this pool land in a follow-up task; this field is wired but
-    /// unused until then.
-    #[allow(dead_code)]
+    /// NEVER aliased to `pool`. Mirrors `gate_driver_pool`. Read by
+    /// `list_submissions_awaiting_pii_backstop`.
     pii_backstop_driver_pool: Option<Pool>,
     /// Narrow, SEPARATE pool for the invite registry cache refresh and the
     /// admin invite API. Built only when `invite_registry_url` is configured;
