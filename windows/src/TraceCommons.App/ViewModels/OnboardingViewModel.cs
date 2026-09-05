@@ -406,10 +406,10 @@ public sealed class OnboardingViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Excludes a project from watching.
+    /// Excludes a project or restores manual review after an accidental Ignore.
     /// </summary>
     /// <remarks>
-    /// Ignore is offered here and auto-upload deliberately is not. Excluding
+    /// Only manual review and Ignore are offered here. Excluding
     /// the client repo is a live thought at this moment and never returns,
     /// whereas arming automation before a single preview has been seen is
     /// asking for trust that has not been earned yet.
@@ -418,16 +418,18 @@ public sealed class OnboardingViewModel : INotifyPropertyChanged
     {
         ArgumentNullException.ThrowIfNull(project);
 
-        string payload = JsonSerializer.Serialize(
-            new ProjectModeRequest { ProjectId = project.ProjectId, Mode = "ignore" });
-
-        DaemonResponse response = await _host
-            .CallAsync(DaemonProtocol.Methods.SetProjectMode, payload)
-            .ConfigureAwait(true);
-        if (!response.IsError)
+        if (!project.CanToggle || ProjectManualMode.Next(project.Mode) is not string next) return;
+        project.IsPending = true;
+        try
         {
-            project.SetMode("ignore");
+            string payload = JsonSerializer.Serialize(
+                new ProjectModeRequest { ProjectId = project.ProjectId, Mode = next });
+            DaemonResponse response = await _host
+                .CallAsync(DaemonProtocol.Methods.SetProjectMode, payload)
+                .ConfigureAwait(true);
+            if (!response.IsError) project.SetMode(next);
         }
+        finally { project.IsPending = false; }
     }
 
     /// <summary>
@@ -582,7 +584,8 @@ public sealed class ConsentScopeViewModel : INotifyPropertyChanged
 
 public sealed class ProjectViewModel : INotifyPropertyChanged
 {
-    private bool _isIgnored;
+    private string _mode;
+    private bool _isPending;
 
     public ProjectViewModel(ProjectSetting project)
     {
@@ -596,7 +599,7 @@ public sealed class ProjectViewModel : INotifyPropertyChanged
         // the opaque id.
         IsUnresolvable = project.IsUnresolvedBucket;
         ProjectLabel = WatchCopy.LabelFor(IsUnresolvable, project.ProjectLabel);
-        _isIgnored = project.Mode == "ignore";
+        _mode = project.Mode;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -618,26 +621,33 @@ public sealed class ProjectViewModel : INotifyPropertyChanged
     /// note REPLACES the mode rather than joining it, because "you'll always be
     /// asked" already says what "Ask me first" says.
     /// </summary>
-    public string SubLine => WatchCopy.SubLineFor(IsUnresolvable, _isIgnored ? "ignore" : "ask");
+    public string SubLine => IsUnresolvable || _mode is "ask" or "ignore"
+        ? WatchCopy.SubLineFor(IsUnresolvable, _mode) : string.Empty;
 
-    public bool IsIgnored
+    public string Mode => _mode;
+    public bool IsIgnored => _mode == "ignore";
+    public string ActionText => _mode switch
     {
-        get => _isIgnored;
-        set
-        {
-            if (_isIgnored == value)
-            {
-                return;
-            }
-
-            _isIgnored = value;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsIgnored)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsNotIgnored)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SubLine)));
-        }
+        "ignore" or "auto_upload" => WatchCopy.AskMeFirst,
+        "ask" => "Ignore",
+        _ => string.Empty,
+    };
+    public bool CanToggle => !_isPending && ProjectManualMode.Next(_mode) is not null;
+    public bool IsPending
+    {
+        get => _isPending;
+        set { _isPending = value; RaiseMode(); }
     }
 
-    public bool IsNotIgnored => !_isIgnored;
+    public void SetMode(string mode)
+    {
+        _mode = mode;
+        RaiseMode();
+    }
 
-    public void SetMode(string mode) => IsIgnored = mode == "ignore";
+    private void RaiseMode()
+    {
+        foreach (string property in new[] { nameof(Mode), nameof(IsIgnored), nameof(ActionText), nameof(CanToggle), nameof(SubLine) })
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
+    }
 }

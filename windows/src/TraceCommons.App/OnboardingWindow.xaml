@@ -271,9 +271,9 @@
                                         <TextBlock Style="{StaticResource TcCaptionTextStyle}"
                                                    Text="{x:Bind SubLine, Mode=OneWay}" TextWrapping="Wrap" />
                                     </StackPanel>
-                                    <Button Grid.Column="1" Content="Ignore"
+                                    <Button Grid.Column="1" Content="{x:Bind ActionText, Mode=OneWay}"
                                             VerticalAlignment="Top"
-                                            IsEnabled="{x:Bind IsNotIgnored, Mode=OneWay}"
+                                            IsEnabled="{x:Bind CanToggle, Mode=OneWay}"
                                             Click="OnIgnoreProject" />
                                 </Grid>
                             </DataTemplate>
