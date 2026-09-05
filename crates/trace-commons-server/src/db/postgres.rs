@@ -817,6 +817,349 @@ const INVITE_GRANT_COLUMNS: &str = "invite_subject_hash, policy_label, tenant_mo
     allowed_uses, max_uses, expires_at, issuance_source, issued_by_label,
     credential_binding_hash, note_label, revoked_at";
 
+/// Every migration in `migrations/`, in the order `run_migrations` applies
+/// them: `(version, recorded name, SQL text)`. The recorded name is the file
+/// stem and the SQL is the file itself, embedded at compile time.
+///
+/// This table is the wiring: a migration file that is not listed here silently
+/// never runs. `every_migration_is_wired_into_run_migrations` checks the table
+/// against the directory, including that each row's `include_str!` names the
+/// row's own version and stem.
+const MIGRATIONS: &[(i32, &str, &str)] = &[
+    (
+        1,
+        "trace_commons_schema",
+        include_str!("../../../../migrations/V1__trace_commons_schema.sql"),
+    ),
+    (
+        2,
+        "trace_credit_settlement",
+        include_str!("../../../../migrations/V2__trace_credit_settlement.sql"),
+    ),
+    (
+        3,
+        "trace_ranking_evidence",
+        include_str!("../../../../migrations/V3__trace_ranking_evidence.sql"),
+    ),
+    (
+        4,
+        "trace_ranking_calibration_runs",
+        include_str!("../../../../migrations/V4__trace_ranking_calibration_runs.sql"),
+    ),
+    (
+        5,
+        "trace_credit_settlement_ranking_gate",
+        include_str!("../../../../migrations/V5__trace_credit_settlement_ranking_gate.sql"),
+    ),
+    (
+        6,
+        "trace_force_rls",
+        include_str!("../../../../migrations/V6__trace_force_rls.sql"),
+    ),
+    (
+        7,
+        "trace_ranking_calibration_label_source_gate",
+        include_str!("../../../../migrations/V7__trace_ranking_calibration_label_source_gate.sql"),
+    ),
+    (
+        8,
+        "trace_ranking_calibration_source_error_gate",
+        include_str!("../../../../migrations/V8__trace_ranking_calibration_source_error_gate.sql"),
+    ),
+    (
+        9,
+        "trace_ranking_calibration_joined_evidence_hash",
+        include_str!(
+            "../../../../migrations/V9__trace_ranking_calibration_joined_evidence_hash.sql"
+        ),
+    ),
+    (
+        10,
+        "trace_credit_settlement_joined_evidence_hash",
+        include_str!(
+            "../../../../migrations/V10__trace_credit_settlement_joined_evidence_hash.sql"
+        ),
+    ),
+    (
+        11,
+        "trace_ranking_worker_runs",
+        include_str!("../../../../migrations/V11__trace_ranking_worker_runs.sql"),
+    ),
+    (
+        12,
+        "trace_ranking_worker_run_lifecycle",
+        include_str!("../../../../migrations/V12__trace_ranking_worker_run_lifecycle.sql"),
+    ),
+    (
+        13,
+        "trace_credit_settlement_exclusion_reasons",
+        include_str!("../../../../migrations/V13__trace_credit_settlement_exclusion_reasons.sql"),
+    ),
+    (
+        14,
+        "trace_ranking_preference_labels",
+        include_str!("../../../../migrations/V14__trace_ranking_preference_labels.sql"),
+    ),
+    (
+        15,
+        "trace_benchmark_registry_outbox",
+        include_str!("../../../../migrations/V15__trace_benchmark_registry_outbox.sql"),
+    ),
+    (
+        16,
+        "trace_ranking_calibration_datasets",
+        include_str!("../../../../migrations/V16__trace_ranking_calibration_datasets.sql"),
+    ),
+    (
+        17,
+        "trace_ranking_calibration_dataset_manifest_immutability",
+        include_str!(
+            "../../../../migrations/V17__trace_ranking_calibration_dataset_manifest_immutability.sql"
+        ),
+    ),
+    (
+        18,
+        "trace_central_rls_tenant_predicate",
+        include_str!("../../../../migrations/V18__trace_central_rls_tenant_predicate.sql"),
+    ),
+    (
+        19,
+        "trace_ranking_calibration_label_actor_count",
+        include_str!("../../../../migrations/V19__trace_ranking_calibration_label_actor_count.sql"),
+    ),
+    (
+        20,
+        "trace_credit_settlement_issuer_approval_hash",
+        include_str!(
+            "../../../../migrations/V20__trace_credit_settlement_issuer_approval_hash.sql"
+        ),
+    ),
+    (
+        21,
+        "trace_near_credit_account_outbox",
+        include_str!("../../../../migrations/V21__trace_near_credit_account_outbox.sql"),
+    ),
+    (
+        22,
+        "trace_revocation_worker_queue_invalidation",
+        include_str!("../../../../migrations/V22__trace_revocation_worker_queue_invalidation.sql"),
+    ),
+    (
+        23,
+        "novelty_utility_credit_and_gate_decisions",
+        include_str!("../../../../migrations/V23__novelty_utility_credit_and_gate_decisions.sql"),
+    ),
+    (
+        24,
+        "gate_decision_vector_entry_id",
+        include_str!("../../../../migrations/V24__gate_decision_vector_entry_id.sql"),
+    ),
+    (
+        25,
+        "gate_decision_credit_withheld_reason",
+        include_str!("../../../../migrations/V25__gate_decision_credit_withheld_reason.sql"),
+    ),
+    (
+        26,
+        "trace_contributor_profiles",
+        include_str!("../../../../migrations/V26__trace_contributor_profiles.sql"),
+    ),
+    (
+        27,
+        "trace_leaderboard_snapshots",
+        include_str!("../../../../migrations/V27__trace_leaderboard_snapshots.sql"),
+    ),
+    (
+        28,
+        "device_keys",
+        include_str!("../../../../migrations/V28__device_keys.sql"),
+    ),
+    (
+        29,
+        "onboarding_invites",
+        include_str!("../../../../migrations/V29__onboarding_invites.sql"),
+    ),
+    (
+        30,
+        "trace_accounts",
+        include_str!("../../../../migrations/V30__trace_accounts.sql"),
+    ),
+    (
+        31,
+        "account_traces_index",
+        include_str!("../../../../migrations/V31__account_traces_index.sql"),
+    ),
+    (
+        32,
+        "webauthn_credentials",
+        include_str!("../../../../migrations/V32__webauthn_credentials.sql"),
+    ),
+    (
+        33,
+        "near_identities",
+        include_str!("../../../../migrations/V33__near_identities.sql"),
+    ),
+    (
+        34,
+        "account_consolidation",
+        include_str!("../../../../migrations/V34__account_consolidation.sql"),
+    ),
+    (
+        35,
+        "trace_instance_enrollments",
+        include_str!("../../../../migrations/V35__trace_instance_enrollments.sql"),
+    ),
+    (
+        36,
+        "trace_gate_driver",
+        include_str!("../../../../migrations/V36__trace_gate_driver.sql"),
+    ),
+    (
+        37,
+        "large_trace_chunked_scoring",
+        include_str!("../../../../migrations/V37__large_trace_chunked_scoring.sql"),
+    ),
+    // V38 ships with the server-side PII backstop. It is applied here
+    // out of numeric order relative to what a long-lived pilot may
+    // already hold (V39-V41 landed on main while this sat unmerged);
+    // that is safe because each block gates on its own version number,
+    // not on sequence position.
+    (
+        38,
+        "trace_pii_backstop",
+        include_str!("../../../../migrations/V38__trace_pii_backstop.sql"),
+    ),
+    (
+        39,
+        "trace_credit_quality",
+        include_str!("../../../../migrations/V39__trace_credit_quality.sql"),
+    ),
+    (
+        40,
+        "trace_dedup",
+        include_str!("../../../../migrations/V40__trace_dedup.sql"),
+    ),
+    (
+        41,
+        "trace_contributor_cap",
+        include_str!("../../../../migrations/V41__trace_contributor_cap.sql"),
+    ),
+    // V42 makes the database authoritative for contributor invites.
+    (
+        42,
+        "onboarding_invite_grants",
+        include_str!("../../../../migrations/V42__onboarding_invite_grants.sql"),
+    ),
+    // V43 (not V42: that number is held by the unmerged
+    // db-authoritative-invites branch) adds the contributor-withdrawal
+    // tombstone and the trace_submissions.withdrawn_at column.
+    (
+        43,
+        "trace_withdrawal",
+        include_str!("../../../../migrations/V43__trace_withdrawal.sql"),
+    ),
+    // V44 widens the trace_sessions.client_kind CHECK to admit 'native',
+    // the client_kind of a loopback native-app session token.
+    (
+        44,
+        "native_session_client_kind",
+        include_str!("../../../../migrations/V44__native_session_client_kind.sql"),
+    ),
+    // V45 retrofits V36's table-wide SELECT grants to the V38
+    // column-scoped convention. Safe to apply after V36+; the USING(true)
+    // policies stay.
+    (
+        45,
+        "trace_gate_driver_column_grants",
+        include_str!("../../../../migrations/V45__trace_gate_driver_column_grants.sql"),
+    ),
+    // V46 evicts withdrawn contributors from published community
+    // snapshots.
+    //
+    // Renumbered from V42 on merge: V42 is held by the unmerged
+    // db-authoritative-invites branch, V43/V44 landed on main while this
+    // branch was open, and V45 is taken by the gate-driver column-grants
+    // branch.
+    (
+        46,
+        "community_snapshot_withdrawal_eviction",
+        include_str!("../../../../migrations/V46__community_snapshot_withdrawal_eviction.sql"),
+    ),
+    // V47 persists the pre-cap chunk total on gate decisions and repairs
+    // the gate-driver column-grant drift left by V37 (chunk_count and
+    // chunks_capped were added without extending the column-level
+    // grants).
+    (
+        47,
+        "trace_gate_decision_total_chunk_count",
+        include_str!("../../../../migrations/V47__trace_gate_decision_total_chunk_count.sql"),
+    ),
+    // V48 adds the shadow-mode correction-value columns (S5) and grants
+    // the two the cross-tenant correction-cluster scan reads to the
+    // gate-driver role. `run_migrations` is hand-rolled: a migration file
+    // that is not wired in here silently never runs.
+    (
+        48,
+        "trace_correction_value",
+        include_str!("../../../../migrations/V48__trace_correction_value.sql"),
+    ),
+    (
+        49,
+        "trace_submission_last_status_reason",
+        include_str!("../../../../migrations/V49__trace_submission_last_status_reason.sql"),
+    ),
+    (
+        50,
+        "onboarding_invite_grant_consumption",
+        include_str!("../../../../migrations/V50__onboarding_invite_grant_consumption.sql"),
+    ),
+    (
+        51,
+        "privacy_classify_window_cache",
+        include_str!("../../../../migrations/V51__privacy_classify_window_cache.sql"),
+    ),
+    (
+        52,
+        "trace_submission_residual_risk_basis",
+        include_str!("../../../../migrations/V52__trace_submission_residual_risk_basis.sql"),
+    ),
+    // V53 adds the prospective gate-utility instrumentation columns
+    // (#199). Additive and backfill-free: rows written before it keep NULL
+    // forever, because a novelty score recomputed against a fuller index
+    // is not the number production used.
+    (
+        53,
+        "trace_gate_decision_composite_score",
+        include_str!("../../../../migrations/V53__trace_gate_decision_composite_score.sql"),
+    ),
+    (
+        54,
+        "trace_gate_decision_qualifying_mass",
+        include_str!("../../../../migrations/V54__trace_gate_decision_qualifying_mass.sql"),
+    ),
+    (
+        55,
+        "register_stats_public_read",
+        include_str!("../../../../migrations/V55__register_stats_public_read.sql"),
+    ),
+    (
+        56,
+        "community_withdrawal_eviction_rls",
+        include_str!("../../../../migrations/V56__community_withdrawal_eviction_rls.sql"),
+    ),
+    // V57 names the derivation behind dedup_simhash (#211, #325).
+    // Additive, nullable and backfill-free: a row written before it keeps
+    // NULL, which code reads as the legacy v1 stamp rather than as
+    // unknown. Also grants the new column to the gate-driver role, which
+    // holds column-scoped grants and now selects it in
+    // `list_dedup_signals`.
+    (
+        57,
+        "trace_gate_decision_dedup_signal_version",
+        include_str!("../../../../migrations/V57__trace_gate_decision_dedup_signal_version.sql"),
+    ),
+];
+
 #[async_trait]
 impl Database for PgBackend {
     async fn admission_runtime_ready(&self) -> Result<bool, DatabaseError> {
@@ -980,1192 +1323,23 @@ impl Database for PgBackend {
                 );",
             )
             .await?;
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&1_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V1__trace_commons_schema.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&1_i32, &"trace_commons_schema"],
+        for (version, name, sql) in MIGRATIONS {
+            let already_applied = client
+                .query_opt(
+                    "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
+                    &[version],
                 )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&2_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V2__trace_credit_settlement.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&2_i32, &"trace_credit_settlement"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&3_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V3__trace_ranking_evidence.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&3_i32, &"trace_ranking_evidence"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&4_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V4__trace_ranking_calibration_runs.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&4_i32, &"trace_ranking_calibration_runs"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&5_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V5__trace_credit_settlement_ranking_gate.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&5_i32, &"trace_credit_settlement_ranking_gate"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&6_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V6__trace_force_rls.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&6_i32, &"trace_force_rls"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&7_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V7__trace_ranking_calibration_label_source_gate.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&7_i32, &"trace_ranking_calibration_label_source_gate"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&8_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V8__trace_ranking_calibration_source_error_gate.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&8_i32, &"trace_ranking_calibration_source_error_gate"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&9_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V9__trace_ranking_calibration_joined_evidence_hash.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&9_i32, &"trace_ranking_calibration_joined_evidence_hash"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&10_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V10__trace_credit_settlement_joined_evidence_hash.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&10_i32, &"trace_credit_settlement_joined_evidence_hash"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&11_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V11__trace_ranking_worker_runs.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&11_i32, &"trace_ranking_worker_runs"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&12_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V12__trace_ranking_worker_run_lifecycle.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&12_i32, &"trace_ranking_worker_run_lifecycle"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&13_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V13__trace_credit_settlement_exclusion_reasons.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&13_i32, &"trace_credit_settlement_exclusion_reasons"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&14_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V14__trace_ranking_preference_labels.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&14_i32, &"trace_ranking_preference_labels"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&15_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V15__trace_benchmark_registry_outbox.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&15_i32, &"trace_benchmark_registry_outbox"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&16_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V16__trace_ranking_calibration_datasets.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&16_i32, &"trace_ranking_calibration_datasets"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&17_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V17__trace_ranking_calibration_dataset_manifest_immutability.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[
-                        &17_i32,
-                        &"trace_ranking_calibration_dataset_manifest_immutability",
-                    ],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&18_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V18__trace_central_rls_tenant_predicate.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&18_i32, &"trace_central_rls_tenant_predicate"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&19_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V19__trace_ranking_calibration_label_actor_count.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&19_i32, &"trace_ranking_calibration_label_actor_count"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&20_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V20__trace_credit_settlement_issuer_approval_hash.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&20_i32, &"trace_credit_settlement_issuer_approval_hash"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&21_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V21__trace_near_credit_account_outbox.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&21_i32, &"trace_near_credit_account_outbox"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&22_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V22__trace_revocation_worker_queue_invalidation.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&22_i32, &"trace_revocation_worker_queue_invalidation"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&23_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V23__novelty_utility_credit_and_gate_decisions.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&23_i32, &"novelty_utility_credit_and_gate_decisions"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&24_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V24__gate_decision_vector_entry_id.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&24_i32, &"gate_decision_vector_entry_id"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&25_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V25__gate_decision_credit_withheld_reason.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&25_i32, &"gate_decision_credit_withheld_reason"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&26_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V26__trace_contributor_profiles.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&26_i32, &"trace_contributor_profiles"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&27_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V27__trace_leaderboard_snapshots.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&27_i32, &"trace_leaderboard_snapshots"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&28_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!("../../../../migrations/V28__device_keys.sql"))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&28_i32, &"device_keys"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&29_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V29__onboarding_invites.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&29_i32, &"onboarding_invites"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&30_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V30__trace_accounts.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&30_i32, &"trace_accounts"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&31_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V31__account_traces_index.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&31_i32, &"account_traces_index"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&32_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V32__webauthn_credentials.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&32_i32, &"webauthn_credentials"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&33_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V33__near_identities.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&33_i32, &"near_identities"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&34_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V34__account_consolidation.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&34_i32, &"account_consolidation"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&35_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V35__trace_instance_enrollments.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&35_i32, &"trace_instance_enrollments"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&36_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V36__trace_gate_driver.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&36_i32, &"trace_gate_driver"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&37_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V37__large_trace_chunked_scoring.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&37_i32, &"large_trace_chunked_scoring"],
-                )
-                .await?;
-        }
-        // V38 ships with the server-side PII backstop. It is applied here
-        // out of numeric order relative to what a long-lived pilot may
-        // already hold (V39-V41 landed on main while this sat unmerged);
-        // that is safe because each block gates on its own version number,
-        // not on sequence position.
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&38_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V38__trace_pii_backstop.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&38_i32, &"trace_pii_backstop"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&39_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V39__trace_credit_quality.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&39_i32, &"trace_credit_quality"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&40_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!("../../../../migrations/V40__trace_dedup.sql"))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&40_i32, &"trace_dedup"],
-                )
-                .await?;
-        }
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&41_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V41__trace_contributor_cap.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&41_i32, &"trace_contributor_cap"],
-                )
-                .await?;
-        }
-        // V42 makes the database authoritative for contributor invites.
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&42_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V42__onboarding_invite_grants.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&42_i32, &"onboarding_invite_grants"],
-                )
-                .await?;
-        }
-        // V43 (not V42: that number is held by the unmerged
-        // db-authoritative-invites branch) adds the contributor-withdrawal
-        // tombstone and the trace_submissions.withdrawn_at column.
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&43_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V43__trace_withdrawal.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&43_i32, &"trace_withdrawal"],
-                )
-                .await?;
-        }
-        // V44 widens the trace_sessions.client_kind CHECK to admit 'native',
-        // the client_kind of a loopback native-app session token.
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&44_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V44__native_session_client_kind.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&44_i32, &"native_session_client_kind"],
-                )
-                .await?;
-        }
-        // V45 retrofits V36's table-wide SELECT grants to the V38
-        // column-scoped convention. Safe to apply after V36+; the USING(true)
-        // policies stay.
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&45_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V45__trace_gate_driver_column_grants.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&45_i32, &"trace_gate_driver_column_grants"],
-                )
-                .await?;
-        }
-        // V46 evicts withdrawn contributors from published community
-        // snapshots.
-        //
-        // Renumbered from V42 on merge: V42 is held by the unmerged
-        // db-authoritative-invites branch, V43/V44 landed on main while this
-        // branch was open, and V45 is taken by the gate-driver column-grants
-        // branch.
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&46_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V46__community_snapshot_withdrawal_eviction.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&46_i32, &"community_snapshot_withdrawal_eviction"],
-                )
-                .await?;
-        }
-        // V47 persists the pre-cap chunk total on gate decisions and repairs
-        // the gate-driver column-grant drift left by V37 (chunk_count and
-        // chunks_capped were added without extending the column-level
-        // grants).
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&47_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V47__trace_gate_decision_total_chunk_count.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&47_i32, &"trace_gate_decision_total_chunk_count"],
-                )
-                .await?;
-        }
-        // V48 adds the shadow-mode correction-value columns (S5) and grants
-        // the two the cross-tenant correction-cluster scan reads to the
-        // gate-driver role. `run_migrations` is hand-rolled: a migration file
-        // that is not wired in here silently never runs.
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&48_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V48__trace_correction_value.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&48_i32, &"trace_correction_value"],
-                )
-                .await?;
-        }
-
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&49_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V49__trace_submission_last_status_reason.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&49_i32, &"trace_submission_last_status_reason"],
-                )
-                .await?;
-        }
-
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&50_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V50__onboarding_invite_grant_consumption.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&50_i32, &"onboarding_invite_grant_consumption"],
-                )
-                .await?;
-        }
-
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&51_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V51__privacy_classify_window_cache.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&51_i32, &"privacy_classify_window_cache"],
-                )
-                .await?;
-        }
-
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&52_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V52__trace_submission_residual_risk_basis.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&52_i32, &"trace_submission_residual_risk_basis"],
-                )
-                .await?;
-        }
-
-        // V53 adds the prospective gate-utility instrumentation columns
-        // (#199). Additive and backfill-free: rows written before it keep NULL
-        // forever, because a novelty score recomputed against a fuller index
-        // is not the number production used.
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&53_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V53__trace_gate_decision_composite_score.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&53_i32, &"trace_gate_decision_composite_score"],
-                )
-                .await?;
-        }
-
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&54_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V54__trace_gate_decision_qualifying_mass.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&54_i32, &"trace_gate_decision_qualifying_mass"],
-                )
-                .await?;
-        }
-
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&55_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V55__register_stats_public_read.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&55_i32, &"register_stats_public_read"],
-                )
-                .await?;
-        }
-
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&56_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V56__community_withdrawal_eviction_rls.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&56_i32, &"community_withdrawal_eviction_rls"],
-                )
-                .await?;
-        }
-
-        // V57 names the derivation behind dedup_simhash (#211, #325).
-        // Additive, nullable and backfill-free: a row written before it keeps
-        // NULL, which code reads as the legacy v1 stamp rather than as
-        // unknown. Also grants the new column to the gate-driver role, which
-        // holds column-scoped grants and now selects it in
-        // `list_dedup_signals`.
-        let already_applied = client
-            .query_opt(
-                "SELECT 1 FROM _trace_commons_migrations WHERE version = $1",
-                &[&57_i32],
-            )
-            .await?
-            .is_some();
-        if !already_applied {
-            client
-                .batch_execute(include_str!(
-                    "../../../../migrations/V57__trace_gate_decision_dedup_signal_version.sql"
-                ))
-                .await?;
-            client
-                .execute(
-                    "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                    &[&57_i32, &"trace_gate_decision_dedup_signal_version"],
-                )
-                .await?;
+                .await?
+                .is_some();
+            if !already_applied {
+                client.batch_execute(sql).await?;
+                client
+                    .execute(
+                        "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
+                        &[version, name],
+                    )
+                    .await?;
+            }
         }
 
         let already_applied = client
@@ -6473,8 +5647,8 @@ mod tests {
         );
     }
 
-    /// Same hand-rolled-`run_migrations` trap as V47, V53 and V54: wiring,
-    /// pinned. Counted rather than merely present, because a literal in the
+    /// Same `MIGRATIONS`-table trap as V47, V53 and V54: wiring, pinned.
+    /// Counted rather than merely present, because a literal in the
     /// assertion's own source would satisfy the assertion by itself and pass
     /// with the migration wired into nothing.
     #[test]
@@ -6487,13 +5661,15 @@ mod tests {
         assert_eq!(
             THIS_FILE.matches(&file_marker).count(),
             2,
-            "V57 must be named exactly twice: once by run_migrations' include_str! \
+            "V57 must be named exactly twice: once by the MIGRATIONS table's include_str! \
              and once by the migration-content test above"
         );
-        let version_marker = format!("&{}_i32", 57);
         assert!(
-            THIS_FILE.contains(&version_marker),
-            "V57 must record itself in _trace_commons_migrations"
+            super::MIGRATIONS
+                .iter()
+                .any(|(version, name, _)| *version == 57
+                    && *name == "trace_gate_decision_dedup_signal_version"),
+            "V57 must record itself in _trace_commons_migrations under its own file stem"
         );
     }
 
@@ -6725,94 +5901,93 @@ mod tests {
         migrations
     }
 
-    /// `run_migrations` is hand-rolled: a migration not wired in with its own
-    /// `include_str!`, or guarded on one version while recording another,
-    /// never runs, or re-runs on every boot. Driven from `migrations/` the way
+    /// `run_migrations` is driven by the `MIGRATIONS` table: a migration that
+    /// is not listed there never runs, and a row that pairs one version with
+    /// another migration's SQL runs the wrong file or records the wrong name.
+    /// Driven from `migrations/` the way
     /// `trace_commons_rls_registry_matches_migration_policy_coverage` below is
     /// driven from its policy set, so a failing row names the migration.
     ///
-    /// Four things make this hard to satisfy by accident:
+    /// Three properties, in the order they catch things:
     ///
-    /// 1. The set under test is read from `migrations/`, not listed here. A
-    ///    migration added and never wired in fails without anyone having to
-    ///    remember this test exists -- which is how V50 came to have no
-    ///    coverage while nine hand-written per-version tests were green.
-    /// 2. Markers are checked against `run_migrations`' own body, not the
-    ///    whole file. Scanning the file let a block that was commented out or
-    ///    moved into dead code satisfy every marker -- the way a literal
-    ///    written inside the test used to satisfy the assertion reading it --
-    ///    and let an unrelated mention inflate a count.
-    /// 3. All three markers for a version must sit in the SAME
-    ///    `already_applied` block. Checked against the whole body they were
-    ///    independent, so a block guarded on `&1_i32` while recording `&55_i32`
-    ///    passed -- permanently dead, and green.
-    /// 4. Matching is whitespace-insensitive, because `rustfmt` decides
-    ///    whether a bound-params array fits on one line. V17's does not.
+    /// 1. The table's `(version, name)` pairs equal `migrations/` exactly, in
+    ///    order. The set under test is read from the directory, not listed
+    ///    here, so a migration added and never wired in fails without anyone
+    ///    having to remember this test exists -- which is how V50 came to have
+    ///    no coverage while nine hand-written per-version tests were green. A
+    ///    phantom row, or a row recording a name that is not its own file
+    ///    stem, fails the same assertion.
+    /// 2. Versions strictly increase, so no version is listed twice and the
+    ///    apply order matches the numbering. Contiguity is deliberately not
+    ///    asserted: the per-version wiring this table replaced never required
+    ///    it, and each row gates on its own version rather than on sequence
+    ///    position.
+    /// 3. Each row's `include_str!` path names that row's own version and
+    ///    stem. This one is checked against this file's source text, because
+    ///    nothing at runtime can see which file a row embedded: a row carrying
+    ///    V57's version and V56's SQL is invisible to the two checks above.
     ///
-    /// The recorded name is derived from the filename rather than restated:
-    /// all 56 wired migrations record their own file stem, and a second copy
+    /// The recorded name is checked against the filename rather than restated:
+    /// all 57 wired migrations record their own file stem, and a second copy
     /// of it here would only be a new way for this test to lie.
     ///
-    /// What it still does not prove: that the statement beside a bound-params
-    /// array is the INSERT.
+    /// What it still does not prove: that the SQL inside a migration file does
+    /// what its name says.
     #[test]
     fn every_migration_is_wired_into_run_migrations() {
         const THIS_FILE: &str = include_str!("postgres.rs");
 
-        let start = THIS_FILE
-            .find("async fn run_migrations(")
-            .expect("run_migrations must exist in this file");
-        let after_signature = start + "async fn run_migrations(".len();
-        let end = after_signature
-            + THIS_FILE[after_signature..]
-                .find("\n    async fn ")
-                .expect("run_migrations must be followed by another fn at the same indentation");
-        let body = &THIS_FILE[start..end];
+        let on_disk = migrations_on_disk();
 
-        // A failed slice must not pass vacuously by scanning the wrong region
-        // -- the same class of defect this test exists to catch. Both guards
-        // are structural rather than a line count, which would have to be
-        // raised every time a migration lands and would fail with a message
-        // about markers when nothing about the markers was wrong.
-        assert!(
-            body.contains("_trace_commons_migrations"),
-            "run_migrations slice found the wrong region: the migrations table \
-                 name is missing"
-        );
+        let wired: Vec<(u32, String)> = super::MIGRATIONS
+            .iter()
+            .map(|(version, name, _)| {
+                (
+                    u32::try_from(*version).expect("migration versions are positive"),
+                    (*name).to_string(),
+                )
+            })
+            .collect();
+
         assert_eq!(
-            body.matches("fn ").count(),
-            1,
-            "run_migrations slice contains more than its own signature: it swallowed the \
-                 methods that follow"
+            wired, on_disk,
+            "the MIGRATIONS table and migrations/ disagree: every migration on disk must be \
+                 wired in exactly once, under its own version and file stem, in version order"
         );
-        assert_eq!(
-            body.lines().last().map(str::trim),
-            Some("}"),
-            "run_migrations slice does not end at the function's closing brace"
-        );
-        // The strip below cuts each line at its first `//` and cannot see a
-        // block comment, so a migration wrapped in one would read as wired.
-        assert!(
-            !body.contains("/*"),
-            "run_migrations gained a block comment; the line-comment strip no \
-                 longer covers it"
-        );
-        // The same strip cannot see that a `//` sits inside a string literal,
-        // and would cut the rest of that line -- dropping a marker, or fusing
-        // two blocks. Nothing in the body does this today; assert the
-        // precondition rather than assume it.
-        assert!(
-                !body.lines().any(|line| {
-                    matches!((line.find('"'), line.find("//")), (Some(quote), Some(comment)) if quote < comment)
-                }),
-                "run_migrations has a `//` after a string literal on the same line; the \
-                 line-comment strip would cut inside the string"
+
+        for pair in wired.windows(2) {
+            assert!(
+                pair[0].0 < pair[1].0,
+                "MIGRATIONS versions must strictly increase, so that no version is applied \
+                     twice and the apply order matches the numbering: V{} is followed by V{}",
+                pair[0].0,
+                pair[1].0
             );
+        }
 
-        // Comments dropped, then whitespace and the trailing comma rustfmt
-        // adds inside a wrapped array, so a marker matches whether or not
-        // rustfmt kept it on one line.
-        let squashed: String = body
+        // Which file a row embedded is not observable at runtime, so the
+        // include_str! paths are read from this file's own source text.
+        let table_start = THIS_FILE
+            .find("const MIGRATIONS: &[(i32, &str, &str)] = &[")
+            .expect("the MIGRATIONS table must exist in this file");
+        let table_end = table_start
+            + THIS_FILE[table_start..]
+                .find("\n];")
+                .expect("the MIGRATIONS table must be closed by a `];` at column zero");
+        let table = &THIS_FILE[table_start..table_end];
+
+        // The strip below cuts each line at its first `//` and cannot see a
+        // block comment, so a row wrapped in one would read as wired.
+        assert!(
+            !table.contains("/*"),
+            "the MIGRATIONS table gained a block comment; the line-comment strip no longer \
+                 covers it"
+        );
+
+        // Comments dropped, then whitespace, then the trailing comma rustfmt
+        // adds inside a wrapped tuple, so a row matches whether or not rustfmt
+        // kept it on one line.
+        let squashed: String = table
             .lines()
             .map(|line| match line.find("//") {
                 Some(idx) => &line[..idx],
@@ -6823,62 +5998,36 @@ mod tests {
             .chars()
             .filter(|c| !c.is_whitespace())
             .collect::<String>()
-            .replace(",]", "]");
+            .replace(",)", ")");
 
-        const BLOCK: &str = "letalready_applied";
         let mut failures: Vec<String> = Vec::new();
 
-        for (version, file_stem) in migrations_on_disk() {
+        for (version, file_stem) in &on_disk {
             let file_marker = format!("migrations/V{version}__{file_stem}.sql");
 
-            let hits = squashed.matches(&file_marker).count();
+            let row =
+                format!("({version},\"{file_stem}\",include_str!(\"../../../../{file_marker}\")),");
+            let hits = squashed.matches(&row).count();
             if hits != 1 {
                 failures.push(format!(
-                    "V{version}: named {hits} times in run_migrations, expected exactly once \
-                         by its own include_str!"
-                ));
-                continue;
-            }
-
-            // The block this migration owns: its own already_applied guard
-            // through the next one. All three markers must be inside it.
-            let at = squashed.find(&file_marker).expect("hit counted above");
-            let block_start = squashed[..at].rfind(BLOCK).unwrap_or(0);
-            let block_end = squashed[at..]
-                .find(BLOCK)
-                .map(|offset| at + offset)
-                .unwrap_or(squashed.len());
-            let block = &squashed[block_start..block_end];
-
-            let guard_marker = format!("&[&{version}_i32]");
-            if !block.contains(&guard_marker) {
-                failures.push(format!(
-                    "V{version}: its already_applied guard does not query version {version} -- \
-                         a block guarded on another version never runs, or runs on every boot"
-                ));
-            }
-
-            let insert_marker = format!("&[&{version}_i32,&\"{file_stem}\"]");
-            if !block.contains(&insert_marker) {
-                failures.push(format!(
-                    "V{version}: does not record itself in _trace_commons_migrations as \
-                         {file_stem:?} within its own block -- being gated by an already_applied \
-                         check for the same version is not the same thing"
+                    "V{version}: appears {hits} times in the MIGRATIONS table carrying its own \
+                         version, file stem and file, expected exactly once -- a row that pairs \
+                         one version with another migration's SQL runs the wrong file"
                 ));
             }
 
             let readers = MIGRATION_READER_MINIMUMS
                 .iter()
-                .find(|(wanted, _)| *wanted == version)
+                .find(|(wanted, _)| wanted == version)
                 .map(|(_, readers)| *readers)
                 .unwrap_or(1);
             let references = THIS_FILE.matches(&file_marker).count();
             if references < readers {
                 failures.push(format!(
                     "V{version}: named {references} times in this file, expected at least \
-                         {readers} -- run_migrations' include_str! plus each test that reads the \
-                         migration. A missing one means such a test was deleted or now restates \
-                         the migration instead of reading it"
+                         {readers} -- the MIGRATIONS table's include_str! plus each test that \
+                         reads the migration. A missing one means such a test was deleted or now \
+                         restates the migration instead of reading it"
                 ));
             }
         }
