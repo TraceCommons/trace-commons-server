@@ -279,20 +279,6 @@ fn text_parts(content: &Value) -> Option<String> {
     }
 }
 
-fn opaque(record_type: &str, timestamp: Option<chrono::DateTime<chrono::Utc>>) -> SessionEvent {
-    SessionEvent {
-        served_by: None,
-        kind: SessionEventKind::Opaque,
-        timestamp,
-        content: None,
-        structured: json!({ "record_type": record_type }),
-        tool_name: None,
-        token_counts: None,
-        tool_call_id: None,
-        success: None,
-    }
-}
-
 /// `metrics.inputTokens` and `metrics.outputTokens`, both or neither.
 fn token_counts_of(message: &Value) -> Option<(u32, u32)> {
     let metrics = message.get("metrics")?;
@@ -320,7 +306,7 @@ fn map_message(message: &Value, model: &mut Option<String>, events: &mut Vec<Ses
         "user" => SessionEventKind::User,
         "assistant" => SessionEventKind::Assistant,
         other => {
-            events.push(opaque(other, timestamp));
+            events.push(SessionEvent::opaque(other, timestamp));
             return;
         }
     };
@@ -399,23 +385,18 @@ fn map_message(message: &Value, model: &mut Option<String>, events: &mut Vec<Ses
                     .map(|s| s.to_string()),
                 success: None,
             }),
-            "tool_result" => events.push(SessionEvent {
-                served_by: None,
-                kind: SessionEventKind::ToolResult,
+            // Only an explicit `is_error` is a verdict. Absent means the
+            // harness said nothing, which is not success.
+            "tool_result" => events.push(SessionEvent::tool_result(
                 timestamp,
-                content: block.get("content").and_then(text_parts),
-                structured: Value::Null,
-                tool_name: None,
-                token_counts: None,
-                tool_call_id: block
+                block.get("content").and_then(text_parts),
+                block
                     .get("tool_use_id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string()),
-                // Only an explicit `is_error` is a verdict. Absent means the
-                // harness said nothing, which is not success.
-                success: block.get("is_error").and_then(|v| v.as_bool()).map(|e| !e),
-            }),
-            other => events.push(opaque(other, timestamp)),
+                block.get("is_error").and_then(|v| v.as_bool()).map(|e| !e),
+            )),
+            other => events.push(SessionEvent::opaque(other, timestamp)),
         }
     }
 }
