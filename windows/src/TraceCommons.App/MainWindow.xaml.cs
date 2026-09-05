@@ -778,9 +778,10 @@ public sealed partial class MainWindow : Window
         {
             return;
         }
-
-        var onboarding = new OnboardingWindow(_host, OnboardingState.Default());
-        if (target == HealthNavigationTarget.Connect)
+        // Raising a live flow must not reset an invite or consent decision.
+        bool alreadyOpen = _onboarding is not null;
+        var onboarding = OpenOnboarding(OnboardingState.Default());
+        if (!alreadyOpen && target == HealthNavigationTarget.Connect)
         {
             onboarding.ViewModel.GetStarted();
         }
