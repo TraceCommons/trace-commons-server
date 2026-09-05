@@ -133,6 +133,10 @@ struct PreviewSheet: View {
         _loading = State(initialValue: preloaded == nil)
     }
 
+    /// Bumped by Command-F. `SearchTab` watches it and takes focus, so the
+    /// shortcut works from any tab and from anywhere on the search tab.
+    @State private var searchFocusRequest = 0
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -141,7 +145,29 @@ struct PreviewSheet: View {
             SheetHairline()
             footer
         }
-        .frame(width: SheetMetric.width, height: SheetMetric.height)
+        // The spec's canvas is the floor, not the fixed size: the transcript
+        // and search tabs are the ones a person reads, and a sheet that
+        // could not be dragged larger on a 27-inch display was the most
+        // common complaint about them. Ideal keeps the first presentation at
+        // the spec measure and the screenshot hook renders at exactly it.
+        .frame(
+            minWidth: SheetMetric.width, idealWidth: SheetMetric.width, maxWidth: .infinity,
+            minHeight: SheetMetric.height, idealHeight: SheetMetric.height, maxHeight: .infinity
+        )
+        .background {
+            // A shortcut needs a control to hang from. This one is never
+            // seen and never focused; it exists so Command-F does what it
+            // does in every other macOS window: go to the search field.
+            Button("") {
+                tab = .search
+                searchFocusRequest += 1
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .buttonStyle(.plain)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+        }
         .tcScreen()
         .task(id: entry.entryID) {
             guard preloaded == nil else { return }
@@ -301,7 +327,8 @@ struct PreviewSheet: View {
                             model.searchOriginal(entryID: entry.entryID, needle: needle)
                         },
                         initialNeedle: preloaded?.needle ?? "",
-                        initialOffsets: preloaded?.offsets
+                        initialOffsets: preloaded?.offsets,
+                        focusRequest: searchFocusRequest
                     )
                 case .whatsInIt:
                     WhatsInItTab(entry: entry, summary: summary)
@@ -416,8 +443,11 @@ struct PreviewSheet: View {
                 }
                 .buttonStyle(SheetSecondaryButtonStyle())
                 Spacer(minLength: TC.Space.m)
+                // Escape closes the sheet. The only other binding on this
+                // sheet is Command-F below; Return stays unbound.
                 Button("Close") { dismiss() }
                     .buttonStyle(SheetSecondaryButtonStyle())
+                    .keyboardShortcut(.cancelAction)
                 // The ONLY approve control in the product. It is behind the
                 // preview by design -- it cannot arm until one has loaded --
                 // and it has NO keyboard shortcut: this used to be
@@ -668,8 +698,9 @@ struct PreviewSheet: View {
 // and it is now `TCReadGateCheckbox` in the design system.
 
 /// The one size the spec states that the shared scale has no step for: the
-/// sheet canvas (§4.6). The 5pt control padding and the 13pt read-gate box
-/// that used to live here are now `TC.Space.control` and `TC.Control.checkbox`.
+/// sheet canvas (§4.6), used as the sheet's minimum and its first-shown
+/// size. The 5pt control padding and the 13pt read-gate box that used to
+/// live here are now `TC.Space.control` and `TC.Control.checkbox`.
 private enum SheetMetric {
     static let width: CGFloat = 760
     static let height: CGFloat = 620
@@ -777,6 +808,9 @@ struct SearchTab: View {
     /// reference because `AppModel` is the only thing in this app that talks
     /// to the daemon.
     let searchOriginal: (String) -> Int?
+    /// Command-F, as a counter the sheet bumps. Any change puts the caret
+    /// in the field; the value itself means nothing.
+    let focusRequest: Int
 
     @State private var needle: String
     @State private var offsets: [Int]?
@@ -790,11 +824,13 @@ struct SearchTab: View {
         preview: TCPreview?,
         searchOriginal: @escaping (String) -> Int? = { _ in nil },
         initialNeedle: String = "",
-        initialOffsets: [Int]? = nil
+        initialOffsets: [Int]? = nil,
+        focusRequest: Int = 0
     ) {
         self.document = document
         self.preview = preview
         self.searchOriginal = searchOriginal
+        self.focusRequest = focusRequest
         _needle = State(initialValue: initialNeedle)
         _offsets = State(initialValue: initialOffsets)
         _searched = State(initialValue: initialOffsets != nil)
@@ -848,6 +884,7 @@ struct SearchTab: View {
             }
         }
         .onAppear { focused = true }
+        .onChange(of: focusRequest) { _, _ in focused = true }
     }
 
     /// The spec's field: card face, hairline, radius 6, `5 x 10`.
