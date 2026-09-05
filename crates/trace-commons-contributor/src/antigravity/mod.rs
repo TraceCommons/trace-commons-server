@@ -6,11 +6,15 @@
 //! Trajectory-v1 records, and `import` stages those through the existing
 //! `trajectory` source instead.
 //!
-//! `dead_code` stays allowed at the module level for the descriptive fields
-//! and probe internals the import path does not itself read (`git_root`,
-//! `step_count`, `Candidate`), which are part of the recorded API surface
-//! and are asserted by this module's own tests.
-#![allow(dead_code)]
+//! A few items here are read only by this module's own tests -- five
+//! descriptive fields on `TrajectoryDescription` and `ImportOutcome`'s
+//! `into_result`. Each carries its own `allow(dead_code)` rather than the
+//! module-wide one this used to have: the wide allow also covered whatever
+//! else went unread, and the note explaining it had already gone stale
+//! (`Candidate` is named there as dead and is in fact used by
+//! `endpoint::candidates_from` and `probe_candidates`). The fields are part
+//! of the API surface the recorded fixtures pin, so they are kept and
+//! asserted rather than dropped.
 
 mod client;
 mod convert;
