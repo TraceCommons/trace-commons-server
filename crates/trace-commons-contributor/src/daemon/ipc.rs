@@ -125,7 +125,7 @@ use super::policy::{
     project_key_is_admissible,
 };
 use super::preview_scheduler::{PreviewKey, PreviewScheduler, RequestState};
-use super::queue::{Queue, QueueState};
+use super::queue::{Queue, QueueEntry, QueueState};
 use super::settings::DaemonSettings;
 use super::state::DaemonState;
 use crate::config::ConfigStore;
@@ -1015,6 +1015,20 @@ pub fn entry_value(e: &super::queue::QueueEntry) -> serde_json::Value {
     })
 }
 
+/// `?` for a handler that returns a [`Response`] rather than a `Result`.
+///
+/// The helpers below return `Result<_, Response>` so the refusal is built
+/// once, next to the check that produces it; this unwraps the value or
+/// returns the refusal from the enclosing handler.
+macro_rules! try_response {
+    ($e:expr) => {
+        match $e {
+            Ok(value) => value,
+            Err(response) => return response,
+        }
+    };
+}
+
 /// The methods the synchronous dispatcher cannot answer, paired with the
 /// refusal label each one sends.
 ///
@@ -1380,10 +1394,7 @@ pub fn handle_request(shared: &DaemonShared, req: &Request) -> Response {
             Response::ok(req.id, serde_json::json!({ "ok": true, "purged": purged }))
         }
         "dismiss" => {
-            let id = match parse_entry_id(&req.params) {
-                Ok(id) => id,
-                Err(m) => return Response::err(req.id, ERR_BAD_PARAMS, m),
-            };
+            let id = try_response!(entry_id_param(req));
             // A dismissed entry is never previewed again, so drop any
             // scheduled preview for it. If one is already building this
             // cannot stop it mid-parse -- see `PreviewScheduler::cancel` --
@@ -1412,10 +1423,7 @@ pub fn handle_request(shared: &DaemonShared, req: &Request) -> Response {
             // runs `handle_request_async` instead, which answers `"preview"`
             // for real -- see the module doc's "Sync vs. async dispatch"
             // section.
-            let id = match parse_entry_id(&req.params) {
-                Ok(id) => id,
-                Err(m) => return Response::err(req.id, ERR_BAD_PARAMS, m),
-            };
+            let id = try_response!(entry_id_param(req));
             let queue = shared.queue.lock().expect("queue lock");
             match queue.get(id) {
                 Some(e) => Response::ok(
@@ -1561,10 +1569,7 @@ pub fn handle_request(shared: &DaemonShared, req: &Request) -> Response {
                 shared.publish(EVENT_QUEUE_CHANGED, serde_json::json!({}));
                 return Response::ok(req.id, serde_json::json!({ "canceled": canceled }));
             }
-            let id = match parse_entry_id(&req.params) {
-                Ok(id) => id,
-                Err(m) => return Response::err(req.id, ERR_BAD_PARAMS, m),
-            };
+            let id = try_response!(entry_id_param(req));
             let mut queue = shared.queue.lock().expect("queue lock");
             if queue.cancel(id).is_err() {
                 return Response::err(req.id, ERR_BAD_PARAMS, "not-cancelable");
@@ -2002,27 +2007,18 @@ async fn handle_approve(shared: &DaemonShared, req: &Request) -> Response {
         )
     } else {
         let queue = shared.queue.lock().expect("queue lock");
-        (
-            match parse_entry_id(&req.params) {
-                Ok(id) => {
-                    // An id the caller never held is a client bug, not
-                    // something to fold into the skip accounting below --
-                    // refused up front, the same way `preview` refuses the
-                    // same input, rather than reported as a labelled skip
-                    // of a call that otherwise ran. `all` and `project_id`
-                    // cannot reach this branch: their ids are read from
-                    // the queue itself a few lines above, so every id they
-                    // produce already names a real entry at the moment of
-                    // selection.
-                    if queue.get(id).is_none() {
-                        return Response::err(req.id, ERR_BAD_PARAMS, ERR_UNKNOWN_ENTRY_ID);
-                    }
-                    vec![id]
-                }
-                Err(m) => return Response::err(req.id, ERR_BAD_PARAMS, m),
-            },
-            None,
-        )
+        let id = try_response!(entry_id_param(req));
+        // An id the caller never held is a client bug, not something to
+        // fold into the skip accounting below -- refused up front, the same
+        // way `preview` refuses the same input, rather than reported as a
+        // labelled skip of a call that otherwise ran. `all` and
+        // `project_id` cannot reach this branch: their ids are read from
+        // the queue itself a few lines above, so every id they produce
+        // already names a real entry at the moment of selection.
+        if queue.get(id).is_none() {
+            return Response::err(req.id, ERR_BAD_PARAMS, ERR_UNKNOWN_ENTRY_ID);
+        }
+        (vec![id], None)
     };
     // A local, label-only record that a batch was bulk-approved, written
     // BEFORE anything is approved -- same ordering, and the same reason, as
@@ -2531,17 +2527,8 @@ async fn handle_witness_preview_request_inner(
 }
 
 async fn handle_preview(shared: &DaemonShared, req: &Request) -> Response {
-    let id = match parse_entry_id(&req.params) {
-        Ok(id) => id,
-        Err(m) => return Response::err(req.id, ERR_BAD_PARAMS, m),
-    };
-    let entry = {
-        let queue = shared.queue.lock().expect("queue lock");
-        match queue.get(id) {
-            Some(e) => e.clone(),
-            None => return Response::err(req.id, ERR_BAD_PARAMS, ERR_UNKNOWN_ENTRY_ID),
-        }
-    };
+    let id = try_response!(entry_id_param(req));
+    let entry = try_response!(entry_by_id(shared, req, id));
     if entry
         .previewed_envelope_digest
         .as_deref()
@@ -2557,6 +2544,7 @@ async fn handle_preview(shared: &DaemonShared, req: &Request) -> Response {
             Err(label) => Response::err(req.id, ERR_UNAVAILABLE, label),
         };
     }
+
     // No enrollment is not a refusal. Preview does no network I/O and needs
     // neither the daemon's lock nor its running loop, so requiring a config
     // here was incidental -- and it forced anyone who wanted to *see* what
@@ -2675,17 +2663,8 @@ pub(crate) fn preview_config_fingerprint(shared: &DaemonShared) -> String {
 /// result. A shell drawing a list calls this once per card and blocks on
 /// nothing.
 fn handle_preview_request(shared: &DaemonShared, req: &Request) -> Response {
-    let id = match parse_entry_id(&req.params) {
-        Ok(id) => id,
-        Err(m) => return Response::err(req.id, ERR_BAD_PARAMS, m),
-    };
-    let entry = {
-        let queue = shared.queue.lock().expect("queue lock");
-        match queue.get(id) {
-            Some(e) => e.clone(),
-            None => return Response::err(req.id, ERR_BAD_PARAMS, ERR_UNKNOWN_ENTRY_ID),
-        }
-    };
+    let id = try_response!(entry_id_param(req));
+    let entry = try_response!(entry_by_id(shared, req, id));
     let key = PreviewKey::for_entry(
         &entry.path,
         entry.size_bytes,
@@ -2741,10 +2720,7 @@ fn handle_preview_visible(shared: &DaemonShared, req: &Request) -> Response {
 /// cancels on every card leaving the viewport will hit that case constantly
 /// and has nothing to do about it.
 fn handle_preview_cancel(shared: &DaemonShared, req: &Request) -> Response {
-    let id = match parse_entry_id(&req.params) {
-        Ok(id) => id,
-        Err(m) => return Response::err(req.id, ERR_BAD_PARAMS, m),
-    };
+    let id = try_response!(entry_id_param(req));
     let dropped = shared.previews.cancel(id);
     Response::ok(
         req.id,
@@ -2993,10 +2969,7 @@ pub async fn open_preview(
 /// Trace content, under the preview exemption in this module's doc: only for
 /// an entry the caller already holds, post-redaction only, and never onward.
 async fn handle_search_original(shared: &DaemonShared, req: &Request) -> Response {
-    let id = match parse_entry_id(&req.params) {
-        Ok(id) => id,
-        Err(m) => return Response::err(req.id, ERR_BAD_PARAMS, m),
-    };
+    let id = try_response!(entry_id_param(req));
     let needle = match req.params.get("needle") {
         Some(v) => match v.as_str() {
             Some(n) => n,
@@ -3013,10 +2986,7 @@ async fn handle_search_original(shared: &DaemonShared, req: &Request) -> Respons
 }
 
 async fn handle_preview_body(shared: &DaemonShared, req: &Request) -> Response {
-    let id = match parse_entry_id(&req.params) {
-        Ok(id) => id,
-        Err(m) => return Response::err(req.id, ERR_BAD_PARAMS, m),
-    };
+    let id = try_response!(entry_id_param(req));
     let offset = match req.params.get("offset") {
         None => 0usize,
         Some(v) => match v.as_u64() {
@@ -3146,10 +3116,7 @@ async fn handle_preview_body(shared: &DaemonShared, req: &Request) -> Response {
 /// same rule as the rest of the preview surface, because the shape of a
 /// transcript is itself something a contributor has not offered anyone.
 async fn handle_preview_turns(shared: &DaemonShared, req: &Request) -> Response {
-    let id = match parse_entry_id(&req.params) {
-        Ok(id) => id,
-        Err(m) => return Response::err(req.id, ERR_BAD_PARAMS, m),
-    };
+    let id = try_response!(entry_id_param(req));
     let expected_digest = match req.params.get("body_digest") {
         // Fail-closed, and required from the first call: an index is only
         // meaningful against the body the caller is holding.
@@ -3419,6 +3386,30 @@ fn parse_entry_id(params: &serde_json::Value) -> Result<Uuid, &'static str> {
         .ok_or("entry_id-required")?
         .parse()
         .map_err(|_| "entry_id-invalid")
+}
+
+/// `req`'s `entry_id` parameter, or the refusal to send in its place.
+///
+/// Ten handlers wanted the same four lines around [`parse_entry_id`]; this
+/// is those four lines once, and with [`try_response!`] the call sites read
+/// as a `?`. The refusal is exactly what they each built by hand:
+/// `ERR_BAD_PARAMS` carrying `entry_id-required` or `entry_id-invalid`.
+fn entry_id_param(req: &Request) -> Result<Uuid, Response> {
+    parse_entry_id(&req.params).map_err(|m| Response::err(req.id, ERR_BAD_PARAMS, m))
+}
+
+/// The queue entry `id` names, cloned out from under the lock, or the
+/// refusal to send in its place.
+///
+/// The lock is taken and released inside this function, exactly as the
+/// inline blocks it replaces did: callers go on to do slow work with the
+/// clone and must not be holding the queue lock while they do it.
+fn entry_by_id(shared: &DaemonShared, req: &Request, id: Uuid) -> Result<QueueEntry, Response> {
+    let queue = shared.queue.lock().expect("queue lock");
+    queue
+        .get(id)
+        .cloned()
+        .ok_or_else(|| Response::err(req.id, ERR_BAD_PARAMS, ERR_UNKNOWN_ENTRY_ID))
 }
 
 /// Collapse an internal error string to a single-line label. Nothing
