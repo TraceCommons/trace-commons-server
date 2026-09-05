@@ -1017,14 +1017,14 @@ pub fn entry_value(e: &super::queue::QueueEntry) -> serde_json::Value {
 
 /// `?` for a handler that returns a [`Response`] rather than a `Result`.
 ///
-/// The helpers below return `Result<_, Response>` so the refusal is built
+/// The helpers below return `Result<_, Box<Response>>` so the refusal is built
 /// once, next to the check that produces it; this unwraps the value or
 /// returns the refusal from the enclosing handler.
 macro_rules! try_response {
     ($e:expr) => {
         match $e {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         }
     };
 }
@@ -1038,7 +1038,10 @@ macro_rules! try_response {
 /// Labels are explicit because several methods share a label that cannot
 /// be derived from their names, including the onboarding and profile groups.
 const ASYNC_ONLY_METHODS: &[(&str, &str)] = &[
-    ("prepare_admission_session", "admission-setup-requires-async"),
+    (
+        "prepare_admission_session",
+        "admission-setup-requires-async",
+    ),
     ("near_account_start", "near-signup-requires-async"),
     ("near_account_capabilities", "near-signup-requires-async"),
     ("native_wallet_flow", "near-signup-requires-async"),
@@ -1760,7 +1763,6 @@ fn handle_set_settings(shared: &DaemonShared, req: &Request) -> Response {
         }
         Err(label) => Response::err(req.id, ERR_BAD_PARAMS, label),
     }
-
 }
 
 /// The complete dispatcher: answers the async methods (`"approve"`,
@@ -3401,8 +3403,8 @@ fn parse_entry_id(params: &serde_json::Value) -> Result<Uuid, &'static str> {
 /// is those four lines once, and with [`try_response!`] the call sites read
 /// as a `?`. The refusal is exactly what they each built by hand:
 /// `ERR_BAD_PARAMS` carrying `entry_id-required` or `entry_id-invalid`.
-fn entry_id_param(req: &Request) -> Result<Uuid, Response> {
-    parse_entry_id(&req.params).map_err(|m| Response::err(req.id, ERR_BAD_PARAMS, m))
+fn entry_id_param(req: &Request) -> Result<Uuid, Box<Response>> {
+    parse_entry_id(&req.params).map_err(|m| Box::new(Response::err(req.id, ERR_BAD_PARAMS, m)))
 }
 
 /// The queue entry `id` names, cloned out from under the lock, or the
@@ -3411,12 +3413,16 @@ fn entry_id_param(req: &Request) -> Result<Uuid, Response> {
 /// The lock is taken and released inside this function, exactly as the
 /// inline blocks it replaces did: callers go on to do slow work with the
 /// clone and must not be holding the queue lock while they do it.
-fn entry_by_id(shared: &DaemonShared, req: &Request, id: Uuid) -> Result<QueueEntry, Response> {
+fn entry_by_id(
+    shared: &DaemonShared,
+    req: &Request,
+    id: Uuid,
+) -> Result<QueueEntry, Box<Response>> {
     let queue = shared.queue.lock().expect("queue lock");
     queue
         .get(id)
         .cloned()
-        .ok_or_else(|| Response::err(req.id, ERR_BAD_PARAMS, ERR_UNKNOWN_ENTRY_ID))
+        .ok_or_else(|| Box::new(Response::err(req.id, ERR_BAD_PARAMS, ERR_UNKNOWN_ENTRY_ID)))
 }
 
 /// Collapse an internal error string to a single-line label. Nothing
@@ -7193,6 +7199,28 @@ mod tests {
         let err = r.error.unwrap();
         assert_eq!(err.code, ERR_UNAVAILABLE);
         assert_eq!(err.message, "quiesce-requires-async");
+    }
+
+    #[test]
+    fn synchronous_onboarding_requests_keep_their_existing_refusal_labels() {
+        let s = shared();
+        for (method, label) in [
+            (
+                "prepare_admission_session",
+                "admission-setup-requires-async",
+            ),
+            ("near_account_start", "near-signup-requires-async"),
+            ("near_account_capabilities", "near-signup-requires-async"),
+            ("native_wallet_flow", "near-signup-requires-async"),
+            ("witness_preview_request", "witness-review-requires-async"),
+        ] {
+            let request = req(method, serde_json::Value::Null);
+            let response = handle_request(&s, &request);
+            assert_eq!(response.id, request.id);
+            let error = response.error.expect("synchronous dispatcher must refuse");
+            assert_eq!(error.code, ERR_UNAVAILABLE);
+            assert_eq!(error.message, label);
+        }
     }
 
     #[tokio::test]
