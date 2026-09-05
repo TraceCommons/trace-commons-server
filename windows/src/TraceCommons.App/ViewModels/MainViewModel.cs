@@ -1103,7 +1103,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 .ConfigureAwait(true);
 
             StatusText = status.IsError
-                ? $"Daemon unavailable ({status.Error!.Code})"
+                ? "Daemon unavailable"
                 : DescribeQueue(Pending.Count);
 
             // The banner comes out of the status read this method already
