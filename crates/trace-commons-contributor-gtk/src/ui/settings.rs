@@ -251,13 +251,7 @@ impl SettingsView {
         let routing_card = style::card(gtk::Orientation::Vertical, space::M);
         let routing_tools = gtk::Box::new(gtk::Orientation::Vertical, space::XS);
         routing_card.append(&routing_tools);
-        let routing_intro = gtk::Label::builder()
-            .label(copy::IRONWIRE_INTRO)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        routing_intro.add_css_class("tc-body");
-        routing_card.append(&routing_intro);
+        style::append_body(&routing_card, copy::IRONWIRE_INTRO);
         let routing_row = gtk::Box::new(gtk::Orientation::Horizontal, space::S);
         let routing_switch_label = gtk::Label::builder()
             .label(copy::IRONWIRE_TOGGLE)
@@ -312,13 +306,7 @@ impl SettingsView {
             f64::from(u16::MAX),
         );
         routing_port.set_value(f64::from(DEFAULT_IRONWIRE_PORT));
-        let routing_port_note = gtk::Label::builder()
-            .label(copy::IRONWIRE_PORT_NOTE)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        routing_port_note.add_css_class("tc-caveat");
-        routing_override_box.append(&routing_port_note);
+        style::append_caveat(&routing_override_box, copy::IRONWIRE_PORT_NOTE);
         routing_override_box.append(&style::eyebrow(copy::IRONWIRE_FOLDER_TITLE));
         // Still a text box here, deliberately. The macOS folder control is
         // a chooser because on that platform a directory is readable when
@@ -332,13 +320,7 @@ impl SettingsView {
         // Assembled rather than fixed: it names the folder this machine
         // would read when the field is left empty, which is the folder every
         // failure sentence on this card sends a contributor here to name.
-        let routing_folder_note = gtk::Label::builder()
-            .label(copy::ironwire_folder_note_here())
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        routing_folder_note.add_css_class("tc-caveat");
-        routing_override_box.append(&routing_folder_note);
+        style::append_caveat(&routing_override_box, copy::ironwire_folder_note_here());
         let routing_apply = gtk::Button::with_label(copy::IRONWIRE_APPLY);
         routing_apply.add_css_class("tc-quiet");
         routing_apply.set_halign(gtk::Align::Start);
@@ -352,13 +334,7 @@ impl SettingsView {
         routing_card.append(&routing_probe);
         // Nothing here waits on the app being started again: the daemon
         // swaps the reader when the declaration lands.
-        let routing_applies = gtk::Label::builder()
-            .label(copy::IRONWIRE_APPLIES_AT_ONCE)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        routing_applies.add_css_class("tc-caveat");
-        routing_card.append(&routing_applies);
+        style::append_caveat(&routing_card, copy::IRONWIRE_APPLIES_AT_ONCE);
         content.append(&routing_card);
 
         // The witness card. Its own section rather than a row on the card
@@ -371,13 +347,7 @@ impl SettingsView {
         // itself. Nothing here is authored in this view.
         content.append(&style::section(copy::WITNESS_HEADING));
         let witness_card = style::card(gtk::Orientation::Vertical, space::M);
-        let witness_intro = gtk::Label::builder()
-            .label(copy::WITNESS_INTRO)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        witness_intro.add_css_class("tc-body");
-        witness_card.append(&witness_intro);
+        style::append_body(&witness_card, copy::WITNESS_INTRO);
         // The two rows `render_witness` paints. Empty until it runs: this
         // window has no business claiming anything about a witness before
         // it has read the configuration.
@@ -386,13 +356,7 @@ impl SettingsView {
         // What a certificate actually proves, stated where a contributor
         // reads it, so this shell never has to summarise it and never
         // summarises it wrongly.
-        let witness_means = gtk::Label::builder()
-            .label(copy::WITNESS_CERTIFICATE_MEANS)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        witness_means.add_css_class("tc-caveat");
-        witness_card.append(&witness_means);
+        style::append_caveat(&witness_card, copy::WITNESS_CERTIFICATE_MEANS);
 
         // The fields, behind a disclosure. `render_witness` opens it on
         // every refusing state: a card that says nothing is being sent must
@@ -425,13 +389,7 @@ impl SettingsView {
             .child(&witness_measurements)
             .build();
         witness_form_box.append(&witness_measurements_frame);
-        let witness_measurements_note = gtk::Label::builder()
-            .label(copy::WITNESS_MEASUREMENTS_NOTE)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        witness_measurements_note.add_css_class("tc-caveat");
-        witness_form_box.append(&witness_measurements_note);
+        style::append_caveat(&witness_form_box, copy::WITNESS_MEASUREMENTS_NOTE);
         let witness_configure = gtk::Button::with_label(copy::WITNESS_CONFIGURE);
         witness_configure.set_halign(gtk::Align::Start);
         witness_form_box.append(&witness_configure);
@@ -442,20 +400,8 @@ impl SettingsView {
         witness_clear.add_css_class("tc-quiet");
         witness_clear.set_halign(gtk::Align::Start);
         witness_card.append(&witness_clear);
-        let witness_clear_note = gtk::Label::builder()
-            .label(copy::WITNESS_CLEAR_NOTE)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        witness_clear_note.add_css_class("tc-caveat");
-        witness_card.append(&witness_clear_note);
-        let witness_applies = gtk::Label::builder()
-            .label(copy::WITNESS_APPLIES_AT_ONCE)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        witness_applies.add_css_class("tc-caveat");
-        witness_card.append(&witness_applies);
+        style::append_caveat(&witness_card, copy::WITNESS_CLEAR_NOTE);
+        style::append_caveat(&witness_card, copy::WITNESS_APPLIES_AT_ONCE);
         witness_card.append(&style::eyebrow(copy::WITNESS_INFERENCE_HEADING));
         for text in [
             copy::WITNESS_INFERENCE_DISCLOSURE,
@@ -483,6 +429,7 @@ impl SettingsView {
             button.set_halign(gtk::Align::Start);
             witness_card.append(button);
         }
+
         content.append(&witness_card);
 
         content.append(&style::section("Projects"));
@@ -530,13 +477,7 @@ impl SettingsView {
             1.0,
             24.0,
         );
-        let knobs_note = gtk::Label::builder()
-            .label(copy::KNOBS_NOTE)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        knobs_note.add_css_class("tc-caveat");
-        knobs.append(&knobs_note);
+        style::append_caveat(&knobs, copy::KNOBS_NOTE);
         content.append(&knobs);
 
         // The daily upload budget: a separate card from the timing knobs
@@ -562,13 +503,7 @@ impl SettingsView {
             1.0,
             5_120.0,
         );
-        let budget_note = gtk::Label::builder()
-            .label(copy::BUDGET_NOTE)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        budget_note.add_css_class("tc-caveat");
-        budget.append(&budget_note);
+        style::append_caveat(&budget, copy::BUDGET_NOTE);
         content.append(&budget);
 
         content.append(&style::section(copy::AUTOSTART_HEADING));
@@ -1803,13 +1738,7 @@ pub fn refresh(app: &Rc<App>) {
                 when.add_css_class("tc-ledger");
                 when.add_css_class("tc-neutral");
                 line.append(&when);
-                let what = gtk::Label::builder()
-                    .label(format!("{}  {project}", audit_sentence(action)))
-                    .xalign(0.0)
-                    .wrap(true)
-                    .build();
-                what.add_css_class("tc-meta");
-                line.append(&what);
+                style::append_meta(&line, format!("{}  {project}", audit_sentence(action)));
                 view.append(&line);
             }
         },
@@ -1915,13 +1844,7 @@ fn render_projects(app: &Rc<App>, projects: &[Project]) {
         label.add_css_class("tc-body");
         column.append(&label);
         if project.is_unresolved_bucket {
-            let note = gtk::Label::builder()
-                .label(copy::ONBOARD_WATCH_UNKNOWN_NOTE)
-                .xalign(0.0)
-                .wrap(true)
-                .build();
-            note.add_css_class("tc-meta");
-            column.append(&note);
+            style::append_meta(&column, copy::ONBOARD_WATCH_UNKNOWN_NOTE);
         }
         row.append(&column);
 
@@ -3110,13 +3033,7 @@ pub fn render_witness(app: &Rc<App>) {
     // pins on a witness that does not exist is not a shorter sentence but a
     // wrong one. Nothing is drawn in its place -- no placeholder, no dash.
     if let Some(line) = status.pinned_measurement_line() {
-        let count = gtk::Label::builder()
-            .label(&line)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        count.add_css_class("tc-meta");
-        view.append(&count);
+        style::append_meta(&view, &line);
     }
 
     let settings = &app.settings;
