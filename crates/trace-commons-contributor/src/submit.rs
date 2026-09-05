@@ -135,6 +135,11 @@ pub enum SubmitOutcome {
     }, // network/auth after retries
 }
 
+/// `Default` is every field's own default -- no dry run, no filter
+/// override, reasoning kept, prose on, enrolled, not remediating, no
+/// verdict -- which is the shape a plain `submit` run has always built.
+/// It exists so a test that cares about one flag says only that flag.
+#[derive(Debug, Clone, Default)]
 pub struct SubmitOptions {
     pub dry_run: bool,
     pub pii_filter: Option<String>,
@@ -2583,13 +2588,8 @@ mod tests {
             let device = crate::identity::DeviceIdentity::load_or_generate(&store).unwrap();
             let cfg = cfg_for(&issuer, &ingest, &device.device_key_id);
             let opts = SubmitOptions {
-                dry_run: false,
-                pii_filter: None,
                 no_reasoning,
-                machine_readable: false,
-                unenrolled_preview: false,
-                remediate_quarantined: false,
-                verdict: None,
+                ..Default::default()
             };
             submit_sessions(&store, &cfg, fixture_selection(), &opts)
                 .await
@@ -2643,12 +2643,8 @@ mod tests {
         );
         let opts = SubmitOptions {
             dry_run: true,
-            pii_filter: None,
-            no_reasoning: false,
             machine_readable: true,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
         let mut ctx = SubmitContext::new(&store, &cfg, &opts, None).unwrap();
         let selection = fixture_selection();
@@ -2689,13 +2685,8 @@ mod tests {
         let device = crate::identity::DeviceIdentity::load_or_generate(&store).unwrap();
         let cfg = cfg_for(&issuer, &ingest, &device.device_key_id);
         let opts = SubmitOptions {
-            dry_run: false,
-            pii_filter: None,
-            no_reasoning: false,
             machine_readable: true,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
 
         // A private copy of the fixture: this test rewrites the session
@@ -2767,12 +2758,8 @@ mod tests {
         );
         let opts = SubmitOptions {
             dry_run: true,
-            pii_filter: None,
-            no_reasoning: false,
             machine_readable: true,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
         let mut ctx = SubmitContext::new(&store, &cfg, &opts, None).unwrap();
         let selection = fixture_selection();
@@ -2795,13 +2782,7 @@ mod tests {
         let device = crate::identity::DeviceIdentity::load_or_generate(&store).unwrap();
         let cfg = cfg_for(&issuer, &ingest, &device.device_key_id);
         let opts = SubmitOptions {
-            dry_run: false,
-            pii_filter: None,
-            no_reasoning: false,
-            machine_readable: false,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
 
         let outcomes = submit_sessions(&store, &cfg, fixture_selection(), &opts)
@@ -2848,13 +2829,7 @@ mod tests {
         let device = crate::identity::DeviceIdentity::load_or_generate(&store).unwrap();
         let cfg = cfg_for(&issuer, &ingest, &device.device_key_id);
         let opts = SubmitOptions {
-            dry_run: false,
-            pii_filter: None,
-            no_reasoning: false,
-            machine_readable: false,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
 
         let outcomes = submit_sessions(&store, &cfg, fixture_selection(), &opts)
@@ -2881,13 +2856,8 @@ mod tests {
 
         // Opt-in remediation rebuilds and re-uploads the same submission_id.
         let remediate = SubmitOptions {
-            dry_run: false,
-            pii_filter: None,
-            no_reasoning: false,
-            machine_readable: false,
-            unenrolled_preview: false,
             remediate_quarantined: true,
-            verdict: None,
+            ..Default::default()
         };
         let outcomes2 = submit_sessions(&store, &cfg, fixture_selection(), &remediate)
             .await
@@ -2971,13 +2941,7 @@ mod tests {
         let device = crate::identity::DeviceIdentity::load_or_generate(&store).unwrap();
         let cfg = cfg_for(&issuer, &ingest, &device.device_key_id);
         let opts = SubmitOptions {
-            dry_run: false,
-            pii_filter: None,
-            no_reasoning: false,
-            machine_readable: false,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
 
         // A minimal transcript whose assistant message carries a
@@ -3039,12 +3003,7 @@ mod tests {
         let cfg = cfg_for(&issuer, &ingest, &device.device_key_id);
         let opts = SubmitOptions {
             dry_run: true,
-            pii_filter: None,
-            no_reasoning: false,
-            machine_readable: false,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
         let outcomes = submit_sessions(&store, &cfg, fixture_selection(), &opts)
             .await
@@ -3067,11 +3026,7 @@ mod tests {
         let opts = SubmitOptions {
             dry_run: true,
             pii_filter: Some("near-ai".to_string()),
-            no_reasoning: false,
-            machine_readable: false,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
         let outcomes = submit_sessions(&store, &cfg, fixture_selection(), &opts)
             .await
@@ -3125,13 +3080,7 @@ mod tests {
         let issuer = spawn(stub_issuer()).await;
         let cfg = cfg_for(&issuer, &ingest, &device.device_key_id);
         let opts = SubmitOptions {
-            dry_run: false,
-            pii_filter: None,
-            no_reasoning: false,
-            machine_readable: false,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
 
         let outcomes = submit_sessions(
@@ -3184,13 +3133,7 @@ mod tests {
         // the granted (narrower) set, never the requested one.
         let cfg = cfg_for(&issuer, &ingest, &device.device_key_id);
         let opts = SubmitOptions {
-            dry_run: false,
-            pii_filter: None,
-            no_reasoning: false,
-            machine_readable: false,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
 
         let outcomes = submit_sessions(&store, &cfg, fixture_selection(), &opts)
@@ -3241,13 +3184,7 @@ mod tests {
         // at all, so the fallback must stamp the requested set verbatim.
         let cfg = cfg_for(&issuer, &ingest, &device.device_key_id);
         let opts = SubmitOptions {
-            dry_run: false,
-            pii_filter: None,
-            no_reasoning: false,
-            machine_readable: false,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
 
         let outcomes = submit_sessions(&store, &cfg, fixture_selection(), &opts)
@@ -3273,13 +3210,7 @@ mod tests {
         let device = crate::identity::DeviceIdentity::load_or_generate(&store).unwrap();
         let cfg = cfg_for(&issuer, &ingest, &device.device_key_id);
         let opts = SubmitOptions {
-            dry_run: false,
-            pii_filter: None,
-            no_reasoning: false,
-            machine_readable: false,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
 
         let outcomes = submit_sessions(&store, &cfg, fixture_selection(), &opts)
@@ -3305,13 +3236,7 @@ mod tests {
         let device = crate::identity::DeviceIdentity::load_or_generate(&store).unwrap();
         let cfg = cfg_for(&issuer, &ingest, &device.device_key_id);
         let opts = SubmitOptions {
-            dry_run: false,
-            pii_filter: None,
-            no_reasoning: false,
-            machine_readable: false,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
 
         let outcomes = submit_sessions(&store, &cfg, fixture_selection(), &opts)
@@ -3455,13 +3380,7 @@ mod tests {
         let device = crate::identity::DeviceIdentity::load_or_generate(&store).unwrap();
         let cfg = cfg_for(&issuer, &ingest, &device.device_key_id);
         let opts = SubmitOptions {
-            dry_run: false,
-            pii_filter: None,
-            no_reasoning: false,
-            machine_readable: false,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
 
         let outcomes = submit_sessions(&store, &cfg, fixture_selection(), &opts)
@@ -3565,13 +3484,7 @@ mod tests {
         assert!(wide_size > MAX_ENVELOPE_BYTES);
 
         let opts = SubmitOptions {
-            dry_run: false,
-            pii_filter: None,
-            no_reasoning: false,
-            machine_readable: false,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
         let outcomes = submit_sessions(
             &store,
@@ -3790,13 +3703,7 @@ mod tests {
         let mut cfg = cfg_for(&issuer, &ingest, &device.device_key_id);
         cfg.allowed_hosts = Some("127.0.0.1".to_string());
         let opts = SubmitOptions {
-            dry_run: false,
-            pii_filter: None,
-            no_reasoning: false,
-            machine_readable: false,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
 
         let outcomes = submit_sessions(&store, &cfg, fixture_selection(), &opts)
@@ -3856,13 +3763,7 @@ mod tests {
         let device = crate::identity::DeviceIdentity::load_or_generate(&store).unwrap();
         let cfg = cfg_for(&issuer, &ingest, &device.device_key_id);
         let opts = SubmitOptions {
-            dry_run: false,
-            pii_filter: None,
-            no_reasoning: false,
-            machine_readable: false,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
 
         let outcomes = submit_sessions(&store, &cfg, fixture_selection(), &opts)
@@ -4127,12 +4028,8 @@ mod tests {
         cfg.witness = witness;
         let opts = SubmitOptions {
             dry_run: true,
-            pii_filter: None,
-            no_reasoning: false,
             machine_readable: true,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
         let mut ctx = SubmitContext::new(&store, &cfg, &opts, None).unwrap();
         let selection = fixture_selection();
@@ -4328,12 +4225,8 @@ mod tests {
         );
         let opts = SubmitOptions {
             dry_run: true,
-            pii_filter: None,
-            no_reasoning: false,
             machine_readable: true,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
         let ctx = SubmitContext::new(&store, &cfg, &opts, None).unwrap();
         let (call, _dir) = receipt_fixture_call();
@@ -4364,12 +4257,8 @@ mod tests {
         cfg.allowed_hosts = Some("issuer.invalid,ingest.invalid".to_string());
         let opts = SubmitOptions {
             dry_run: true,
-            pii_filter: None,
-            no_reasoning: false,
             machine_readable: true,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
         let ctx = SubmitContext::new(&store, &cfg, &opts, None).unwrap();
         let (call, _dir) = receipt_fixture_call();
@@ -4447,12 +4336,8 @@ mod tests {
         cfg.witness = Some(pinned_witness());
         let opts = SubmitOptions {
             dry_run: true,
-            pii_filter: None,
-            no_reasoning: false,
             machine_readable: true,
-            unenrolled_preview: false,
-            remediate_quarantined: false,
-            verdict: None,
+            ..Default::default()
         };
         let mut ctx = SubmitContext::new(&store, &cfg, &opts, None).unwrap();
 
