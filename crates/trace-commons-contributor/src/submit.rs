@@ -135,11 +135,10 @@ pub enum SubmitOutcome {
     }, // network/auth after retries
 }
 
-/// `Default` is every field's own default -- no dry run, no filter
-/// override, reasoning kept, prose on, enrolled, not remediating, no
-/// verdict -- which is the shape a plain `submit` run has always built.
-/// It exists so a test that cares about one flag says only that flag.
-#[derive(Debug, Clone, Default)]
+/// Default options leave optional overrides absent and all switches off.
+/// Enrollment and consent are still checked by the submission path; these
+/// defaults do not establish either. Tests can override the flags they exercise.
+#[derive(Default)]
 pub struct SubmitOptions {
     pub dry_run: bool,
     pub pii_filter: Option<String>,
