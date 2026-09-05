@@ -1015,7 +1015,40 @@ pub fn entry_value(e: &super::queue::QueueEntry) -> serde_json::Value {
     })
 }
 
+/// The methods the synchronous dispatcher cannot answer, paired with the
+/// refusal label each one sends.
+///
+/// These methods require asynchronous I/O or lifecycle work. Socket and
+/// local callers use `handle_request_async`; the synchronous entry point
+/// preserves fixed refusal labels instead of returning an unchecked result.
+/// Labels are explicit because several methods share a label that cannot
+/// be derived from their names, including the onboarding and profile groups.
+const ASYNC_ONLY_METHODS: &[(&str, &str)] = &[
+    ("prepare_admission_session", "admission-setup-requires-async"),
+    ("near_account_start", "near-signup-requires-async"),
+    ("near_account_capabilities", "near-signup-requires-async"),
+    ("native_wallet_flow", "near-signup-requires-async"),
+    ("witness_preview_request", "witness-review-requires-async"),
+    ("preview_body", "preview-body-requires-async"),
+    ("preview_turns", "preview-turns-requires-async"),
+    ("quiesce", "quiesce-requires-async"),
+    ("probe_routing", "probe-routing-requires-async"),
+    ("probe_routed_tools", "probe-routed-tools-requires-async"),
+    ("enroll", "enroll-requires-async"),
+    ("withdraw", "withdraw-requires-async"),
+    ("withdraw_bulk", "withdraw-requires-async"),
+    ("set_public_profile", "profile-requires-async"),
+    ("clear_public_profile", "profile-requires-async"),
+];
+
 pub fn handle_request(shared: &DaemonShared, req: &Request) -> Response {
+    if let Some(label) = ASYNC_ONLY_METHODS
+        .iter()
+        .find(|(name, _)| *name == req.method)
+        .map(|(_, label)| *label)
+    {
+        return Response::err(req.id, ERR_UNAVAILABLE, label);
+    }
     match req.method.as_str() {
         "hello" => Response::ok(
             req.id,
@@ -1395,39 +1428,9 @@ pub fn handle_request(shared: &DaemonShared, req: &Request) -> Response {
                 None => Response::err(req.id, ERR_BAD_PARAMS, ERR_UNKNOWN_ENTRY_ID),
             }
         }
-        // Resolving a body may have to run the redaction pipeline, which is
-        // async. Same treatment as `"enroll"`: an honest refusal here rather
-        // than a partial answer. No real caller reaches it -- see the module
-        // doc's "Sync vs. async dispatch" section.
-        "prepare_admission_session" => {
-            Response::err(req.id, ERR_UNAVAILABLE, "admission-setup-requires-async")
-        }
         "near_account_status" => super::account_onboarding::handle_status(shared, req),
         "near_account_cancel" => super::account_onboarding::handle_cancel(shared, req),
-        "near_account_start" | "near_account_capabilities" | "native_wallet_flow" => {
-            Response::err(req.id, ERR_UNAVAILABLE, "near-signup-requires-async")
-        }
-        "witness_preview_request" => {
-            Response::err(req.id, ERR_UNAVAILABLE, "witness-review-requires-async")
-        }
-        "preview_body" => Response::err(req.id, ERR_UNAVAILABLE, "preview-body-requires-async"),
-        // Waiting for a drain is async by nature; the synchronous dispatcher
-        // cannot do it and says so rather than claiming a quiesce it did not
-        // perform. See the module doc's "Sync vs. async dispatch" section.
-        "quiesce" => Response::err(req.id, ERR_UNAVAILABLE, "quiesce-requires-async"),
-        // The turn index is resolved from the same envelope as the body, by
-        // the same async path, so it refuses here for the same reason.
-        "preview_turns" => Response::err(req.id, ERR_UNAVAILABLE, "preview-turns-requires-async"),
-        // The probe opens a loopback connection to the proxy, which the
-        // synchronous dispatcher cannot do. It refuses rather than
-        // reporting a state it never checked -- a probe that answered
-        // without asking would be exactly the silence this method exists
-        // to end.
-        "probe_routing" => Response::err(req.id, ERR_UNAVAILABLE, "probe-routing-requires-async"),
-        // Same reason: it asks the proxy, over loopback, for the tool list.
-        "probe_routed_tools" => {
-            Response::err(req.id, ERR_UNAVAILABLE, "probe-routed-tools-requires-async")
-        }
+
         // Unlike the probe, discovery opens no connection: it reads one
         // small file the proxy left on disk. So it answers here, on the
         // synchronous path, and a shell can call it before it has anything
@@ -1622,10 +1625,6 @@ pub fn handle_request(shared: &DaemonShared, req: &Request) -> Response {
         "consent_options" => Response::ok(req.id, enroll::consent_options()),
         "set_consent_scopes" => enroll::handle_set_consent_scopes(shared, req),
         "acknowledge_near_ai_notice" => enroll::handle_acknowledge_near_ai_notice(shared, req),
-        // Real network I/O; only handled for real by `handle_request_async`
-        // (via `handle_local`'s `block_on_ipc`, or the socket loop). See the
-        // module doc's "Sync vs. async dispatch" section.
-        "enroll" => Response::err(req.id, ERR_UNAVAILABLE, "enroll-requires-async"),
         "list_history" => {
             let limit = req
                 .params
@@ -1734,19 +1733,9 @@ pub fn handle_request(shared: &DaemonShared, req: &Request) -> Response {
         "preview_cancel" => handle_preview_cancel(shared, req),
         // subscribe is handled by the connection loop, which owns the stream.
         "subscribe" => Response::ok(req.id, serde_json::json!({ "subscribed": true })),
-        // Real network I/O when an account session exists to make the call
-        // with (it never does today -- see `daemon::withdraw`'s module doc);
-        // only handled for real by `handle_request_async`, same as
-        // `"enroll"` above.
-        "withdraw" => Response::err(req.id, ERR_UNAVAILABLE, "withdraw-requires-async"),
-        "withdraw_bulk" => Response::err(req.id, ERR_UNAVAILABLE, "withdraw-requires-async"),
-        // Claiming and withdrawing a public handle both call the server, so
-        // like `"withdraw"` above they are only answered for real by
-        // `handle_request_async`. Reading the profile back is a local cache
-        // read (there is no server read-back to make -- see
-        // `daemon::profile`), so it is complete here.
-        "set_public_profile" => Response::err(req.id, ERR_UNAVAILABLE, "profile-requires-async"),
-        "clear_public_profile" => Response::err(req.id, ERR_UNAVAILABLE, "profile-requires-async"),
+        // Reading a public profile back is a local cache read -- there is no
+        // server read-back to make, see `daemon::profile` -- so unlike
+        // claiming and withdrawing a handle it is complete here.
         "get_public_profile" => super::profile::handle_get_public_profile(shared, req),
         _ => Response::err(req.id, ERR_UNKNOWN_METHOD, "unknown-method"),
     }
