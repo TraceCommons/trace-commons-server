@@ -718,7 +718,7 @@ provider-wide key — could not work, because the signing key is per model. The
 two-part form is still accepted where nothing is pinned; under pins it is
 refused, because there is no model to look a pin up by.
 
-### Pinning the receipt signing keys, per model
+### Pinning the receipt signing keys
 
 > **Breaking change for anyone running the previous release.**
 > `TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN` is **gone and is no longer read**.
@@ -726,8 +726,16 @@ refused, because there is no model to look a pin up by.
 > receipt** — so a witness with it set refused every real receipt, under the
 > same folded `witness_inference_receipt_unverified` label as a forgery.
 > **Unset that variable** and, if you want pinning, set
-> `TRACE_COMMONS_WITNESS_MODEL_KEY_PINS` instead. A witness left with only the
-> old variable set starts and runs **unpinned**.
+> `TRACE_COMMONS_WITNESS_MODEL_KEY_PINS` and/or
+> `TRACE_COMMONS_WITNESS_GATEWAY_RECEIPT_KEY_PINS` instead. A witness with the
+> old variable set **refuses to start** and names the replacements.
+>
+> The gateway key is pinnable again, under a **different name**, and the
+> refusal on the old one stays. `TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN`
+> applied its key to *every* receipt, including the `provider_tee` receipts it
+> could never match; silently re-reading a value you set under those semantics
+> would give it a meaning you never chose, on the control that decides who may
+> sign. Set the new name deliberately.
 
 `TRACE_COMMONS_WITNESS_MODEL_KEY_PINS` is **unset by default**, and unset is
 exactly the behaviour that shipped before any of this existed.
@@ -745,16 +753,47 @@ fetches itself. A check the submitter runs on its own submission is not a
 bound: a patched client does not run it. This variable is the same comparison
 made at the point the decision is enforced.
 
-**The key is per model.** A hosted-model receipt comes back with
-`signature_kind: "provider_tee"` and a `signing_address` that differs per
-model; that key lives in the report's `model_attestations`, never in
-`gateway_attestation`. So the pin is a map, and the model it is looked up by is
-the one in the **receipt's own signed text**
-(`{model}:{requestHash}:{responseHash}`), not one supplied beside it.
+**Which key signs depends on the protocol, not on the model.** This is the
+part that has bitten this deployment twice, so it is stated as a table. NEAR
+AI issues two legitimate kinds of receipt for the **same hosted model**:
 
-Set it to `model=key[,model=key...]`, each key **64 hex characters, no `0x`**.
-Repeat a model to pin more than one key for it, which is how a model served by
-several enclaves is pinned. Derive the keys once, out of band:
+| your contributors' inference call | receipt `signature_kind` | signer | pinned by |
+|---|---|---|---|
+| Chat Completions, `POST /v1/chat/completions` | `provider_tee` | the per-model key in `model_attestations` | `TRACE_COMMONS_WITNESS_MODEL_KEY_PINS` |
+| Responses API, `POST /v1/responses` | `gateway` | the single key in `gateway_attestation` | `TRACE_COMMONS_WITNESS_GATEWAY_RECEIPT_KEY_PINS` |
+
+Both were captured live against `Qwen/Qwen3.6-35B-A3B-FP8`: the same model,
+the same day, two different signers.
+
+**If your contributors use the Codex CLI you need the gateway pin.** Codex
+speaks the Responses API exclusively — it dropped `wire_api = "chat"` — so
+every Codex-driven receipt is gateway-signed. A witness pinning only model
+keys refuses all of that traffic, under the same folded
+`witness_inference_receipt_unverified` label as a forgery. Chat-completions
+traffic needs the model pins. A deployment seeing both needs both variables
+set.
+
+For a `provider_tee` receipt the pin is a map, and the model it is looked up
+by is the one in the **receipt's own signed text**
+(`{model}:{requestHash}:{responseHash}`), not one supplied beside it. A
+`gateway` receipt binds no model — the gateway signs for whatever was served —
+so its pin is a bare key list with nothing to look up.
+
+The receipt's own `signature_kind` selects **one** set and never both. A
+gateway receipt is not tried against a model key, nor the reverse: accepting
+either would mean a key attested for one role could vouch for the other. A
+`signature_kind` the witness does not recognise, or a receipt that carried
+none, names no key set and is refused.
+
+**On a witness that pins either kind, the kind you did not pin is refused.**
+That is fail-closed and deliberate: pinning your model keys is not agreement
+to accept any gateway-signed receipt from any signer. A witness that pins
+nothing at all remains fully dormant.
+
+Set `TRACE_COMMONS_WITNESS_MODEL_KEY_PINS` to `model=key[,model=key...]`, each
+key **64 hex characters, no `0x`**. Repeat a model to pin more than one key
+for it, which is how a model served by several enclaves is pinned. Derive the
+keys once, out of band:
 
 ```bash
 NONCE=$(openssl rand -hex 32)
@@ -799,6 +838,50 @@ The `select(...)` line is the binding check, and it is the reason for the
 nonce: without it you are pinning a key some report once listed, rather than
 one attested against a value you chose.
 
+#### Deriving the gateway pin
+
+The **same fetch** answers both — one report carries `gateway_attestation` and
+`model_attestations` — so this is a second `jq` over the response you already
+have, not a second request. Set the result as
+`TRACE_COMMONS_WITNESS_GATEWAY_RECEIPT_KEY_PINS`: bare keys, `key[,key...]`,
+64 hex characters each, **no `0x` and no `model=` prefix** (that spelling
+belongs in the model variable and is refused here).
+
+```bash
+NONCE=$(openssl rand -hex 32)
+MODEL='Qwen/Qwen3.6-35B-A3B-FP8'
+curl -s --get https://cloud-api.near.ai/v1/attestation/report \
+  --data-urlencode "model=$MODEL" \
+  --data-urlencode "signing_algo=ed25519" \
+  --data-urlencode "nonce=$NONCE" \
+| jq -r --arg n "$NONCE" '
+    .gateway_attestation
+    | select(.signing_algo == "ed25519")
+    | (.intel_quote | ascii_downcase) as $q
+    # Same v4-TDX header check and same report_data offset as above.
+    | select($q[0:4] == "0400" and $q[8:16] == "81000000")
+    | select($q[1136:1264] == (.signing_address + $n))
+    | .signing_address'
+```
+
+Two differences from the model derivation, both immaterial to the check.
+`gateway_attestation` also carries a `report_data` *field*, a convenience echo
+of what its own quote says; the witness reads the quote and requires the echo
+to agree with it, so the `jq` above reads the quote too. And `model` is still
+sent on the query because the endpoint requires it — the key that comes back
+is the gateway's, the same one whichever model you name.
+
+To confirm a receipt you already hold is the kind you think, read its own
+`signature_kind`:
+
+```bash
+# A Responses-API exchange: the FULL `resp_`-prefixed id. Stripping the
+# prefix 404s.
+curl -s --get "https://cloud-api.near.ai/v1/signature/resp_<id>" \
+  --data-urlencode "model=$MODEL" \
+  --data-urlencode "signing_algo=ed25519" | jq '.signature_kind, .signing_address'
+```
+
 Two things this derivation does **not** do, and should not be read as doing:
 it does not verify the quote's signature against Intel collateral, and it does
 not check the quote's measurements. You are trusting the report you read, once,
@@ -815,11 +898,17 @@ Four properties worth stating plainly:
   ed25519 attestation, so it cannot be pinned and an ECDSA receipt can never
   satisfy a pin, however well it verifies. Pinning is therefore also a
   decision to require the ed25519 form.
-- **A receipt binding no model cannot satisfy a pin.** The two-part
-  `<requestHash>:<responseHash>` form commits to no model, so there is no pin
-  to place it against and a pinning witness refuses it. Choosing a pin for it
-  from the request body would be checking the receipt against something its
-  signature never covered.
+- **A `provider_tee` receipt binding no model cannot satisfy a pin.** The
+  two-part `<requestHash>:<responseHash>` form commits to no model, so there
+  is no model pin to place it against and a pinning witness refuses it.
+  Choosing a pin for it from the request body would be checking the receipt
+  against something its signature never covered. A `gateway` receipt is a
+  different case: it is *expected* to bind no model, and its pin is keyed by
+  nothing, so the two-part form is its normal shape.
+- **The kind you did not pin is refused.** On a witness that pins either kind,
+  a receipt of the other kind is checked against an empty set and refused, and
+  so is one whose `signature_kind` this witness does not recognise. A witness
+  that pins nothing is dormant for both.
 - **Independent of the requirement.** The pins constrain *which key* is
   trusted; `TRACE_COMMONS_WITNESS_REQUIRE_ATTESTED_INFERENCE` decides *whether
   a receipt is needed*. A witness that requires nothing still refuses a
@@ -827,12 +916,16 @@ Four properties worth stating plainly:
   the silent downgrade that accepting an invalid receipt already is not.
 - **Malformed is a startup failure.** A value that is not `model=key` pairs of
   32-byte hex keys — the empty string included — refuses to start rather than
-  becoming a pin that matches nothing. The value is never echoed into a log;
-  the process logs a `model_key_pins_sha256_prefix` and a `pinned_models`
-  count at startup so an operator can confirm which set it holds, without
-  putting a key or a model name on an operational surface.
+  becoming a pin that matches nothing, and so does a
+  `TRACE_COMMONS_WITNESS_GATEWAY_RECEIPT_KEY_PINS` that is not bare 32-byte
+  hex keys. Neither value is echoed into a log; the process logs a
+  `model_key_pins_sha256_prefix` with a `pinned_models` count and a
+  `gateway_key_pins_sha256_prefix` with a `pinned_gateway_keys` count at
+  startup, so an operator can confirm which sets it holds without putting a
+  key or a model name on an operational surface.
 
-Every pin failure — unpinned model, unpinned key, a receipt binding no model,
+Every pin failure — unpinned model, unpinned key, an unpinned or unrecognised
+`signature_kind`, a `provider_tee` receipt binding no model,
 an ECDSA receipt — is reported as `witness_inference_receipt_unverified`, the
 same label as every other receipt failure, and that is deliberate. A label of
 its own would make this route an oracle: a prober could learn from a refusal
@@ -920,7 +1013,7 @@ certificate at all.
 | `witness_inference_call_absent` | the contribution declares no inference call at all |
 | `witness_inference_call_unattestable` | the final call declares a restarted stream, for which no receipt exists or ever will |
 | `witness_inference_body_not_in_session` | the last call carries no bodies — in practice, the contribution withheld tool payloads |
-| `witness_inference_receipt_unverified` | the receipt did not verify against those bytes, **or** — where `TRACE_COMMONS_WITNESS_MODEL_KEY_PINS` is set — it binds an unpinned model, binds no model at all, or was signed by a key not pinned for the model it binds. One label for all of them, deliberately: see the anti-oracle note above |
+| `witness_inference_receipt_unverified` | the receipt did not verify against those bytes, **or** — where either pin variable is set — its `signature_kind` is one this witness does not pin or does not recognise, a `provider_tee` receipt binds an unpinned model or no model at all, or the signer is not one of the keys pinned for the set its kind selects. One label for all of them, deliberately: see the anti-oracle note above |
 | `witness_inference_body_too_large` | a body exceeds `TRACE_COMMONS_WITNESS_MAX_INFERENCE_BODY_BYTES` |
 
 `witness_inference_receipt_unverified` is the one to read carefully. SHA-256

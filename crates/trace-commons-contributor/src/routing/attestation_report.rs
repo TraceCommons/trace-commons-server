@@ -8,22 +8,31 @@
 //! a key read from an attestation whose `report_data` carries OUR nonce is one
 //! that was attested for us, now, rather than one copied from an old report.
 //!
-//! # Which key signs a receipt
+//! # Which key signs a receipt: both, and the protocol decides
 //!
-//! **The per-model one, not the gateway one.** A hosted-model receipt comes
-//! back with `signature_kind: "provider_tee"` and a `signing_address` that
-//! differs per model; that key appears in `model_attestations`, never in
-//! `gateway_attestation`. The gateway key signs no receipt, so comparing a
-//! receipt's signer against it refuses every real receipt.
+//! NEAR AI issues two legitimate kinds of receipt for the **same hosted
+//! model**. A Chat Completions call gets `signature_kind: "provider_tee"`,
+//! signed by that model's key in `model_attestations`. A Responses API call
+//! gets `signature_kind: "gateway"`, signed by the single key in
+//! `gateway_attestation`. Both were captured live.
+//!
+//! This is not symmetric in importance: the Codex CLI speaks the Responses
+//! API exclusively, having dropped `wire_api = "chat"`, so a client that
+//! consults `model_attestations` alone reports every Codex-driven receipt as
+//! unattested.
+//!
+//! So **both** readers below are receipt-relevant, and the receipt's own
+//! `signature_kind` picks between them -- see
+//! [`trace_commons_attestation::receipt::attested_keys_for_receipt`], which
+//! is the router this module's callers go through. Neither key is ever tried
+//! against the other kind: that would let a key attested for one role vouch
+//! for the other. One fetch returns both objects, so routing costs no second
+//! request.
 //!
 //! `signing_algo` is a **query parameter** of the report endpoint, and that is
 //! the piece this originally missed: without `signing_algo=ed25519` the
 //! endpoint answers with the ECDSA model attestations, whose keys sign nothing
 //! we verify. [`attestation_report_url`] always sends it.
-//!
-//! `gateway_ed25519_key` is kept because it is still correct for what it
-//! names -- the gateway's own key -- and the OHTTP/gateway paths that want it
-//! are unaffected. It is simply not the key a receipt is checked against.
 //!
 //! **This module does not verify the quote.** It reads the report's
 //! self-description and checks its internal consistency. Until quote

@@ -333,9 +333,11 @@ pub struct GatewayKeyPinMalformed;
 /// more than one key.
 ///
 /// Whitespace around each element is trimmed. Everything else is refused: a
-/// key that is not 32 bytes of hex, an element carrying an `=` (which is the
-/// model-pin spelling in the wrong variable, and a mistake worth naming rather
-/// than half-parsing), and an empty overall set.
+/// key that is not 32 bytes of hex, and an empty overall set. The `model=key`
+/// spelling pasted into this variable by mistake is refused by that same
+/// shape rule -- `=` is not a hex digit, so no element carrying one is a key.
+/// There is deliberately no separate `=` branch: it could never be the arm
+/// that refused, which is a control that cannot fail.
 ///
 /// # Errors
 ///
@@ -346,9 +348,6 @@ pub fn parse_gateway_key_pins(spec: &str) -> Result<Vec<String>, GatewayKeyPinMa
         let element = element.trim();
         if element.is_empty() {
             continue;
-        }
-        if element.contains('=') {
-            return Err(GatewayKeyPinMalformed);
         }
         let key = normalize_ed25519_key(element).ok_or(GatewayKeyPinMalformed)?;
         if !keys.contains(&key) {

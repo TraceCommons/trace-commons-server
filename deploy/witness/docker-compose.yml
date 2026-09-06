@@ -128,6 +128,49 @@ services:
       #
       # TRACE_COMMONS_WITNESS_MODEL_KEY_PINS: "Qwen/Qwen3.6-35B-A3B-FP8=<key>"
 
+      # Gateway receipt signing-key pins. ALSO DELIBERATELY UNSET HERE.
+      #
+      # The per-model correction above was right about chat-completions
+      # receipts and wrong to stop there. A later live run established that
+      # NEAR AI issues TWO legitimate kinds of receipt for the SAME hosted
+      # model, and the PROTOCOL decides which:
+      #
+      #   POST /v1/chat/completions -> signature_kind: provider_tee
+      #                                signer: the model's key, above
+      #   POST /v1/responses        -> signature_kind: gateway
+      #                                signer: gateway_attestation.signing_address
+      #
+      # The Codex CLI speaks the Responses API exclusively -- it dropped
+      # `wire_api = "chat"` -- so a deployment whose contributors use Codex
+      # produces only gateway-signed receipts, and the model pins alone refuse
+      # every one of them.
+      #
+      # This is NOT the retired TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN, and the
+      # name is different on purpose: that one applied the gateway key to
+      # every receipt, and the witness still refuses to start if it is set.
+      # These keys are consulted for gateway-kind receipts and nothing else.
+      #
+      # Bare keys, `key[,key...]`, 64 hex characters each -- no `0x` and no
+      # `model=`. Derive from the SAME report fetch as the model pins; one
+      # response carries both:
+      #
+      #   NONCE=$(openssl rand -hex 32)
+      #   curl -s "https://cloud-api.near.ai/v1/attestation/report\
+      #?model=<MODEL>&signing_algo=ed25519&nonce=$NONCE" \
+      #     | jq -r --arg n "$NONCE" \
+      #       '.gateway_attestation
+      #        | select(.signing_algo=="ed25519")
+      #        | (.intel_quote | ascii_downcase) as $q
+      #        | select($q[0:4]=="0400" and $q[8:16]=="81000000")
+      #        | select($q[1136:1264] == (.signing_address + $n))
+      #        | .signing_address'
+      #
+      # Unset while the model pins are set means gateway receipts are REFUSED,
+      # not admitted unchecked -- pinning one kind is not agreement to accept
+      # the other from any signer. Unset with nothing else pinned is dormant.
+      #
+      # TRACE_COMMONS_WITNESS_GATEWAY_RECEIPT_KEY_PINS: "<gateway key>"
+
       # The classifier, resolved at startup: a witness told to run
       # `full-pipeline` with no usable backend does not bind, and a backend
       # that fails mid-request refuses rather than degrading to the

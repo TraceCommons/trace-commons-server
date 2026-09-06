@@ -3,9 +3,16 @@
 //! `GET {base}/signature/{chat_id}?model={model}&signing_algo=ed25519` returns
 //! the enclave's EIP-191 signature over `<requestHash>:<responseHash>`. This
 //! module is the only thing in the tree that calls it. Ed25519, because that
-//! signer is the one an attestation report binds -- specifically the
-//! `provider_tee` key in the served model's own `model_attestations` entry;
-//! the ECDSA signer appears in no ed25519 attestation.
+//! signer is the one an attestation report binds; the ECDSA signer appears in
+//! no ed25519 attestation.
+//!
+//! **Which** ed25519 key depends on the protocol the inference call used, for
+//! the same hosted model: a Chat Completions call yields a `provider_tee`
+//! receipt signed by the model's own `model_attestations` key, a Responses
+//! API call a `gateway` receipt signed by the report's `gateway_attestation`
+//! key. Codex speaks only the Responses API, so the second is not an edge
+//! case. The receipt's own `signature_kind` routes it; see
+//! [`signer_matches_report`].
 //!
 //! # Why the contributor fetches it
 //!

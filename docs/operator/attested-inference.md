@@ -364,23 +364,63 @@ Two further honesty notes that belong in any contributor-facing description:
   learns it is being contributed. Nothing mitigates this while the receipt has
   to arrive with the submission.
 - **The `model` retrieval parameter is not signed** — but the receipt text
-  is. A hosted model returns the three-part form,
-  `{model}:{requestHash}:{responseHash}`, so the receipt does bind a model,
-  and that is the name to read. The query parameter the client sends when
-  fetching establishes nothing on its own and no surface may quote it as if
-  it did.
+  is, when there is a model in it. A chat-completions receipt returns the
+  three-part form, `{model}:{requestHash}:{responseHash}`, so it does bind a
+  model, and that is the name to read. The query parameter the client sends
+  when fetching establishes nothing on its own and no surface may quote it as
+  if it did.
 
-### The witness side of the same key
+### Which key signs depends on the protocol, not on the model
 
-A witness that pins receipt signing keys pins them **per model**, in
-`TRACE_COMMONS_WITNESS_MODEL_KEY_PINS`, keyed by the model the receipt itself
-names. It replaces `TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN`, which is no longer
-read: that variable pinned the gateway key, which signs no receipt, so a
-witness holding it refused every real receipt under the folded
-`witness_inference_receipt_unverified` label. **Unset the old variable on
-upgrade** — a witness left with only the old one set runs unpinned. The
-derivation procedure and the fail-closed properties are in
-`deploy/witness/README.md`.
+NEAR AI issues **two** legitimate kinds of receipt for the **same hosted
+model**. Which one you get is decided by the API the inference call used:
+
+| your harness's inference call | receipt `signature_kind` | signer | receipt text |
+|---|---|---|---|
+| Chat Completions, `POST /v1/chat/completions` | `provider_tee` | the per-model key in the report's `model_attestations` | three-part, binds the model |
+| Responses API, `POST /v1/responses` | `gateway` | the single key in the report's `gateway_attestation` | two-part, binds no model |
+
+Both were captured live against `Qwen/Qwen3.6-35B-A3B-FP8` on the same day.
+One attestation-report fetch — `GET /v1/attestation/report?model=..&
+signing_algo=ed25519&nonce=..` — returns both objects, so verifying both kinds
+costs no extra request.
+
+**The Codex CLI, which this runbook recommends, speaks the Responses API
+exclusively.** It dropped `wire_api = "chat"`. So Codex-driven traffic is
+entirely gateway-signed, and a verifier that consults `model_attestations`
+alone refuses every bit of it.
+
+Retrieval detail worth pinning: a Responses exchange's receipt is looked up by
+the **full `resp_`-prefixed identifier**. Stripping the prefix returns 404.
+
+The receipt's own `signature_kind` selects **one** key source and never both.
+A gateway receipt is not checked against a model key, nor the reverse; a kind
+that is not recognised, or absent, names no source and the receipt is refused.
+
+### The witness side of the same keys
+
+A witness pins the two kinds separately, and the receipt's `signature_kind`
+decides which set applies:
+
+| Variable | Pins | Needed by |
+|---|---|---|
+| `TRACE_COMMONS_WITNESS_MODEL_KEY_PINS` | `model=key[,model=key...]`, keyed by the model the receipt itself names | deployments whose contributors make chat-completions calls |
+| `TRACE_COMMONS_WITNESS_GATEWAY_RECEIPT_KEY_PINS` | `key[,key...]`, bare 32-byte ed25519 keys | deployments whose contributors use Codex, or anything else on the Responses API |
+
+**An operator whose contributors use Codex needs the gateway pin.** Without
+it, on a witness that pins anything at all, every Codex submission is refused
+under the folded `witness_inference_receipt_unverified` label — the kind you
+did not pin is refused rather than admitted unchecked. A deployment seeing
+both kinds of traffic sets both variables. A witness that pins nothing remains
+dormant for both.
+
+Both replace `TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN`, which is no longer read
+and whose presence now **refuses the boot**: that variable applied the gateway
+key to every receipt, including the `provider_tee` ones it could never match.
+The gateway key is pinnable again only under the new name, deliberately, so a
+value set under the old semantics cannot silently acquire new meaning. **Unset
+the old variable on upgrade.** The derivation procedures for both pins, and
+the fail-closed properties, are in `deploy/witness/README.md`.
 
 ### Reading a client-side refusal
 
