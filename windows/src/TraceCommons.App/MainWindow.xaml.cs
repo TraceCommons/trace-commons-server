@@ -88,6 +88,12 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private readonly DispatcherQueueTimer _visibilityDebounceTimer;
 
+    private OnboardingWindow? _onboarding;
+    private readonly PendingInviteActivation _redirectedInvite = new();
+    private bool _activationDaemonAvailable;
+    private bool _activationReady;
+    private bool _closed;
+
     private bool _quitConfirmed;
 
     /// <summary>
@@ -281,6 +287,8 @@ public sealed partial class MainWindow : Window
     {
         Activated -= OnFirstActivated;
         await ViewModel.InitializeAsync();
+        _activationReady = ViewModel.NeedsSessionRoots;
+        OfferNextRedirectedInvite();
 
         // Everything below this point talks to a daemon. A start refused for
         // undeclared session sources has none, so the roots screen goes first
@@ -309,6 +317,7 @@ public sealed partial class MainWindow : Window
 
         await RefreshTrayAsync();
         await ShowOnboardingIfNeededAsync();
+        OfferNextRedirectedInvite();
     }
 
     /// <summary>
@@ -342,6 +351,8 @@ public sealed partial class MainWindow : Window
     {
         // The daemon is up now, so the queue window needs the first snapshot
         // it could not load, and then the startup it did not finish.
+        _activationReady = false;
+        ViewModel.SessionRootsDeclared();
         await ViewModel.RefreshAsync();
         await ContinueStartupAsync();
     }
@@ -414,7 +425,7 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// The 4-hour digest.
+    /// The configured digest.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -422,9 +433,7 @@ public sealed partial class MainWindow : Window
     /// and both must pass: the daemon's, which is the shared policy every
     /// shell obeys, and <see cref="DigestCadence"/>, which is this process's
     /// own backstop. Neither can cause a notification; each can only suppress
-    /// one. That is what keeps the onboarding screen's promise -- at most one
-    /// notification every 4 hours, and none at all when nothing is waiting --
-    /// literally true rather than approximately.
+    /// one. Empty events and duplicate deliveries do not create extra digests.
     /// </para>
     /// <para>
     /// Project labels come from the queue the window already holds, which the
@@ -522,10 +531,55 @@ public sealed partial class MainWindow : Window
         _host.Dispatcher.TryEnqueue(async () => await ViewModel.ResumeAsync());
     }
 
-    private void BringForward()
+    internal void BringForward()
     {
         AppWindow.Show();
         Activate();
+    }
+
+    internal void ReceiveActivation(string? invite)
+    {
+        if (_closed) return;
+        BringForward();
+        _redirectedInvite.Receive(invite);
+        OfferNextRedirectedInvite();
+    }
+
+    private void OfferNextRedirectedInvite()
+    {
+        if (_closed)
+        {
+            return;
+        }
+        var decision = _redirectedInvite.Take(_activationReady, ViewModel.NeedsSessionRoots,
+            _activationDaemonAvailable, _onboarding is not null);
+        if (decision.Notice is string notice)
+        {
+            // Notices live on the queue pane, including a link opened from Settings.
+            ViewModel.ShowQueue();
+            ViewModel.ShowNotice(notice);
+        }
+        if (decision.Invite is not string invite)
+        {
+            return;
+        }
+        var onboarding = OpenOnboarding(OnboardingState.Default());
+        onboarding.OfferInvite(invite);
+        onboarding.Activate();
+    }
+
+    private OnboardingWindow OpenOnboarding(OnboardingState state)
+    {
+        if (_onboarding is not null) return _onboarding;
+        var onboarding = new OnboardingWindow(_host, state);
+        _onboarding = onboarding;
+        onboarding.Closed += async (_, _) =>
+        {
+            await onboarding.CloseCompletion;
+            if (ReferenceEquals(_onboarding, onboarding)) _onboarding = null;
+            DispatcherQueue.TryEnqueue(OfferNextRedirectedInvite);
+        };
+        return onboarding;
     }
 
     private void OnTrayQuitRequested()
@@ -573,10 +627,15 @@ public sealed partial class MainWindow : Window
         // worse than saying nothing, so this says the true thing instead.
         if (status.IsError)
         {
+            _activationDaemonAvailable = false;
+            _activationReady = true;
             ViewModel.ReportAlreadyRunning(App.PendingInvite is not null);
+            OfferNextRedirectedInvite();
             return;
         }
 
+        _activationReady = true;
+        _activationDaemonAvailable = true;
         string? tenantId = null;
         bool loggedIn = false;
         if (status.Result is JsonElement element)
@@ -596,7 +655,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var onboarding = new OnboardingWindow(_host, state);
+        var onboarding = OpenOnboarding(state);
         if (App.PendingInvite is string invite)
         {
             onboarding.OfferInvite(invite);
@@ -738,12 +797,14 @@ public sealed partial class MainWindow : Window
         {
             return;
         }
-
-        var onboarding = new OnboardingWindow(_host, OnboardingState.Default());
-        if (target == HealthNavigationTarget.Connect)
+        // Raising a live flow must not reset an invite or consent decision.
+        bool alreadyOpen = _onboarding is not null;
+        var onboarding = OpenOnboarding(OnboardingState.Default());
+        if (!alreadyOpen && target == HealthNavigationTarget.Connect)
         {
             onboarding.ViewModel.GetStarted();
         }
+
         onboarding.Activate();
     }
 
@@ -1223,6 +1284,9 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private async void OnClosed(object sender, WindowEventArgs args)
     {
+        _closed = true;
+        _activationReady = false;
+        _redirectedInvite.Clear();
         // Before the daemon teardown, and synchronously: an icon left in the
         // notification area after the process exits is a ghost the shell only
         // reaps when someone hovers over it, and it would claim a watcher
