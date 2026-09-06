@@ -399,6 +399,80 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Raise(nameof(ArmingOfferProjectId));
     }
 
+    // --- The offer to answer model calls on this computer -------------------
+    //
+    // Drawn on the screen this window opens on, and not only in Settings.
+    // Settings is where the switch LIVES; Settings alone is the failure this
+    // offer exists to fix, because nobody who did not already know about it
+    // went there.
+    //
+    // Every sentence comes from the Rust. Whether to ask does too: three
+    // shells each deciding when to interrupt somebody is three chances to
+    // re-ask a contributor who already said no.
+
+    private readonly PrivateInferenceCopy? _privateInferenceCopy = PrivateInferenceSurface.Copy();
+    private bool _privateInferenceAnswered;
+    private bool _privateInferenceOn;
+
+    /// <summary>
+    /// Whether the offer belongs in front of the contributor right now. False
+    /// while the words are missing: an offer without its exposure paragraph
+    /// is worse than no offer.
+    /// </summary>
+    public bool HasPrivateInferenceOffer =>
+        _privateInferenceCopy is not null
+        && PrivateInferenceSurface.ShouldOffer(_privateInferenceAnswered, _privateInferenceOn);
+
+    public string PrivateInferenceOfferTitle => _privateInferenceCopy?.OfferTitle ?? string.Empty;
+
+    public string PrivateInferenceOfferWhat => _privateInferenceCopy?.OfferWhat ?? string.Empty;
+
+    /// <summary>What turning it on exposes. The reason this offer exists.</summary>
+    public string PrivateInferenceOfferExposure =>
+        _privateInferenceCopy?.OfferExposure ?? string.Empty;
+
+    public string PrivateInferenceOfferNoRepoint =>
+        _privateInferenceCopy?.OfferNoRepoint ?? string.Empty;
+
+    public string PrivateInferenceOfferAskedOnce =>
+        _privateInferenceCopy?.OfferAskedOnce ?? string.Empty;
+
+    public string PrivateInferenceOfferAccept => _privateInferenceCopy?.OfferAccept ?? string.Empty;
+
+    public string PrivateInferenceOfferDecline =>
+        _privateInferenceCopy?.OfferDecline ?? string.Empty;
+
+    /// <summary>
+    /// Whether the switch is on, for the one sentence the quit confirmation
+    /// gains while it is: quitting this app stops the listener with it.
+    /// </summary>
+    public bool PrivateInferenceOn => _privateInferenceOn;
+
+    /// <summary>The quit confirmation's extra line, or null.</summary>
+    public string? PrivateInferenceQuitDetail =>
+        PrivateInferenceSurface.QuitDetail(_privateInferenceOn, _privateInferenceCopy);
+
+    /// <summary>
+    /// Takes what the daemon last reported about the switch and the answer.
+    /// Both facts live in the daemon rather than in this window, so a
+    /// contributor who answered in another shell has answered.
+    /// </summary>
+    public void SetPrivateInference(DaemonSettingsSnapshot? settings)
+    {
+        bool answered = settings?.PrivateInferenceAnswered ?? _privateInferenceAnswered;
+        bool on = settings?.PrivateInferenceOn ?? _privateInferenceOn;
+        if (answered == _privateInferenceAnswered && on == _privateInferenceOn)
+        {
+            return;
+        }
+
+        _privateInferenceAnswered = answered;
+        _privateInferenceOn = on;
+        Raise(nameof(HasPrivateInferenceOffer));
+        Raise(nameof(PrivateInferenceOn));
+        Raise(nameof(PrivateInferenceQuitDetail));
+    }
+
     // --- The daily-budget banner -------------------------------------------
     //
     // Rendered from status.daily_budget, independently of the health label.
@@ -1099,6 +1173,21 @@ public sealed class MainViewModel : INotifyPropertyChanged
             if (!suggestion.IsError && suggestion.Result is { } offerBody)
             {
                 SetArmingOffer(ArmingOffer.Parse(offerBody));
+            }
+
+            // The offer is about two daemon settings and both its answers are
+            // daemon settings, so it is read from the daemon on every refresh
+            // rather than latched at launch. A window-local latch would
+            // re-ask on the next launch, which is the nagging the marker
+            // exists to prevent. An error frame leaves the previous answer
+            // alone: a daemon that could not answer has not un-answered
+            // anything.
+            DaemonResponse settings = await _host
+                .CallAsync(DaemonProtocol.Methods.GetSettings)
+                .ConfigureAwait(true);
+            if (!settings.IsError)
+            {
+                SetPrivateInference(settings.ResultAs<DaemonSettingsSnapshot>());
             }
 
             DaemonResponse status = await _host

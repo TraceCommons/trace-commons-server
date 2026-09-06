@@ -392,6 +392,59 @@
             </Border>
 
             <!--
+                The offer to answer model calls on this computer.
+
+                Shown once, on the screen this window opens on. Both answers
+                go to the daemon, so "Not now" is remembered across relaunches
+                and across shells rather than being a dismissal this window
+                forgets.
+
+                EVERY STRING HERE IS BOUND. Unlike the arming offer below,
+                which still carries wording authored in this shell, not one
+                sentence on this card is written here: the three shells print
+                one offer, and the paragraph most at risk of being paraphrased
+                is the one saying what turning the switch on exposes.
+
+                Neither button is TcPrimaryButtonStyle, for the reason the
+                arming card gives and more so: this question opens a listener
+                anything on this machine can use. Decline comes first.
+            -->
+            <Border Visibility="{x:Bind ViewModel.HasPrivateInferenceOffer, Mode=OneWay}"
+                    Padding="14,12"
+                    Background="{ThemeResource TcSurfaceCardBrush}"
+                    BorderBrush="{ThemeResource TcHairlineBrush}"
+                    BorderThickness="1"
+                    CornerRadius="{StaticResource TcCardCornerRadius}">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="{x:Bind ViewModel.PrivateInferenceOfferTitle}"
+                               Style="{StaticResource TcTitleCardTextStyle}"
+                               TextWrapping="Wrap" />
+                    <!-- What it does, what it exposes, then what it does NOT
+                         do. The middle one is never folded into a caption. -->
+                    <TextBlock Text="{x:Bind ViewModel.PrivateInferenceOfferWhat}"
+                               Style="{StaticResource TcCaptionTextStyle}"
+                               TextWrapping="Wrap" />
+                    <TextBlock Text="{x:Bind ViewModel.PrivateInferenceOfferExposure}"
+                               Style="{StaticResource TcCaptionTextStyle}"
+                               TextWrapping="Wrap" />
+                    <TextBlock Text="{x:Bind ViewModel.PrivateInferenceOfferNoRepoint}"
+                               Style="{StaticResource TcCaptionTextStyle}"
+                               TextWrapping="Wrap" />
+                    <TextBlock Text="{x:Bind ViewModel.PrivateInferenceOfferAskedOnce}"
+                               Style="{StaticResource TcCaptionTextStyle}"
+                               TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Button Style="{StaticResource TcSecondaryButtonStyle}"
+                                Content="{x:Bind ViewModel.PrivateInferenceOfferDecline}"
+                                Click="OnDeclinePrivateInference" />
+                        <Button Style="{StaticResource TcSecondaryButtonStyle}"
+                                Content="{x:Bind ViewModel.PrivateInferenceOfferAccept}"
+                                Click="OnAcceptPrivateInference" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!--
                 The offer to stop being asked about one project.
 
                 Drawn above the cards it is about: the contributor is looking

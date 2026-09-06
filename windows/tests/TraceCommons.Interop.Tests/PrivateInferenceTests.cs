@@ -1,0 +1,449 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using TraceCommons.Interop;
+using Xunit;
+
+namespace TraceCommons.Interop.Tests;
+
+/// <summary>
+/// The private-inference surface as it really crosses the C ABI.
+///
+/// Everything asserted against the payload the Rust exported, except the one
+/// deliberate literal pin below: comparing a payload field to itself would
+/// keep passing if every sentence changed at once, and this suite is meant to
+/// turn red with the macOS and Linux ones when a word moves.
+/// </summary>
+public class PrivateInferenceTests
+{
+    private static PrivateInferenceCopy Copy()
+    {
+        PrivateInferenceCopy? copy = PrivateInferenceSurface.Copy();
+        Assert.NotNull(copy);
+        return copy!;
+    }
+
+    private static PrivateInferenceState State(string label, ushort? port = null) =>
+        new(label, port);
+
+    /// <summary>
+    /// Every field the Rust exports is decoded here, and this shell invents
+    /// none. Set equality in both directions: a field the Rust grew and this
+    /// record dropped would sail past a one-way check.
+    /// </summary>
+    [Fact]
+    public void EveryExportedFieldIsDecodedAndNoneIsInvented()
+    {
+        string? json = NativeMethods.TakeOwnedString(NativeMethods.tc_private_inference_copy());
+        Assert.False(string.IsNullOrWhiteSpace(json));
+
+        using JsonDocument document = JsonDocument.Parse(json!);
+        var exported = new HashSet<string>(StringComparer.Ordinal);
+        foreach (JsonProperty property in document.RootElement.EnumerateObject())
+        {
+            exported.Add(property.Name);
+        }
+
+        var declared = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var property in typeof(PrivateInferenceCopy).GetProperties())
+        {
+            foreach (var attribute in property.GetCustomAttributes(
+                typeof(System.Text.Json.Serialization.JsonPropertyNameAttribute), false))
+            {
+                declared.Add(
+                    ((System.Text.Json.Serialization.JsonPropertyNameAttribute)attribute).Name);
+            }
+        }
+
+        Assert.Equal(declared, exported);
+    }
+
+    /// <summary>
+    /// The sentence this whole surface exists to print. Pinned literally,
+    /// because a payload field compared to itself proves nothing.
+    /// </summary>
+    [Fact]
+    public void TheOfferSaysWhatTurningItOnExposes()
+    {
+        PrivateInferenceCopy copy = Copy();
+        Assert.Contains("anything else running", copy.OfferExposure, StringComparison.Ordinal);
+        Assert.Contains("accounts", copy.OfferExposure, StringComparison.Ordinal);
+        Assert.Contains("shared", copy.OfferExposure, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Every sentence arrives finished. A template with a hole in it would
+    /// make this shell a second place the wording lives.
+    /// </summary>
+    [Fact]
+    public void EverySentenceArrivesFinished()
+    {
+        foreach (string sentence in Copy().Sentences)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(sentence));
+            foreach (string marker in new[] { "{}", "{port}", "%@", "%s", "%d" })
+            {
+                Assert.DoesNotContain(marker, sentence, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A payload missing the exposure sentence is refused whole, not rendered
+    /// with a gap where it should be.
+    /// </summary>
+    [Fact]
+    public void APayloadMissingASentenceIsRefusedRatherThanRenderedBlank()
+    {
+        Assert.Null(PrivateInferenceSurface.Parse("""{"offer_title":"T"}"""));
+        Assert.Null(PrivateInferenceSurface.Parse("not json"));
+        Assert.Null(PrivateInferenceSurface.Parse(""));
+    }
+
+    /// <summary>
+    /// The seven labels the daemon can report each get their own sentence,
+    /// and every stranger reads as off.
+    /// </summary>
+    [Fact]
+    public void EachStateRendersTheSentenceTheRustExports()
+    {
+        PrivateInferenceCopy copy = Copy();
+        Assert.Equal(copy.StateOff, PrivateInferenceSurface.StateLine(State("off"), copy));
+        Assert.Equal(copy.StateRunning, PrivateInferenceSurface.StateLine(State("running"), copy));
+        Assert.Equal(
+            copy.StateRunningNoBackends,
+            PrivateInferenceSurface.StateLine(State("running_no_backends"), copy));
+        Assert.Equal(
+            copy.StateRunningElsewhere,
+            PrivateInferenceSurface.StateLine(State("running_elsewhere"), copy));
+        Assert.Equal(
+            copy.StatePortInUse, PrivateInferenceSurface.StateLine(State("port_in_use"), copy));
+        Assert.Equal(
+            copy.StateStartFailed, PrivateInferenceSurface.StateLine(State("start_failed"), copy));
+        Assert.Equal(copy.StateCrashed, PrivateInferenceSurface.StateLine(State("crashed"), copy));
+        Assert.Equal(
+            copy.StateOff,
+            PrivateInferenceSurface.StateLine(State("a_state_from_a_later_daemon"), copy));
+        Assert.Equal(copy.StateOff, PrivateInferenceSurface.StateLine(State(string.Empty), copy));
+    }
+
+    /// <summary>
+    /// Exactly one state may be painted as working, and it is not the one
+    /// with nowhere to send a call. That is why the state exists.
+    /// </summary>
+    [Fact]
+    public void OnlyAListenerWithSomewhereToSendIsPaintedClear()
+    {
+        Assert.Equal(PrivateInferenceTone.Clear, PrivateInferenceSurface.Tone(State("running")));
+        Assert.Equal(
+            PrivateInferenceTone.Attention,
+            PrivateInferenceSurface.Tone(State("running_no_backends")));
+        Assert.NotEqual(
+            PrivateInferenceTone.Clear,
+            PrivateInferenceSurface.Tone(State("running_no_backends")));
+        Assert.Equal(
+            PrivateInferenceTone.Held, PrivateInferenceSurface.Tone(State("running_elsewhere")));
+        Assert.Equal(PrivateInferenceTone.Neutral, PrivateInferenceSurface.Tone(State("off")));
+        foreach (string failure in new[] { "port_in_use", "start_failed", "crashed" })
+        {
+            Assert.Equal(PrivateInferenceTone.Refused, PrivateInferenceSurface.Tone(State(failure)));
+        }
+
+        Assert.Equal(
+            PrivateInferenceTone.Neutral,
+            PrivateInferenceSurface.Tone(State("a_state_from_a_later_daemon")));
+    }
+
+    /// <summary>
+    /// Every refusal names the way out, and the sticky one says it is sticky.
+    /// </summary>
+    [Fact]
+    public void EveryRefusalNamesTheWayOut()
+    {
+        PrivateInferenceCopy copy = Copy();
+        foreach (string sentence in new[] { copy.StatePortInUse, copy.StateStartFailed, copy.StateCrashed })
+        {
+            Assert.Contains("off and on again", sentence, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("stay this way", copy.StateCrashed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The ABI numbering is spelled out and anything unknown is neutral --
+    /// never the working light. The routing numbering must not decode here:
+    /// that cross-wiring is what the disjoint ranges exist to make wrong for
+    /// every value rather than only for the dangerous one.
+    /// </summary>
+    [Fact]
+    public void AnUnknownToneIsNeutralAndTheRoutingNumberingDoesNotDecodeHere()
+    {
+        Assert.Equal(PrivateInferenceTone.Held, PrivateInferenceSurface.FromAbiTone(21));
+        Assert.Equal(PrivateInferenceTone.Clear, PrivateInferenceSurface.FromAbiTone(22));
+        Assert.Equal(PrivateInferenceTone.Attention, PrivateInferenceSurface.FromAbiTone(23));
+        Assert.Equal(PrivateInferenceTone.Refused, PrivateInferenceSurface.FromAbiTone(24));
+        foreach (int stranger in new[] { 0, 1, 2, 3, 10, 14, 20, 25, -1, 99 })
+        {
+            Assert.Equal(PrivateInferenceTone.Neutral, PrivateInferenceSurface.FromAbiTone(stranger));
+        }
+    }
+
+    [Fact]
+    public void TheServingSentenceNamesAPortOrIsEmpty()
+    {
+        Assert.Equal(string.Empty, PrivateInferenceSurface.ServingLine(State("port_in_use")));
+        Assert.Equal(string.Empty, PrivateInferenceSurface.ServingLine(State("running", 0)));
+        Assert.Contains(
+            "8463", PrivateInferenceSurface.ServingLine(State("running", 8463)),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Whether to ask crosses the ABI, so the three shells cannot come to
+    /// disagree about who has already been asked.
+    /// </summary>
+    [Fact]
+    public void WhetherToOfferCrossesTheAbi()
+    {
+        Assert.True(PrivateInferenceSurface.ShouldOffer(answered: false, on: false));
+        Assert.False(PrivateInferenceSurface.ShouldOffer(answered: true, on: false));
+        Assert.False(PrivateInferenceSurface.ShouldOffer(answered: false, on: true));
+        Assert.False(PrivateInferenceSurface.ShouldOffer(answered: true, on: true));
+    }
+
+    /// <summary>
+    /// Declining records the answer and writes no switch. Writing it as false
+    /// would make a refusal indistinguishable from a change.
+    /// </summary>
+    [Fact]
+    public void DecliningWritesTheMarkerAlone()
+    {
+        using JsonDocument declined =
+            JsonDocument.Parse(PrivateInferenceSurface.SerializeOfferAnswer(accepted: false));
+        JsonProperty only = Assert.Single(declined.RootElement.EnumerateObject());
+        Assert.Equal(PrivateInferenceSurface.OfferSeenKey, only.Name);
+        Assert.True(only.Value.GetBoolean());
+
+        using JsonDocument accepted =
+            JsonDocument.Parse(PrivateInferenceSurface.SerializeOfferAnswer(accepted: true));
+        Assert.True(
+            accepted.RootElement.GetProperty(PrivateInferenceSurface.SettingsKey).GetBoolean());
+        Assert.True(
+            accepted.RootElement.GetProperty(PrivateInferenceSurface.OfferSeenKey).GetBoolean());
+    }
+
+    /// <summary>
+    /// The settings switch answers the question too, so a contributor who
+    /// found it themselves is not asked about it later.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void TheSettingsSwitchAlsoAnswersTheQuestion(bool on)
+    {
+        using JsonDocument json = JsonDocument.Parse(PrivateInferenceSurface.SerializeSwitch(on));
+        Assert.Equal(
+            on, json.RootElement.GetProperty(PrivateInferenceSurface.SettingsKey).GetBoolean());
+        Assert.True(
+            json.RootElement.GetProperty(PrivateInferenceSurface.OfferSeenKey).GetBoolean());
+    }
+
+    /// <summary>
+    /// A daemon that never heard of the keys reads as off and unanswered,
+    /// which is what makes the offer appear once after an upgrade.
+    /// </summary>
+    [Fact]
+    public void ADaemonWithoutTheKeysReadsAsOffAndUnanswered()
+    {
+        DaemonSettingsSnapshot? snapshot =
+            JsonSerializer.Deserialize<DaemonSettingsSnapshot>("""{"quiescence_secs":45}""");
+        Assert.NotNull(snapshot);
+        Assert.False(snapshot!.PrivateInferenceOn);
+        Assert.False(snapshot.PrivateInferenceAnswered);
+        Assert.Null(snapshot.PrivateInferenceReport);
+        Assert.Equal(
+            string.Empty, PrivateInferenceState.From(snapshot.PrivateInferenceReport).Label);
+    }
+
+    /// <summary>
+    /// The state object is read as the daemon sends it, label and port.
+    /// </summary>
+    [Fact]
+    public void TheReportedStateIsReadWhole()
+    {
+        DaemonSettingsSnapshot? snapshot = JsonSerializer.Deserialize<DaemonSettingsSnapshot>(
+            """{"private_inference":true,"private_inference_offer_seen":true,"private_inference_state":{"state":"running","port":8463}}""");
+        Assert.NotNull(snapshot);
+        Assert.True(snapshot!.PrivateInferenceOn);
+        Assert.True(snapshot.PrivateInferenceAnswered);
+        PrivateInferenceState state = PrivateInferenceState.From(snapshot.PrivateInferenceReport);
+        Assert.Equal("running", state.Label);
+        Assert.Equal((ushort)8463, state.Port);
+    }
+
+    /// <summary>
+    /// The quit sentence is added only while the switch is on, and it is the
+    /// payload's words rather than this shell's.
+    /// </summary>
+    [Fact]
+    public void TheQuitSentenceIsOnlyAddedWhenTheSwitchIsOn()
+    {
+        PrivateInferenceCopy copy = Copy();
+        Assert.Null(PrivateInferenceSurface.QuitDetail(on: false, copy));
+        Assert.Null(PrivateInferenceSurface.QuitDetail(on: true, null));
+        Assert.Equal(copy.QuitAlsoStops, PrivateInferenceSurface.QuitDetail(on: true, copy));
+    }
+
+    /// <summary>
+    /// No sentence on this surface is authored in this shell.
+    ///
+    /// Asserted about the source rather than about behaviour, for the reason
+    /// <c>NoWordingIsAuthoredInThisShell</c> gives: a hand-written sentence
+    /// that happened to match the Rust today would pass every behavioural
+    /// test here and then survive a rename in exactly one of the three
+    /// shells.
+    /// </summary>
+    [Fact]
+    public void NoWordingIsAuthoredInThePrivateInferenceSurface()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "PrivateInferenceSurface.cs.txt");
+        Assert.True(File.Exists(path), $"the implementation source was not copied to {path}");
+        string source = File.ReadAllText(path);
+
+        string uncommented = string.Join(
+            "\n",
+            source.Split('\n')
+                .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+                .Where(line => !line.TrimStart().StartsWith("///", StringComparison.Ordinal)));
+
+        var allowed = new HashSet<string>(StringComparer.Ordinal)
+        {
+            // The two set_settings wire keys, and nothing else.
+            "private_inference",
+            "private_inference_offer_seen",
+        };
+
+        foreach (Match match in Regex.Matches(uncommented, "\"([^\"\\\\]|\\\\.)*\""))
+        {
+            string literal = match.Value[1..^1];
+            Assert.True(
+                allowed.Contains(literal),
+                $"\"{literal}\" is a string literal in PrivateInferenceSurface.cs that is not a "
+                + "wire value. Wording on this surface comes from private_inference_copy.rs "
+                + "across the ABI.");
+        }
+    }
+
+    /// <summary>
+    /// The offer's card in the main window draws every sentence from the view
+    /// model, and the view model draws every one of them from the payload.
+    ///
+    /// The paragraph at issue is the one saying what turning the switch on
+    /// exposes: a shorter, friendlier paraphrase of it would render, would
+    /// pass every behavioural test, and would be the one thing on this card
+    /// that must not be paraphrased.
+    /// </summary>
+    [Fact]
+    public void TheOfferIsDrawnFromTheSharedSentences()
+    {
+        string markup = File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "MainWindow.xaml.txt"));
+        int start = markup.IndexOf("HasPrivateInferenceOffer", StringComparison.Ordinal);
+        Assert.True(start >= 0, "the offer card is not in the main window");
+        int end = markup.IndexOf("</Border>", start, StringComparison.Ordinal);
+        Assert.True(end > start, "the offer card's border does not close");
+        string card = markup[start..end];
+
+        foreach (string bound in new[]
+        {
+            "ViewModel.PrivateInferenceOfferTitle",
+            "ViewModel.PrivateInferenceOfferWhat",
+            "ViewModel.PrivateInferenceOfferExposure",
+            "ViewModel.PrivateInferenceOfferNoRepoint",
+            "ViewModel.PrivateInferenceOfferAskedOnce",
+            "ViewModel.PrivateInferenceOfferAccept",
+            "ViewModel.PrivateInferenceOfferDecline",
+        })
+        {
+            Assert.Contains(bound, card, StringComparison.Ordinal);
+        }
+
+        // Every Text= and Content= on the card is a binding, never a literal.
+        foreach (Match match in Regex.Matches(card, "(Text|Content)=\"([^\"]*)\""))
+        {
+            Assert.StartsWith("{x:Bind", match.Groups[2].Value, StringComparison.Ordinal);
+        }
+
+        string viewModel = File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "MainViewModel.cs.txt"));
+        foreach (string sourced in new[]
+        {
+            "_privateInferenceCopy?.OfferTitle",
+            "_privateInferenceCopy?.OfferWhat",
+            "_privateInferenceCopy?.OfferExposure",
+            "_privateInferenceCopy?.OfferNoRepoint",
+            "_privateInferenceCopy?.OfferAskedOnce",
+            "_privateInferenceCopy?.OfferAccept",
+            "_privateInferenceCopy?.OfferDecline",
+        })
+        {
+            Assert.Contains(sourced, viewModel, StringComparison.Ordinal);
+        }
+
+        // And whether to ask is the shared table's decision, not this
+        // window's: three shells each deciding when to interrupt somebody is
+        // three chances to re-ask a contributor who already said no.
+        Assert.Contains(
+            "PrivateInferenceSurface.ShouldOffer(_privateInferenceAnswered, _privateInferenceOn)",
+            viewModel,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The settings card picks its colour from the tone, never by reading the
+    /// sentence back. Three of the seven sentences begin with the same two
+    /// words, so a colour recovered from the text would be recovered from a
+    /// prefix match.
+    /// </summary>
+    [Fact]
+    public void ThePrivateInferenceStateIsPaintedFromTheToneAndNotFromItsOwnText()
+    {
+        string viewModel = File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "ContributorSettingsViewModel.cs.txt"));
+        foreach (string forbidden in new[]
+        {
+            "PrivateInferenceStateText ==",
+            "PrivateInferenceStateText.Contains",
+            "PrivateInferenceStateText.StartsWith",
+        })
+        {
+            Assert.DoesNotContain(forbidden, viewModel, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(
+            "PrivateInferenceSurface.Tone(_privateInferenceState)",
+            viewModel,
+            StringComparison.Ordinal);
+
+        string markup = File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "SettingsView.xaml.txt"));
+        int start = markup.IndexOf("Settings.PrivateInferenceTitle", StringComparison.Ordinal);
+        Assert.True(start >= 0, "the private-inference card is not on the settings screen");
+        int end = markup.IndexOf("The redaction witness", start, StringComparison.Ordinal);
+        Assert.True(end > start, "the private-inference card does not end where expected");
+        string card = markup[start..end];
+
+        // The refusal wears the refusal colour, and the exposure sentence is
+        // on this card as well as in the offer.
+        Assert.Contains("PrivateInferenceStateIsRefused", card, StringComparison.Ordinal);
+        Assert.Contains("TcCoralTextBrush", card, StringComparison.Ordinal);
+        Assert.Contains("Settings.PrivateInferenceExposure", card, StringComparison.Ordinal);
+        foreach (Match match in Regex.Matches(card, "(Text|Content|Header)=\"([^\"]*)\""))
+        {
+            Assert.StartsWith("{x:Bind", match.Groups[2].Value, StringComparison.Ordinal);
+        }
+    }
+}

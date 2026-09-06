@@ -595,6 +595,18 @@ impl App {
                 .and_then(|v| serde_json::from_value::<crate::model::ArmingOffer>(v).ok());
             queue::render_arming_offer(app, offer);
         });
+        // The offer is about a daemon setting and both its answers are
+        // daemon settings, so it is read from the daemon on every refresh
+        // rather than latched in this window. A window-local latch would
+        // re-ask on the next launch, which is the nagging the marker exists
+        // to prevent.
+        self.call("get_settings", serde_json::json!({}), |app, result| {
+            let Ok(Ok(settings)) = result.map(serde_json::from_value::<crate::model::Settings>)
+            else {
+                return;
+            };
+            queue::render_private_inference_offer(app, &settings);
+        });
         self.call("list_pending", serde_json::json!({}), |app, result| {
             let Ok(value) = result else { return };
             let entries: Vec<QueueEntry> =

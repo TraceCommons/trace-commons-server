@@ -386,4 +386,98 @@ final class NativeFlowAdapterTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(result.view).ready)
         XCTAssertEqual(result.view?.tone, "refused")
     }
+
+    // MARK: - Answering model calls on this computer
+
+    /// A frame carrying the offer's two keys, and the state beside them.
+    private func privateInferenceFrame(
+        on: Bool, answered: Bool, state: String = "off", port: String = "null"
+    ) -> String {
+        """
+        {"id":1,"result":{"quiescence_secs":45,"digest_interval_secs":3600,
+        "local_notifications":true,"queue_ttl_days":14,"max_queue_entries":500,
+        "max_uploads_per_day":100,"near_ai_configured":false,
+        "claude_root_configured":true,"codex_root_configured":true,
+        "private_inference":\(on),"private_inference_offer_seen":\(answered),
+        "private_inference_state":{"state":"\(state)","port":\(port)}}}
+        """
+    }
+
+    /// Declining records the answer and writes no switch.
+    ///
+    /// The switch is already false; writing it would make a refusal
+    /// indistinguishable from a change on every surface watching settings.
+    func testDecliningTheOfferWritesTheMarkerAlone() throws {
+        let daemon = RecordingDaemon()
+        daemon.response = privateInferenceFrame(on: false, answered: true)
+        let client = DaemonClient(daemon: daemon)
+
+        _ = try client.answerPrivateInferenceOffer(accepted: false)
+
+        XCTAssertEqual(daemon.calls.last?.method, "set_settings")
+        let params = try XCTUnwrap(daemon.lastParams)
+        XCTAssertEqual(params.count, 1)
+        XCTAssertEqual(params["private_inference_offer_seen"] as? Bool, true)
+        XCTAssertNil(params["private_inference"])
+    }
+
+    /// Accepting writes both keys in one call: an accept that started the
+    /// listener and failed to record the answer would ask again next launch.
+    func testAcceptingTheOfferWritesBothKeysInOneCall() throws {
+        let daemon = RecordingDaemon()
+        daemon.response = privateInferenceFrame(
+            on: true, answered: true, state: "running", port: "8463")
+        let client = DaemonClient(daemon: daemon)
+
+        let view = try client.answerPrivateInferenceOffer(accepted: true)
+
+        XCTAssertEqual(daemon.calls.count, 1, "one call, not two")
+        let params = try XCTUnwrap(daemon.lastParams)
+        XCTAssertEqual(params["private_inference"] as? Bool, true)
+        XCTAssertEqual(params["private_inference_offer_seen"] as? Bool, true)
+        XCTAssertTrue(view.privateInferenceOn)
+        XCTAssertTrue(view.privateInferenceAnswered)
+        XCTAssertEqual(view.privateInferenceState?.state, "running")
+        XCTAssertEqual(view.privateInferenceState?.port, 8463)
+    }
+
+    /// A daemon that did not record the answer is a refusal, not a success.
+    func testAnAnswerTheDaemonDidNotRecordIsRefused() {
+        let daemon = RecordingDaemon()
+        daemon.response = privateInferenceFrame(on: false, answered: false)
+        let client = DaemonClient(daemon: daemon)
+        XCTAssertThrowsError(try client.answerPrivateInferenceOffer(accepted: false))
+    }
+
+    /// The settings switch records the answer too, so a contributor who
+    /// found it themselves is not asked about it later.
+    func testTheSettingsSwitchAlsoAnswersTheQuestion() throws {
+        let daemon = RecordingDaemon()
+        daemon.response = privateInferenceFrame(on: true, answered: true, state: "start_failed")
+        let client = DaemonClient(daemon: daemon)
+
+        let view = try client.setPrivateInference(true)
+
+        let params = try XCTUnwrap(daemon.lastParams)
+        XCTAssertEqual(params["private_inference"] as? Bool, true)
+        XCTAssertEqual(params["private_inference_offer_seen"] as? Bool, true)
+        // A listener that refused to start is a sentence to render, NOT a
+        // failed write: the switch is on and the state says what happened.
+        XCTAssertTrue(view.privateInferenceOn)
+        XCTAssertEqual(view.privateInferenceState?.state, "start_failed")
+    }
+
+    /// A daemon that never heard of the keys reads as off and unanswered,
+    /// which is what makes the offer appear once after an upgrade.
+    func testADaemonWithoutTheKeysReadsAsOffAndUnanswered() throws {
+        let daemon = RecordingDaemon()
+        daemon.response = settingsFrame
+        let client = DaemonClient(daemon: daemon)
+
+        let view = try client.setSettings(["local_notifications": true])
+
+        XCTAssertFalse(view.privateInferenceOn)
+        XCTAssertFalse(view.privateInferenceAnswered)
+        XCTAssertNil(view.privateInferenceState)
+    }
 }

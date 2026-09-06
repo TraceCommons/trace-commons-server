@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TCShellCore
 
 /// The pieces of app behaviour that SwiftUI does not own.
 ///
@@ -27,6 +28,14 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var compute: ComputeModel?
     var navigation: MainWindowNavigation?
+    /// Read at quit time for one sentence, and for nothing else.
+    ///
+    /// With the listener inside this process, quitting stops answering
+    /// model calls as well as stopping the watcher, and the confirmation's
+    /// existing sentence does not cover that. The extra sentence is the
+    /// Rust's, not this file's -- the rest of that dialog is Swift-authored
+    /// and this line deliberately is not.
+    var model: AppModel?
     private let quitCoordinator = QuitCoordinator()
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Explicit rather than inherited. Removing LSUIElement already makes
@@ -70,7 +79,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Every pending request gets a reply, including the outer deadline, which
     /// keeps the app running if worker shutdown has not returned safe evidence.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        let confirmed = quitCoordinator.isStopping || QuitConfirmation.granted(computeDetail: compute?.copy?.quitDetail)
+        let confirmed =
+            quitCoordinator.isStopping
+            || QuitConfirmation.granted(
+                computeDetail: compute?.copy?.quitDetail,
+                privateInferenceDetail: PrivateInferenceSurface.quitDetail(
+                    on: model?.daemonSettings?.privateInferenceOn ?? false,
+                    copy: model?.privateInferenceCopy
+                )
+            )
         let decision = quitCoordinator.request(confirmed: confirmed, deadlineSeconds: 17, stop: { [weak self] in
             guard let compute = self?.compute else { return true }
             return await compute.shutdown(timeoutMilliseconds: 15_000)
@@ -154,7 +171,10 @@ enum QuitConfirmation {
     /// written specifically because the watcher stops with the app, and
     /// nothing about gaining a Dock icon makes that less true.
     @MainActor
-    static func granted(computeDetail: String? = nil) -> Bool {
+    static func granted(
+        computeDetail: String? = nil,
+        privateInferenceDetail: String? = nil
+    ) -> Bool {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Quit Trace Commons?"
@@ -166,6 +186,11 @@ enum QuitConfirmation {
         come back. Nothing is sent while nobody's approving.
         """
         if let computeDetail { alert.informativeText += "\n\n" + computeDetail }
+        // Appended only when the switch is on. A contributor who never
+        // turned it on should not be warned about losing it.
+        if let privateInferenceDetail {
+            alert.informativeText += "\n\n" + privateInferenceDetail
+        }
         alert.addButton(withTitle: "Quit")
         alert.addButton(withTitle: "Keep running")
         return alert.runModal() == .alertFirstButtonReturn
