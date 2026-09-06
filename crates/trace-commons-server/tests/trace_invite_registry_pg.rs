@@ -50,7 +50,7 @@ async fn invite_lookup_policy_confines_reads_to_the_presented_hash() {
     // fixture, not a production role, so no migration creates it -- and the
     // GRANT is per-database, so it has to be (re)applied against whatever
     // database the run points at, not just the first one it ever ran on.
-    client
+    if let Err(error) = client
         .batch_execute(
             "DO $$ BEGIN
                  IF NOT EXISTS (
@@ -59,13 +59,24 @@ async fn invite_lookup_policy_confines_reads_to_the_presented_hash() {
                  ) THEN
                      CREATE ROLE trace_invite_registry_test_reader NOLOGIN NOBYPASSRLS;
                  END IF;
-             END $$;
-             GRANT USAGE ON SCHEMA public TO trace_invite_registry_test_reader;
+             END $$;",
+        )
+        .await
+    {
+        if error.code() == Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE) {
+            eprintln!("skipping: CREATEROLE privilege unavailable for invite reader fixture");
+            return;
+        }
+        panic!("create NOBYPASSRLS reader fixture role: {error}");
+    }
+    client
+        .batch_execute(
+            "GRANT USAGE ON SCHEMA public TO trace_invite_registry_test_reader;
              GRANT SELECT ON onboarding_invite_grants
                  TO trace_invite_registry_test_reader;",
         )
         .await
-        .expect("provision the NOBYPASSRLS reader fixture role");
+        .expect("grant access to the NOBYPASSRLS reader fixture role");
 
     // Seed through the registry role. Do NOT seed as the connection's own
     // user: local dev users are frequently superusers, which bypasses RLS

@@ -2647,7 +2647,7 @@ async fn fresh_session_does_not_rotate() {
 }
 
 #[tokio::test]
-async fn account_middleware_preserves_dual_auth_semantics() {
+async fn account_middleware_accepts_cookie_and_rejects_device_bearer_or_ambiguous_credentials() {
     let Some(backend) = postgres_backend_for_ingest_test().await else {
         return;
     };
@@ -20859,6 +20859,14 @@ fn export_job_slice_keeps_safe_request_metadata_for_status_updates() {
         status: TraceExportGrantStatus::Active,
     };
     let raw_external_ref = "frontier-lab:request-ticket-99";
+    let metadata = export_job_request_metadata(
+        Some(4),
+        Some(TraceCorpusStatus::Accepted),
+        Some(ResidualPiiRisk::Low),
+        Some(ConsentScope::BenchmarkOnly),
+        Some(raw_external_ref),
+    );
+    assert!(!metadata.contains_key("request_schema_version"));
     let job = create_validated_export_job_slice(
         state.as_ref(),
         &tenant,
@@ -20867,13 +20875,7 @@ fn export_job_slice_keeps_safe_request_metadata_for_status_updates() {
             purpose: "metadata_unit".to_string(),
             requested_limit: Some(4),
             grant,
-            metadata: replayable_export_job_metadata(
-                Some(4),
-                Some(TraceCorpusStatus::Accepted),
-                Some(ResidualPiiRisk::Low),
-                Some(ConsentScope::BenchmarkOnly),
-                Some(raw_external_ref),
-            ),
+            metadata,
         },
         now,
     )
@@ -77403,7 +77405,7 @@ async fn gate_blocks_weak_remove_until_back_to_bootstrap() {
 }
 
 /// REDEEMED LINK = WEAK: a session redeemed from a device login-link is a WEAK
-/// session (`client_kind='device'`), so it is gated when the account already
+/// session (`client_kind='web'`), so it is gated when the account already
 /// holds a strong authenticator (403), and the carve-out lets it add the FIRST
 /// authenticator (200).
 ///
@@ -80451,12 +80453,18 @@ async fn per_user_subjects_resolve_to_distinct_accounts() {
         false,
         false,
     );
-    // Wire in the EdDSA verifier so signed bearer tokens are accepted.
-    // The issuer also signs with TEST_EDDSA_PRIVATE_KEY_PEM, so its tokens
-    // verify against this verifier's public key without any extra config.
-    Arc::make_mut(&mut state).signed_token_verifier = Some(shared_signed_token_verifier(
-        test_eddsa_signed_token_verifier(),
-    ));
+    // The issuer sends a kid; explicitly trust that key rather than expecting
+    // the default key to accept a present-but-unknown rotation identifier.
+    let mut verifier = test_eddsa_signed_token_verifier();
+    verifier.keyed_eddsa_public_keys.insert(
+        "issuer-key-1".to_string(),
+        TraceCommonsSignedEddsaPublicKey {
+            pem: TEST_EDDSA_PUBLIC_KEY_PEM.to_string(),
+            not_before: None,
+            not_after: None,
+        },
+    );
+    Arc::make_mut(&mut state).signed_token_verifier = Some(shared_signed_token_verifier(verifier));
 
     // Generate a real Ed25519 device keypair for the issuer path.
     use ring::signature::KeyPair;
