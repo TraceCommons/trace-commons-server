@@ -184,8 +184,10 @@ The rest of the chain up to that point — the daemon-hosted proxy serving a
 hosted model, the exchange correlated to its session with bodies captured, and
 the receipt fetched for that exchange — was run on the chat-completions
 (`provider_tee`) path only, against `Qwen/Qwen3.6-35B-A3B-FP8`. The gateway
-kind was exercised at the receipt, not through the proxy; and a gateway
-receipt names no model, so there is no model to attribute that capture to. The
+receipt is an equally real capture — NEAR AI's own bytes, its real signature
+checked against its real text — but it was taken at the receipt rather than
+driven through the proxy, and its two-part text names no model, so there is no
+model to attribute that capture to. The
 proxy's own lifecycle (`running` / `running_elsewhere` / `off`, including
 reclaiming the home from a standalone proxy) was confirmed live in the same
 run.
@@ -364,7 +366,8 @@ are defaulted without changing enrollment checks (#623), Antigravity
 dead-code allowances are narrowed to fixture metadata (#626), and fixture
 defaults and async-only dispatch refusals are guarded (#643).
 
-**Designs and plans, no shipped behaviour.** The private-inference design and
-plan (#609), corrected against the API that shipped (#615); the ed25519
+**Designs and plans, no shipped behaviour.** The design and plan for
+answering model calls locally (#609), corrected against the API that shipped
+(#615); the ed25519
 receipt verification plan, corrected against what was built (#641); and the
 plan for moving the shells' words into the core (#648, #654).
