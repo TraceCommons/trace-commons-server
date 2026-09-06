@@ -48,7 +48,20 @@ public partial class App : Application
             : null;
         PendingInvite = DeepLink.InitialInvite(protocolUri, Environment.GetCommandLineArgs());
 
-        _window = new MainWindow();
+        var window = new MainWindow();
+        _window = window;
+        Program.ReceiveActivations(activation =>
+        {
+            string? invite = activation.Kind switch
+            {
+                ExtendedActivationKind.Protocol when activation.Data is Windows.ApplicationModel.Activation.IProtocolActivatedEventArgs protocol =>
+                    DeepLink.InviteFrom(protocol.Uri?.AbsoluteUri),
+                ExtendedActivationKind.Launch when activation.Data is Windows.ApplicationModel.Activation.ILaunchActivatedEventArgs launch =>
+                    DeepLink.InviteFromCommandLine(launch.Arguments),
+                _ => null,
+            };
+            window.DispatcherQueue.TryEnqueue(() => window.ReceiveActivation(invite));
+        });
         _window.Activate();
     }
 }
