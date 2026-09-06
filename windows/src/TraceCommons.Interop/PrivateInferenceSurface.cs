@@ -14,10 +14,10 @@ namespace TraceCommons.Interop;
 /// </summary>
 public enum PrivateInferenceTone
 {
-    /// <summary>Nothing is running and nothing is claimed.</summary>
+    /// <summary>No readiness or shutdown confirmation is claimed.</summary>
     Neutral,
 
-    /// <summary>On, and this app is not the one answering.</summary>
+    /// <summary>Ownership or cleanup is held; readiness is not claimed.</summary>
     Held,
 
     /// <summary>
@@ -136,7 +136,7 @@ public static class PrivateInferenceSurface
         FromAbiTone(NativeMethods.tc_private_inference_state_tone(state.Label));
 
     /// <summary>
-    /// Where it is answering, or the empty string when there is no port. An
+    /// The reported local port, or the empty string when there is no port. An
     /// empty string is drawn as no line rather than as a blank one.
     /// </summary>
     public static string ServingLine(PrivateInferenceState state) =>

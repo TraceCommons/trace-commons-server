@@ -174,7 +174,7 @@ public enum PrivateInferenceSurface {
         PrivateInferenceTone.fromABI(calls.stateTone(state.label))
     }
 
-    /// Where it is answering, or nothing at all. An empty string is drawn as
+    /// The reported local port, or nothing at all. An empty string is drawn as
     /// no line rather than as a blank one.
     public static func servingLine(
         _ state: PrivateInferenceState,

@@ -155,7 +155,7 @@ pub const STATE_CRASHED: &str = "Not on. It started and then stopped on its own,
 pub const QUIT_ALSO_STOPS: &str = "It also stops answering model calls on this computer, so a tool pointed \
      here will get no answer until you open this app again.";
 
-/// Where the listener is answering, assembled here rather than exported as a
+/// The reported local port, without claiming readiness, assembled rather than exported as a
 /// template with a hole in it.
 ///
 /// A port outside 1..=65535 -- including the `0` a caller passes when there is
@@ -186,9 +186,9 @@ pub fn serving_line(port: Option<u16>) -> String {
 /// for the dangerous one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrivateInferenceTone {
-    /// Nothing is running and nothing is claimed.
+    /// No readiness or shutdown confirmation is claimed.
     Neutral,
-    /// On, and this app is not the one answering.
+    /// Ownership or cleanup is held; readiness is not claimed.
     Held,
     /// On, answering, and with somewhere to pass calls on to. The only value
     /// that may be painted as working.

@@ -2266,7 +2266,7 @@ pub unsafe extern "C" fn tc_private_inference_state_tone(state: *const c_char) -
     .unwrap_or(TC_PRIVATE_INFERENCE_TONE_NEUTRAL)
 }
 
-/// The "where it is answering" sentence, assembled.
+/// The reported local port, assembled without a readiness claim.
 ///
 /// `port` is the `port` field of `private_inference_state`. A value outside
 /// 1..=65535 -- including the `0` a caller passes for the JSON `null` -- gives

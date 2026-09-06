@@ -587,7 +587,7 @@ char*       tc_private_inference_copy(void);
 /* The sentence for one private_inference_state label.
  *
  * state is "off", "running", "running_no_backends", "running_elsewhere",
- * "port_in_use", "start_failed" or "crashed".
+ * "stopping", "port_in_use", "start_failed" or "crashed".
  *
  * A label this build has never heard of -- and a NULL or non-UTF-8 state --
  * reads as the unavailable sentence. It never falls through to
@@ -603,7 +603,7 @@ char*       tc_private_inference_state_line(const char* state);
  *
  * Takes what the sentence takes, so the two stay in step by construction. A
  * SHELL MUST NOT RECOVER THIS BY READING THE RENDERED SENTENCE: three of the
- * seven sentences begin with the same two words.
+ * state sentences may begin with the same words.
  *
  * Answers TC_PRIVATE_INFERENCE_TONE_NEUTRAL for a label this build has never
  * heard of, for a NULL or non-UTF-8 state, and on a caught panic. There is no
@@ -611,7 +611,7 @@ char*       tc_private_inference_state_line(const char* state);
  */
 int32_t     tc_private_inference_state_tone(const char* state);
 
-/* The "where it is answering" sentence, assembled.
+/* The reported local port, assembled without a readiness claim.
  *
  * port is private_inference_state's port field. A value outside 1..65535 --
  * including the 0 a caller passes for JSON null -- gives the EMPTY STRING
