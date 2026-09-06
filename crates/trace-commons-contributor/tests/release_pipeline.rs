@@ -622,12 +622,17 @@ fn cargo_sources_json_looks_like_a_real_generated_source_list() {
     // Plain std::fs plus a manual scan, deliberately: a JSON dependency for
     // one test is not worth it, and this is only meant to catch the file
     // being truncated, replaced with `{}`, or hand-edited into something
-    // without checksums -- not to catch drift against Cargo.lock. This scan
-    // is coupled to the generator's current output shape: a `type: git`
-    // dependency (if the GTK crate ever gained one) emits a url + commit
-    // with no sha256, which would fail this url-count == sha256-count check
-    // on a perfectly correct file. If that day comes, compare against
-    // `"type": "archive"` occurrences instead.
+    // without checksums -- not to catch drift against Cargo.lock.
+    //
+    // This once compared url-count against sha256-count, with a note saying
+    // that a `type: git` dependency would emit a url and a commit but no
+    // sha256, and that if the GTK crate ever gained one the comparison
+    // should move to `"type": "archive"` occurrences. It gained one: the
+    // embedded IronWire proxy is a git dependency, and this file now carries
+    // git sources alongside the registry archives. So the check is the one
+    // that note prescribed -- every *archive* carries a checksum, and the
+    // urls account for exactly the archives plus the git sources, so a
+    // dropped entry of either kind still fails.
     let sources = read("crates/trace-commons-contributor-gtk/flatpak/cargo-sources.json");
     let trimmed = sources.trim();
     assert!(
@@ -637,16 +642,31 @@ fn cargo_sources_json_looks_like_a_real_generated_source_list() {
     );
     let url_count = sources.matches("\"url\"").count();
     let sha256_count = sources.matches("\"sha256\"").count();
+    let archive_count = sources.matches("\"type\": \"archive\"").count();
+    let git_count = sources.matches("\"type\": \"git\"").count();
     assert!(
         url_count > 0,
         "cargo-sources.json is empty or missing url entries; \
          it looks truncated or hand-edited"
     );
+    assert!(
+        archive_count > 0,
+        "cargo-sources.json has no registry archives at all; \
+         it looks truncated or hand-edited"
+    );
     assert_eq!(
-        url_count, sha256_count,
-        "every source entry must carry a sha256 alongside its url; a \
-         hand-edited or corrupted file could drop checksums silently, \
-         which is exactly what this manifest's own comment warns against"
+        archive_count, sha256_count,
+        "every archive source must carry a sha256; a hand-edited or \
+         corrupted file could drop checksums silently, which is exactly \
+         what this manifest's own comment warns against"
+    );
+    assert_eq!(
+        url_count,
+        archive_count + git_count,
+        "every source must carry a url, and the only two kinds this \
+         generator emits are archives and git checkouts; a count that does \
+         not add up means an entry was dropped or a new source kind \
+         appeared that this scan does not understand"
     );
 
     // Cheap half of the drift problem: catch a `cargo update` inside the
