@@ -177,11 +177,114 @@ impl Credential {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
+
+    /// The exact committed bytes of the Orchard-generated fixture. Read as
+    /// bytes, not as a string, because the digest test below is over these
+    /// bytes; `.gitattributes` marks the file `-text` so a Windows checkout
+    /// cannot rewrite its line endings out from under that digest.
+    const ORCHARD_FIXTURE: &[u8] =
+        include_bytes!("../../tests/fixtures/orchard_worker_ipc_v0.json");
+    /// SHA-256 of `ORCHARD_FIXTURE`, published in `docs/compute-local-adapter.md`.
+    /// The test recomputes it rather than trusting the doc.
+    const ORCHARD_FIXTURE_SHA256: &str =
+        "eb7a86d64173203a39e332f40cc795da5f3e631c0951526b523258b88c30b23b";
+    const GENERATOR_SOURCE_SHA256: &str =
+        "402e6d791a890030f863e2f246b5f82f71b12371143f8faf30deee78bd589d68";
+    const IMPLEMENTATION_SOURCE_REVISION: &str = "7d6f70512fb6cd9faf936fc27ca367a5cd539de5";
+
     #[test]
     fn source_derived_vectors_pin_both_directions_and_reject_tampering() {
+        // The original source-derived cases intentionally reuse the same [7; 32] seed.
+        // Only the independently generated Orchard fixture exercises distinct seeds.
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../../tests/fixtures/worker_ipc_v0.json")).unwrap();
-        for case in fixture["cases"].as_array().unwrap() {
+        verify_compatibility_vectors(&fixture);
+    }
+
+    #[test]
+    fn orchard_generated_vectors_pin_both_seeds_and_reject_tampering() {
+        // Orchard 4d222766 is an UNMERGED local checkpoint; see compute-local-adapter.md.
+        let fixture: serde_json::Value = serde_json::from_slice(ORCHARD_FIXTURE).unwrap();
+        assert_eq!(fixture["generator_source_sha256"], GENERATOR_SOURCE_SHA256);
+        assert_eq!(
+            fixture["implementation_source_revision"],
+            IMPLEMENTATION_SOURCE_REVISION
+        );
+        let cases = fixture["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 2);
+        assert_ne!(cases[0]["seed_hex"], cases[1]["seed_hex"]);
+        for (case, seed_byte) in cases.iter().zip([9_u8, 17]) {
+            assert_eq!(case["seed_hex"], hex::encode([seed_byte; 32]));
+            let request: SignedRequest = serde_json::from_value(case["request"].clone()).unwrap();
+            assert_eq!(request.body.nonce, [seed_byte + 1; 32]);
+        }
+        verify_compatibility_vectors(&fixture);
+    }
+
+    /// The provenance fields were previously prose in the fixture that no test
+    /// read, so a fixture regenerated from a different source -- or one whose
+    /// metadata was edited to say anything at all -- still passed every
+    /// signature assertion. This is what a third party CAN check without access
+    /// to the private generator repository: that the committed bytes are the
+    /// bytes the documentation names, that the provenance fields are present
+    /// and well formed, and that the fixture and the doc agree on them. It is
+    /// NOT proof that Orchard produced the bytes; the seeds are public, so a
+    /// local regeneration would still verify cryptographically. Only the digest
+    /// pin below distinguishes the committed file from any other.
+    #[test]
+    fn orchard_fixture_provenance_fields_are_present_and_match_the_documentation() {
+        let digest = hex::encode(Sha256::digest(ORCHARD_FIXTURE));
+        assert_eq!(
+            digest, ORCHARD_FIXTURE_SHA256,
+            "orchard fixture bytes changed; regenerate per docs/compute-local-adapter.md \
+             and update the published digest rather than editing this constant"
+        );
+
+        let fixture: serde_json::Value = serde_json::from_slice(ORCHARD_FIXTURE).unwrap();
+        let generator = fixture["generator_source_sha256"].as_str().unwrap();
+        let revision = fixture["implementation_source_revision"].as_str().unwrap();
+        let notice = fixture["notice"].as_str().unwrap();
+        assert_eq!(generator, GENERATOR_SOURCE_SHA256);
+        assert_eq!(revision, IMPLEMENTATION_SOURCE_REVISION);
+        assert!(is_lowercase_hex(generator, 64), "{generator}");
+        assert!(is_lowercase_hex(revision, 40), "{revision}");
+        assert!(
+            notice.contains("Public fixed test seeds only"),
+            "the fixture must keep stating that it is not a workload proof: {notice}"
+        );
+
+        // The doc is the only place the fixture's own digest is published, and
+        // the doc is what an external reader reads. Drift between the two would
+        // leave that reader checking a stale digest against new bytes.
+        const DOC: &str = include_str!("../../../../docs/compute-local-adapter.md");
+        for claim in [
+            ORCHARD_FIXTURE_SHA256,
+            GENERATOR_SOURCE_SHA256,
+            IMPLEMENTATION_SOURCE_REVISION,
+        ] {
+            assert!(
+                DOC.contains(claim),
+                "docs/compute-local-adapter.md lost {claim}"
+            );
+        }
+        assert!(
+            DOC.contains("not publicly reproducible"),
+            "the doc must keep saying the generating repository is private"
+        );
+    }
+
+    fn is_lowercase_hex(value: &str, len: usize) -> bool {
+        value.len() == len
+            && value
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    }
+
+    fn verify_compatibility_vectors(fixture: &serde_json::Value) {
+        let cases = fixture["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 2);
+        for case in cases {
             let seed: [u8; 32] = hex::decode(case["seed_hex"].as_str().unwrap())
                 .unwrap()
                 .try_into()

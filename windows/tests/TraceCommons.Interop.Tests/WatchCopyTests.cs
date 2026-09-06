@@ -100,9 +100,87 @@ public class WatchCopyTests
     [InlineData("ask", "Ask me first")]
     [InlineData("notify_only", "Ask me first")]
     [InlineData("ignore", "Ignored")]
+    [InlineData("auto_upload", "Contributed without asking")]
     public void AnOrdinaryRowShowsItsModeInSettingsVocabulary(string mode, string expected)
     {
         Assert.Equal(expected, WatchCopy.SubLineFor(false, mode));
+    }
+
+    /// <summary>
+    /// An armed row says it is armed. Reporting "Ask me first" there would
+    /// state the opposite of what the daemon does with the next session, and
+    /// rendering nothing leaves the row that most needs a state line without
+    /// one -- which is what this screen did while the armed mode had no arm.
+    /// </summary>
+    [Fact]
+    public void AnArmedRowStatesThatItIsArmed()
+    {
+        string sub = WatchCopy.SubLineFor(false, "auto_upload");
+
+        Assert.NotEqual(string.Empty, sub);
+        Assert.NotEqual(WatchCopy.AskMeFirst, sub);
+        Assert.Equal(WatchCopy.Armed, sub);
+    }
+
+    /// <summary>
+    /// Every row a shell can render carries a state line. A blank line beside
+    /// a live button is a consent surface declining to say what it will do.
+    /// </summary>
+    [Theory]
+    [InlineData("ask")]
+    [InlineData("ignore")]
+    [InlineData("auto_upload")]
+    [InlineData("notify_only")]
+    [InlineData("future-mode")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void NoModeRendersABlankStateLine(string? mode)
+    {
+        Assert.NotEqual(string.Empty, WatchCopy.SubLineFor(false, mode));
+        Assert.NotEqual(string.Empty, WatchCopy.SubLineFor(true, mode));
+    }
+
+    /// <summary>
+    /// One transition, one word, on both project surfaces. Onboarding and
+    /// Settings drive the same field, and they read their labels from here.
+    /// </summary>
+    [Theory]
+    [InlineData("ask", "Ignore")]
+    [InlineData("ignore", "Ask again")]
+    [InlineData("auto_upload", "Ask again")]
+    public void TheButtonNamesTheTransitionOnceForBothSurfaces(string mode, string expected)
+    {
+        Assert.Equal(expected, WatchCopy.ActionFor(mode));
+    }
+
+    /// <summary>
+    /// No transition, no control. A mode this build does not know yields no
+    /// label at all rather than a disabled button with no words on it, and the
+    /// null is what tells the shell to hide it.
+    /// </summary>
+    [Theory]
+    [InlineData("future-mode")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void AModeWithNoTransitionOffersNoButton(string? mode)
+    {
+        Assert.Null(WatchCopy.ActionFor(mode));
+        Assert.Null(ProjectManualMode.Next(mode));
+    }
+
+    /// <summary>
+    /// The button never offers to arm a project from this screen, whatever the
+    /// mode: the action is always ignore or restore-review. Onboarding must not
+    /// grow an arming affordance by way of a label table.
+    /// </summary>
+    [Theory]
+    [InlineData("ask")]
+    [InlineData("ignore")]
+    [InlineData("auto_upload")]
+    public void NoButtonEverOffersToArmAProject(string mode)
+    {
+        Assert.NotEqual(WatchCopy.Armed, WatchCopy.ActionFor(mode));
+        Assert.NotEqual("auto_upload", ProjectManualMode.Next(mode));
     }
 
     /// <summary>

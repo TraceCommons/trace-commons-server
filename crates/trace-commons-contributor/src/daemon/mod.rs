@@ -38,6 +38,7 @@ pub mod notify;
 pub mod policy;
 pub mod preview;
 pub mod preview_scheduler;
+pub mod private_inference;
 pub mod profile;
 pub mod project_key;
 pub mod queue;
@@ -263,6 +264,14 @@ pub async fn start_embedded(store: ConfigStore) -> Result<EmbeddedDaemon> {
     // daemon had started, and produced a confident wrong diagnosis.
     let started = async {
         let shared = Arc::new(ipc::DaemonShared::load(store)?);
+        // Claim this runtime for anything the daemon hosts that outlives one
+        // request. This block is `async` and runs on the real daemon runtime
+        // in both entry points, which is the whole reason the call belongs
+        // here rather than in `load` -- `load` is synchronous and has callers
+        // that are inside no runtime at all. Without this a proxy started
+        // through the synchronous IPC path would be spawned onto the
+        // throwaway runtime that path builds, and would die with it.
+        shared.adopt_runtime();
         // The two transports are the same protocol over different plumbing: a
         // unix socket guarded by its 0700 state directory, or a Windows named
         // pipe guarded by its DACL. See `win_pipe` for why the Windows side
@@ -356,9 +365,32 @@ pub(crate) fn run_blocking<R>(f: impl FnOnce() -> R) -> R {
     }
 }
 
+/// The periodic work, with the hosted IronWire's lifetime wrapped around it.
+///
+/// Private inference is applied from settings before the first tick, so a
+/// daemon that starts with the switch already on is hosting the proxy by the
+/// time it answers its first `status`, and it is stopped on the way out for
+/// every way the loop *returns* -- request, signal, or error. A proxy left
+/// running past the daemon that started it would hold the port, the pointer
+/// and the home lock against the next start.
+///
+/// Two exits skip this stop: a panic unwinding through `supervise_passes`,
+/// and this future being dropped rather than driven to completion. Neither
+/// leaks the port -- `EmbeddedProxy::drop` requests shutdown, and process
+/// exit releases everything regardless -- but the difference is real: the
+/// explicit stop *awaits* the drain, so in-flight requests finish and the
+/// pointer and home lock are released before this returns, where the drop
+/// path only asks and does not wait.
+async fn supervise(shared: Arc<ipc::DaemonShared>, dry_run: bool) -> Result<()> {
+    shared.reconcile_private_inference().await;
+    let result = supervise_passes(&shared, dry_run).await;
+    shared.stop_private_inference().await;
+    result
+}
+
 /// The periodic work: watch, expire, and decide about digests, until asked to
 /// stop.
-async fn supervise(shared: Arc<ipc::DaemonShared>, dry_run: bool) -> Result<()> {
+async fn supervise_passes(shared: &Arc<ipc::DaemonShared>, dry_run: bool) -> Result<()> {
     let poll_interval = {
         let s = shared.settings.lock().expect("settings lock");
         std::time::Duration::from_secs(s.poll_interval_secs.max(1))
@@ -388,6 +420,12 @@ async fn supervise(shared: Arc<ipc::DaemonShared>, dry_run: bool) -> Result<()> 
                 // declared; otherwise bounded by the ledger's own short
                 // timeout, so this cannot stall the tick.
                 shared.refresh_routing().await;
+                // Applies a switch a client set over a transport that does
+                // not reach `handle_request_async` (the C ABI's pre-start
+                // settings override writes the file directly), and notices
+                // a proxy that ended on its own. Cheap when there is
+                // nothing to do, which is the ordinary case.
+                shared.reconcile_private_inference().await;
                 // Fixed labels, never `error = %e`. These errors are
                 // `anyhow::Error`s whose outermost context routinely embeds
                 // a filesystem path -- `write_atomic_0600`'s "creating temp
@@ -396,14 +434,14 @@ async fn supervise(shared: Arc<ipc::DaemonShared>, dry_run: bool) -> Result<()> 
                 // service manager these land in the journal, where the path
                 // carries the OS username. The condition worth logging is
                 // *which pass* failed, and health carries the rest.
-                if watcher::tick(&shared, now).await.is_err() {
+                if watcher::tick(shared, now).await.is_err() {
                     tracing::warn!(pass = "watch", "daemon pass failed");
                 }
-                expire_and_digest(&shared, now);
+                expire_and_digest(shared, now);
                 // Everything above is read-only bookkeeping; uploading is
                 // what dry-run withholds.
                 if !dry_run {
-                    if let Err(e) = drain_approved(&shared, now).await {
+                    if let Err(e) = drain_approved(shared, now).await {
                         // The one detail that is safe and load-bearing: a
                         // fail-closed precondition is a fixed label by
                         // construction (`SubmitPreconditionFailure`), and
@@ -414,10 +452,10 @@ async fn supervise(shared: Arc<ipc::DaemonShared>, dry_run: bool) -> Result<()> 
                             "daemon pass failed"
                         );
                     }
-                    if refresh_history(&shared, now).await.is_err() {
+                    if refresh_history(shared, now).await.is_err() {
                         tracing::warn!(pass = "history", "daemon pass failed");
                     }
-                    if refresh_community(&shared, now).await.is_err() {
+                    if refresh_community(shared, now).await.is_err() {
                         tracing::warn!(pass = "community", "daemon pass failed");
                     }
                 }
@@ -1428,6 +1466,30 @@ mod tests {
     /// `start_embedded` directly rather than through the FFI, is the one
     /// that actually proves the second failure is the lock, not something
     /// else: it asserts on the typed `StartFailure` the error carries.
+    /// Starting a daemon claims the runtime that hosted proxies must live
+    /// on.
+    ///
+    /// The mechanism has its own test in `ipc`, which flips the switch
+    /// through `handle_local` and probes the port afterwards -- but that
+    /// test calls `adopt_runtime` itself, so it proves the mechanism works
+    /// and not that anything calls it. This is the other half: delete the
+    /// call in `start_embedded` and a real daemon goes back to starting
+    /// proxies on whatever short-lived runtime the caller was standing on,
+    /// with nothing failing until an app flips the switch.
+    #[tokio::test]
+    async fn a_started_daemon_claims_a_runtime_for_hosted_proxies() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::config::ConfigStore::open(dir.path().to_path_buf()).unwrap();
+        let embedded = start_embedded(store).await.unwrap();
+        assert!(
+            embedded.shared.has_adopted_runtime(),
+            "a started daemon must claim its runtime, or a proxy started \
+             through the synchronous IPC path dies with the throwaway \
+             runtime that path builds"
+        );
+        embedded.close();
+    }
+
     #[tokio::test]
     async fn a_second_start_embedded_fails_specifically_on_the_lock() {
         let dir = tempfile::tempdir().unwrap();
