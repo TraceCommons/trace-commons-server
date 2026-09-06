@@ -1896,6 +1896,33 @@ fn cookie_request_headers(name: &str, value: &str) -> HeaderMap {
     headers
 }
 
+/// `export_job_request_metadata` records the request filters only. The
+/// replayable-request contract additionally requires `request_schema_version`,
+/// which production stamps in `create_validated_export_job_slice` on the way
+/// in. Tests that seed an export-job row directly bypass that, so a claimed
+/// job is rejected with `missing replayable request metadata` unless they add
+/// it here. Use this wherever a seeded job is meant to be claimable.
+fn replayable_export_job_metadata(
+    requested_limit: Option<usize>,
+    status: Option<TraceCorpusStatus>,
+    privacy_risk: Option<ResidualPiiRisk>,
+    consent_scope: Option<ConsentScope>,
+    external_ref: Option<&str>,
+) -> BTreeMap<String, String> {
+    let mut metadata = export_job_request_metadata(
+        requested_limit,
+        status,
+        privacy_risk,
+        consent_scope,
+        external_ref,
+    );
+    metadata.insert(
+        "request_schema_version".to_string(),
+        "trace_export_job_request.v1".to_string(),
+    );
+    metadata
+}
+
 #[tokio::test]
 async fn account_ctx_refuses_a_device_bearer() {
     let Some(backend) = postgres_backend_for_ingest_test().await else {
@@ -18039,7 +18066,7 @@ async fn export_worker_claims_and_runs_queued_replay_job_from_safe_metadata() {
             result_manifest_id: None,
             item_count: None,
             last_error: None,
-            metadata: export_job_request_metadata(
+            metadata: replayable_export_job_metadata(
                 Some(5),
                 Some(TraceCorpusStatus::Accepted),
                 Some(ResidualPiiRisk::Low),
@@ -18283,7 +18310,7 @@ async fn export_worker_claims_and_runs_queued_benchmark_job_from_safe_metadata()
             result_manifest_id: None,
             item_count: None,
             last_error: None,
-            metadata: export_job_request_metadata(
+            metadata: replayable_export_job_metadata(
                 Some(5),
                 Some(TraceCorpusStatus::Accepted),
                 Some(ResidualPiiRisk::Low),
@@ -18428,7 +18455,7 @@ async fn central_issuer_allowlist_blocks_credit_bearing_export_job_claims_before
                 result_manifest_id: None,
                 item_count: None,
                 last_error: None,
-                metadata: export_job_request_metadata(
+                metadata: replayable_export_job_metadata(
                     Some(5),
                     Some(TraceCorpusStatus::Accepted),
                     Some(ResidualPiiRisk::Low),
@@ -18598,7 +18625,7 @@ async fn export_worker_claims_and_runs_queued_ranker_jobs_from_safe_metadata() {
                 result_manifest_id: None,
                 item_count: None,
                 last_error: None,
-                metadata: export_job_request_metadata(
+                metadata: replayable_export_job_metadata(
                     Some(5),
                     Some(TraceCorpusStatus::Accepted),
                     Some(ResidualPiiRisk::Low),
@@ -18841,7 +18868,7 @@ async fn export_worker_run_queued_jobs_makes_bounded_progress_after_job_failure(
             result_manifest_id: None,
             item_count: None,
             last_error: None,
-            metadata: export_job_request_metadata(
+            metadata: replayable_export_job_metadata(
                 Some(5),
                 Some(TraceCorpusStatus::Accepted),
                 Some(ResidualPiiRisk::Low),
@@ -20834,7 +20861,7 @@ fn export_job_slice_keeps_safe_request_metadata_for_status_updates() {
             purpose: "metadata_unit".to_string(),
             requested_limit: Some(4),
             grant,
-            metadata: export_job_request_metadata(
+            metadata: replayable_export_job_metadata(
                 Some(4),
                 Some(TraceCorpusStatus::Accepted),
                 Some(ResidualPiiRisk::Low),
@@ -75742,7 +75769,7 @@ async fn passkey_list_flags_this_device_only_for_authenticating_credential() {
     );
 
     // (1) Bearer session lists BOTH with this_device=false (no passkey authed it).
-    let bearer = list_passkeys(&state, auth_headers("token-a")).await;
+    let bearer = list_passkeys(&state, account_session_headers(&state, "token-a").await).await;
     assert_eq!(bearer.len(), 2, "both credentials listed");
     assert!(
         bearer.iter().all(|(_, _, this_device)| !*this_device),
@@ -75831,7 +75858,7 @@ async fn passkey_rename_updates_label_and_404s_unknown() {
     .expect("rename succeeds");
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let listed = list_passkeys(&state, auth_headers("token-a")).await;
+    let listed = list_passkeys(&state, account_session_headers(&state, "token-a").await).await;
     let entry = listed
         .iter()
         .find(|(id, _, _)| *id == cred)
@@ -75898,7 +75925,7 @@ async fn passkey_remove_soft_deletes_and_404s_unknown() {
     );
 
     // cred1 excluded from the list; cred2 still present.
-    let listed = list_passkeys(&state, auth_headers("token-a")).await;
+    let listed = list_passkeys(&state, account_session_headers(&state, "token-a").await).await;
     let ids: std::collections::BTreeSet<&str> =
         listed.iter().map(|(id, _, _)| id.as_str()).collect();
     assert!(!ids.contains(cred1.as_str()), "removed credential excluded");
@@ -75949,7 +75976,7 @@ async fn passkey_management_is_cross_account_isolated() {
     let _b_cookie = mint_redeem_session_cookie_value(&state, "token-a-2").await;
 
     // B lists NONE of A's credentials.
-    let b_listed = list_passkeys(&state, auth_headers("token-a-2")).await;
+    let b_listed = list_passkeys(&state, account_session_headers(&state, "token-a-2").await).await;
     assert!(
         b_listed.iter().all(|(id, _, _)| *id != a_cred),
         "account B never sees account A's credential"
@@ -75983,7 +76010,7 @@ async fn passkey_management_is_cross_account_isolated() {
     assert_eq!(err.0, StatusCode::NOT_FOUND);
 
     // A's credential is unaffected: still listed, with no label set by B.
-    let a_listed = list_passkeys(&state, auth_headers("token-a")).await;
+    let a_listed = list_passkeys(&state, account_session_headers(&state, "token-a").await).await;
     let entry = a_listed
         .iter()
         .find(|(id, _, _)| *id == a_cred)
@@ -77914,7 +77941,8 @@ async fn near_identity_list_flags_this_session_only_for_authenticating_key() {
         .expect("insert second identity");
 
     // (1) Bearer session: BOTH listed, all this_session=false.
-    let bearer = list_near_identities(&state, auth_headers("token-a")).await;
+    let bearer =
+        list_near_identities(&state, account_session_headers(&state, "token-a").await).await;
     assert_eq!(bearer.len(), 2, "both identities listed");
     assert!(
         bearer.iter().all(|(_, _, _, this, _)| !*this),
@@ -77987,7 +78015,8 @@ async fn near_identity_rename_endpoint_updates_label_and_404s_unknown() {
     .expect("rename succeeds");
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let listed = list_near_identities(&state, auth_headers("token-a")).await;
+    let listed =
+        list_near_identities(&state, account_session_headers(&state, "token-a").await).await;
     let entry = listed
         .iter()
         .find(|(p, _, _, _, _)| *p == pk)
@@ -78071,7 +78100,8 @@ async fn near_identity_remove_endpoint_gated_and_soft_deletes() {
     );
 
     // Identity #2 excluded from the list; identity #1 still present.
-    let listed = list_near_identities(&state, auth_headers("token-a")).await;
+    let listed =
+        list_near_identities(&state, account_session_headers(&state, "token-a").await).await;
     let keys: std::collections::BTreeSet<&str> =
         listed.iter().map(|(p, _, _, _, _)| p.as_str()).collect();
     assert!(!keys.contains(pk2), "removed identity excluded");
@@ -78162,7 +78192,8 @@ async fn near_identity_management_is_cross_account_isolated() {
     let _b_cookie = mint_redeem_session_cookie_value(&state, "token-a-2").await;
 
     // B lists NONE of A's identities.
-    let b_listed = list_near_identities(&state, auth_headers("token-a-2")).await;
+    let b_listed =
+        list_near_identities(&state, account_session_headers(&state, "token-a-2").await).await;
     assert!(
         b_listed.iter().all(|(pk, _, _, _, _)| *pk != pk_a),
         "account B never sees account A's NEAR identity"
@@ -78190,7 +78221,8 @@ async fn near_identity_management_is_cross_account_isolated() {
     assert_eq!(err.0, StatusCode::NOT_FOUND);
 
     // A's identity is unaffected: still listed, with no label set by B.
-    let a_listed = list_near_identities(&state, auth_headers("token-a")).await;
+    let a_listed =
+        list_near_identities(&state, account_session_headers(&state, "token-a").await).await;
     let entry = a_listed
         .iter()
         .find(|(pk, _, _, _, _)| *pk == pk_a)
@@ -78264,7 +78296,8 @@ async fn near_payout_endpoint_designates_clears_and_flips_prior() {
     let strong_headers = || cookie_request_headers("tc_account_session", &near_cookie);
 
     // Nothing designated initially.
-    let listed = list_near_identities(&state, auth_headers("token-a")).await;
+    let listed =
+        list_near_identities(&state, account_session_headers(&state, "token-a").await).await;
     assert!(
         listed.iter().all(|(_, _, _, _, is_payout)| !*is_payout),
         "no payout designated initially"
@@ -78283,7 +78316,8 @@ async fn near_payout_endpoint_designates_clears_and_flips_prior() {
     );
     assert_eq!(body.get("is_payout").and_then(|v| v.as_bool()), Some(true));
 
-    let listed = list_near_identities(&state, auth_headers("token-a")).await;
+    let listed =
+        list_near_identities(&state, account_session_headers(&state, "token-a").await).await;
     let designated: Vec<&str> = listed
         .iter()
         .filter(|(_, _, _, _, is_payout)| *is_payout)
@@ -78296,7 +78330,8 @@ async fn near_payout_endpoint_designates_clears_and_flips_prior() {
         .await
         .expect("designate pk2 succeeds");
     assert_eq!(body.get("is_payout").and_then(|v| v.as_bool()), Some(true));
-    let listed = list_near_identities(&state, auth_headers("token-a")).await;
+    let listed =
+        list_near_identities(&state, account_session_headers(&state, "token-a").await).await;
     let designated: Vec<&str> = listed
         .iter()
         .filter(|(_, _, _, _, is_payout)| *is_payout)
@@ -78313,7 +78348,8 @@ async fn near_payout_endpoint_designates_clears_and_flips_prior() {
         .await
         .expect("clear pk2 succeeds");
     assert_eq!(body.get("is_payout").and_then(|v| v.as_bool()), Some(false));
-    let listed = list_near_identities(&state, auth_headers("token-a")).await;
+    let listed =
+        list_near_identities(&state, account_session_headers(&state, "token-a").await).await;
     assert!(
         listed.iter().all(|(_, _, _, _, is_payout)| !*is_payout),
         "no payout designated after clear"
@@ -78349,13 +78385,19 @@ async fn near_payout_endpoint_gated_for_weak_session() {
             .await;
 
     // A WEAK (bearer) session attempting to designate is 403'd by the gate.
-    let err = payout_patch(&state, auth_headers("token-a"), &pk1, true)
-        .await
-        .expect_err("weak payout change is gated while a strong authenticator remains");
+    let err = payout_patch(
+        &state,
+        account_session_headers(&state, "token-a").await,
+        &pk1,
+        true,
+    )
+    .await
+    .expect_err("weak payout change is gated while a strong authenticator remains");
     assert_eq!(err.0, StatusCode::FORBIDDEN);
 
     // Nothing was designated.
-    let listed = list_near_identities(&state, auth_headers("token-a")).await;
+    let listed =
+        list_near_identities(&state, account_session_headers(&state, "token-a").await).await;
     assert!(
         listed.iter().all(|(_, _, _, _, is_payout)| !*is_payout),
         "gated weak request designated nothing"
@@ -78394,9 +78436,14 @@ async fn near_payout_endpoint_unknown_and_cross_account_404() {
     // Account B (token-a-2, same tenant, zero strong of its own) targeting A's key
     // passes the gate (carve-out) and 404s at the DB (account-scoped), never a 403.
     let _b_cookie = mint_redeem_session_cookie_value(&state, "token-a-2").await;
-    let err = payout_patch(&state, auth_headers("token-a-2"), &pk_a, true)
-        .await
-        .expect_err("B cannot designate A's key");
+    let err = payout_patch(
+        &state,
+        account_session_headers(&state, "token-a-2").await,
+        &pk_a,
+        true,
+    )
+    .await
+    .expect_err("B cannot designate A's key");
     assert_eq!(
         err.0,
         StatusCode::NOT_FOUND,
@@ -78404,7 +78451,8 @@ async fn near_payout_endpoint_unknown_and_cross_account_404() {
     );
 
     // A's identity remains undesignated.
-    let a_listed = list_near_identities(&state, auth_headers("token-a")).await;
+    let a_listed =
+        list_near_identities(&state, account_session_headers(&state, "token-a").await).await;
     assert!(
         a_listed.iter().all(|(_, _, _, _, is_payout)| !*is_payout),
         "no spurious cross-account designation"
