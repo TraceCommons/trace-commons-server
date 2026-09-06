@@ -1267,11 +1267,11 @@ what was current when it was written.
 |---|---|
 | CVM | `8b8e6543-9743-41fc-ac05-a6b414888d5e` (upgraded, not recreated) |
 | App | `f1654b0beac2ac2afae4235ee3d907096cd8f3de` |
-| Image | `ghcr.io/tracecommons/trace-commons-witness@sha256:052165938c552e1d3ab68e141de4bc39d86f11761875fbd096a1454cd76d3345` |
+| Image | `ghcr.io/tracecommons/trace-commons-witness@sha256:75af1945502ebcd88b597993695549553fb011d0ff578aff357657f7e78e2d5c` |
 | Mode | `full-pipeline` (NEAR AI classifier) |
 | Signing address | `0x655a17fcf6d0b9069e1b1dd07a7f5535d0c76798` |
-| Instance `compose_hash` | `e848cac038d7a3181b0a9dbbd7ba63fbec3a2bed6aa6e58ad9309992eb9756eb` |
-| Measurement | `mrtd:f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077+mrconfigid:01e848cac038d7a3181b0a9dbbd7ba63fbec3a2bed6aa6e58ad9309992eb9756eb000000000000000000000000000000` |
+| Instance `compose_hash` | `612d996cd7197803ca6deefbddb50ba3d09d32ec91174065e5f5df035fc1ebf8` |
+| Measurement | `mrtd:f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077+mrconfigid:01612d996cd7197803ca6deefbddb50ba3d09d32ec91174065e5f5df035fc1ebf8000000000000000000000000000000` |
 | Policy version | `ironclaw-deterministic-secret-path-v3+privacy-filter-near-ai-v1` |
 | `public_logs` / `public_sysinfo` / `public_tcbinfo` | `false` / `false` / `true` |
 | `allowed_envs` | `["TRACE_NEAR_AI_PRIVACY_API_KEY"]` |
