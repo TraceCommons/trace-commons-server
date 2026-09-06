@@ -46,6 +46,38 @@ async fn invite_lookup_policy_confines_reads_to_the_presented_hash() {
     let pool = backend.trace_pool_for_test();
     let mut client = pool.get().await.expect("client");
 
+    // Provision the stand-in runtime role this test reads as. It is a test
+    // fixture, not a production role, so no migration creates it -- and the
+    // GRANT is per-database, so it has to be (re)applied against whatever
+    // database the run points at, not just the first one it ever ran on.
+    if let Err(error) = client
+        .batch_execute(
+            "DO $$ BEGIN
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_roles
+                      WHERE rolname = 'trace_invite_registry_test_reader'
+                 ) THEN
+                     CREATE ROLE trace_invite_registry_test_reader NOLOGIN NOBYPASSRLS;
+                 END IF;
+             END $$;",
+        )
+        .await
+    {
+        if error.code() == Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE) {
+            eprintln!("skipping: CREATEROLE privilege unavailable for invite reader fixture");
+            return;
+        }
+        panic!("create NOBYPASSRLS reader fixture role: {error}");
+    }
+    client
+        .batch_execute(
+            "GRANT USAGE ON SCHEMA public TO trace_invite_registry_test_reader;
+             GRANT SELECT ON onboarding_invite_grants
+                 TO trace_invite_registry_test_reader;",
+        )
+        .await
+        .expect("grant access to the NOBYPASSRLS reader fixture role");
+
     // Seed through the registry role. Do NOT seed as the connection's own
     // user: local dev users are frequently superusers, which bypasses RLS
     // outright and would make this test pass for the wrong reason. The
