@@ -2250,8 +2250,11 @@ mod tests {
     fn the_three_shells_print_the_same_statement() {
         let needle = GATE_STATEMENT.replace('"', "\\\"");
         for relative in [
+            // The Windows shell reads this sentence from `consent_copy.rs`
+            // across the ABI now, so there is nothing in its source to grep.
+            // macOS is the last transcription standing; this test goes with
+            // it in the next commit.
             "../../macos/Sources/TCShellCore/ReadGate.swift",
-            "../../windows/src/TraceCommons.Interop/ReadGate.cs",
         ] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
             let source = std::fs::read_to_string(&path)

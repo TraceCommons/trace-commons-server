@@ -214,6 +214,13 @@ public sealed class PreviewSheetViewModel : INotifyPropertyChanged, IDisposable
     /// <summary>The consent invariant. See <see cref="ReadGate"/>.</summary>
     public ReadGate Gate { get; } = new();
 
+    /// <summary>
+    /// The consent surface's sentences, read once. Null if the payload did
+    /// not arrive or would not parse, in which case the sheet shows no
+    /// claim rather than a blank one -- see ConsentSurface.Parse.
+    /// </summary>
+    private readonly ConsentCopy? _consent = ConsentSurface.Copy();
+
     /// <summary>Matched excerpts for the current search, newest search only.</summary>
     public ObservableCollection<string> Excerpts { get; } = new();
 
@@ -448,7 +455,7 @@ public sealed class PreviewSheetViewModel : INotifyPropertyChanged, IDisposable
 
     public bool CanDecide => !_deciding;
 
-    public string ContributeHelp => Gate.Help;
+    public string ContributeHelp => ConsentSurface.GateHelp(Gate.CanContribute) ?? string.Empty;
 
     /// <summary>
     /// The contributor's answer to <see cref="VerdictCopy.Question"/>: one of
@@ -600,7 +607,7 @@ public sealed class PreviewSheetViewModel : INotifyPropertyChanged, IDisposable
     /// because it is a statement about the mechanism and not a report on
     /// the state of anything.
     /// </summary>
-    public string GateStatement => ReadGate.Statement;
+    public string GateStatement => _consent?.GateStatement ?? string.Empty;
 
     public void SelectTab(PreviewTab tab) => Tab = tab;
 

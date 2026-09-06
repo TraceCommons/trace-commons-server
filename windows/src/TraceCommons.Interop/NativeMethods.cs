@@ -251,6 +251,21 @@ internal static class NativeMethods
     internal static extern IntPtr tc_routing_copy();
 
     /// <summary>
+    /// Every fixed sentence on the consent surface, as an owned JSON object;
+    /// free it with <see cref="tc_string_free"/>, which
+    /// <see cref="TakeOwnedString"/> does. NULL only on a caught panic.
+    /// </summary>
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr tc_consent_copy();
+
+    /// <summary>
+    /// Which of the two Contribute tooltips applies, chosen on the Rust
+    /// side. 1 is pinned; 0 and anything else are not.
+    /// </summary>
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr tc_consent_gate_help(int pinned);
+
+    /// <summary>
     /// The routing surface's "that file could not be used" sentence, already
     /// assembled. <paramref name="tokenPath"/> may be NULL, which is the
     /// "nothing resolved at all" case and a different sentence, not an error.
