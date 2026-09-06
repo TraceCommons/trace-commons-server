@@ -536,6 +536,24 @@ Steps 3 and 6 are the ones people skip. Step 3 exists because the measurement
 is read from a running instance, not predicted — see Reproducibility. Step 6
 exists because a pin set that only ever grows stops being a pin.
 
+#### Step 3 has a trap: the old container keeps answering
+
+Observed on the 2026-09-05 redeploys. After `phala deploy` upgrades the CVM,
+the old container went on answering for roughly a minute, and it answered with
+the **old** measurement — while `phala cvms get --json` already reported the
+new `compose_hash`. An operator who reads a measurement immediately after the
+deploy therefore reads the one they just replaced, and pinning it makes every
+client refuse the deployment that is actually running. `running` in
+`phala cvms get` describes the CVM, not the container, so it does not close the
+window.
+
+Treat that as an observation from two redeploys and not as a timing guarantee:
+do not wait out a minute, poll. Ask the witness for a certificate until the
+measurement it carries names the new `compose_hash`, and pin only then. The
+poll loop, and why the certificate rather than `/v1/attestation` is what
+carries a plaintext measurement, are in `docs/operator/attested-inference.md`,
+"The stale-container trap".
+
 ### The case that breaks it: changing the guest-API surface
 
 **A guest-API surface migration is not an image upgrade and this rollout does
@@ -1004,6 +1022,11 @@ Stated plainly so nobody reads the rest as tested:
 
 Read back from the running instance, not from what we asked for. Every value
 below came from `phala cvms get --json` or from a live certificate.
+
+Because every redeploy moves the measurement, the measurement blocks published
+in release notes go stale as soon as one happens — this file is the living
+source of the current measurement, and a release note is only a snapshot of
+what was current when it was written.
 
 | | |
 |---|---|
