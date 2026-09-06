@@ -320,8 +320,10 @@ Two operational consequences:
    be an allowlisted HTTPS origin with no query, fragment or userinfo, or the
    client refuses it as `inference_receipt_endpoint_invalid`.
    `TRACE_COMMONS_INFERENCE_RECEIPT_CHECK_ATTESTATION=true` (the literal word,
-   nothing else counts) additionally fetches a freshly-nonced attestation
-   report for the model that served —
+   nothing else counts) additionally **verifies the receipt** against the
+   call's own request and response bytes — signature, both digests, and that
+   the model the receipt *binds* is the model that served — and then fetches a
+   freshly-nonced attestation report for that model —
    `GET {base}/attestation/report?model={model}&signing_algo=ed25519&nonce={64 hex}`
    — and refuses the receipt unless its signer is one of the keys that
    report attests **for that model**, bound as
@@ -333,6 +335,16 @@ Two operational consequences:
    against `gateway_attestation.signing_address` — which is what this did
    before — refuses every real hosted-model receipt, because the gateway key
    signs none of them.
+
+   The verification step is not decorative: without it the gate compares only
+   the `signing_address` the endpoint *claimed* against the attested set, so a
+   hostile receipt endpoint returning a genuinely attested address over a
+   bogus signature would pass. The witness refuses such a submission either
+   way — but the client would have reported it as attested.
+
+   Note what the client gate still does not do: it does not verify the
+   report's TDX quote. A key from it is a claim by the provider, checked for
+   internal consistency and freshness, not a proof.
 5. **`ironwire_attested_bodies` on**, over IPC, as above.
 
 ### The limitation to state plainly

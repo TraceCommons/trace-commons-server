@@ -67,7 +67,7 @@
 
 use std::time::Duration;
 
-use trace_commons_attestation::receipt::{ReceiptAlgo, ReceiptPayload};
+use trace_commons_attestation::receipt::{ReceiptAlgo, ReceiptPayload, verify_receipt};
 use trace_commons_operator_client::host_allowlist::HostAllowlist;
 
 use super::attested::AttestedCall;
@@ -120,6 +120,17 @@ pub enum ReceiptFetchError {
     /// nothing.
     #[error("receipt signer is not an attested key for this model")]
     SignerNotAttested,
+    /// The receipt did not verify against the bytes of the call it is for:
+    /// a bad signature, a hash over other bytes, or a bound model that is not
+    /// the one that served.
+    ///
+    /// Distinct from [`Self::SignerNotAttested`] because the two send an
+    /// operator somewhere different -- a receipt that does not verify at all
+    /// points at the endpoint that served it, and one that verifies under an
+    /// unattested key points at the attestation. Neither carries a payload;
+    /// the underlying `ReceiptError` is caller data.
+    #[error("the receipt does not verify against this call")]
+    ReceiptUnverified,
 }
 
 /// Read a receipt out of the endpoint's JSON answer.
@@ -329,6 +340,42 @@ fn fresh_nonce_hex() -> Result<String, ReceiptFetchError> {
 /// it, so it can be tested without a stub. [`receipt_for_attested_call`]
 /// does the fetch and hands the body here.
 ///
+/// Verify a receipt against the bytes of the call it claims to be for.
+///
+/// The other network-free half of the attestation gate, split out for the same
+/// reason [`signer_matches_report`] is: it can be tested without a stub.
+///
+/// This is what stops the gate from being a comparison of two strings. Without
+/// it the check reads the `signing_address` the endpoint *claimed* and asks
+/// whether that address is attested -- which a hostile or compromised receipt
+/// endpoint satisfies by returning a genuinely attested address over a
+/// signature that verifies against nothing. The witness would still refuse
+/// such a submission, so the gap was fail-closed in direction, but a client
+/// that reports "attested" on an unverifiable receipt is telling the
+/// contributor something untrue.
+///
+/// Returns the verdict rather than `()` so the caller compares the **verified**
+/// signer against the attested set instead of the claimed one.
+///
+/// # Errors
+///
+/// [`ReceiptFetchError::ReceiptUnverified`] when the signature does not
+/// verify, either digest is over other bytes, or the receipt binds a model
+/// that is not the one that served.
+pub fn receipt_matches_call(
+    payload: &ReceiptPayload,
+    call: &AttestedCall,
+    model: &str,
+) -> Result<trace_commons_attestation::receipt::ReceiptVerdict, ReceiptFetchError> {
+    verify_receipt(
+        payload,
+        call.request_body().as_bytes(),
+        call.response_body().as_bytes(),
+        model,
+    )
+    .map_err(|_| ReceiptFetchError::ReceiptUnverified)
+}
+
 /// The signer is checked against the **model's** attested key set, not the
 /// gateway key. A hosted-model receipt is `signature_kind: "provider_tee"`
 /// and its signer is per-model; the gateway key signs no receipt, so the
@@ -385,9 +432,30 @@ pub async fn receipt_for_attested_call(
     let payload = fetch_receipt(&client, allowlist, endpoint, call.upstream_id(), model).await?;
 
     if check_attestation {
+        // Verify the receipt before asking whether its signer is attested.
+        //
+        // Without this the gate checks only that the address the endpoint
+        // *claimed* is attested for the model we asked for -- so a hostile or
+        // compromised receipt endpoint could hand back a genuinely attested
+        // address over a bogus signature and pass. The witness would still
+        // catch it, so the old shape was fail-closed in direction, but a
+        // client-side gate that reports "attested" on an unverifiable receipt
+        // is telling the contributor something untrue.
+        //
+        // `verify_receipt` over the call's own bytes is what closes it: it
+        // checks the signature, both body digests, and -- on the three-part
+        // form a hosted model returns -- that the model the receipt *binds*
+        // is the model that served. That last one matters here specifically,
+        // because the model is the key the attested set is looked up by, and
+        // it must be the receipt's own rather than the one we typed.
+        let verdict = receipt_matches_call(&payload, call, model)?;
+
         let nonce = fresh_nonce_hex()?;
         let report = fetch_attestation_report(&client, allowlist, endpoint, model, &nonce).await?;
-        signer_matches_report(&payload.signing_address, &report, &nonce, model)?;
+        // The *verified* signer, not the claimed one. They are equal by the
+        // time this runs, and taking it from the verdict is what keeps that
+        // true if the two ever diverge.
+        signer_matches_report(&verdict.signing_address, &report, &nonce, model)?;
     }
 
     Ok(payload)
@@ -731,6 +799,52 @@ mod tests {
             entry(MODEL_A, MODEL_A_KEY),
             entry(MODEL_B, MODEL_B_KEY)
         )
+    }
+
+    /// An attested signer over a signature that verifies against nothing.
+    ///
+    /// This is what a hostile or compromised receipt endpoint returns to walk
+    /// through a gate that only compares the *claimed* `signing_address`
+    /// against the attested set. `receipt_matches_call` is what refuses it,
+    /// and it refuses before any report is fetched.
+    #[test]
+    fn an_attested_address_over_a_bogus_signature_is_refused() {
+        let model = "Qwen/Qwen3.6-27B-FP8";
+        let (call, _dir) = attestable_call(Some(model));
+
+        let forged = ReceiptPayload {
+            text: format!(
+                "{model}:{}:{}",
+                hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
+                    call.request_body().as_bytes()
+                )),
+                hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
+                    call.response_body().as_bytes()
+                )),
+            ),
+            // 64 bytes of hex that is a well-formed signature and signs
+            // nothing.
+            signature: "11".repeat(64),
+            // A real, genuinely attested per-model key.
+            signing_address: MODEL_A_KEY.to_string(),
+            signing_algo: ReceiptAlgo::Ed25519,
+        };
+
+        assert_eq!(
+            receipt_matches_call(&forged, &call, model).unwrap_err(),
+            ReceiptFetchError::ReceiptUnverified,
+            "an attested address does not make an unverifiable receipt verified"
+        );
+
+        // And the weaker check it replaces would have passed it: the claimed
+        // address really is attested for this model.
+        let report = attestation_report(ATTESTATION_NONCE);
+        assert!(
+            signer_matches_report(&forged.signing_address, &report, ATTESTATION_NONCE, MODEL_A)
+                .is_ok(),
+            "the address alone passes the attestation comparison, which is \
+             exactly why the signature has to be verified too"
+        );
     }
 
     /// The composed check `receipt_for_attested_call` runs when the

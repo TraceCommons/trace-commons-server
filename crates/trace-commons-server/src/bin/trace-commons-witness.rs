@@ -289,6 +289,27 @@ async fn main() -> Result<()> {
         bail!("TRACE_COMMONS_WITNESS_REQUEST_TIMEOUT_SECS must be greater than zero");
     }
 
+    // The retired gateway pin. It is no longer read, and a witness that
+    // silently ignored it would start, pin nothing, and leave an operator
+    // believing it pins -- which is the exact failure this release exists to
+    // fix, in a new place. This repo's rule is that a configured gate whose
+    // dependency is gone refuses, so refuse, and name the replacement.
+    //
+    // Checked directly rather than through a clap argument: the point is to
+    // notice a variable nothing is meant to parse. Presence alone is enough,
+    // including when it is set to the empty string.
+    if std::env::var_os("TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN").is_some() {
+        bail!(
+            "TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN is set but is no longer read. \
+             It pinned the inference gateway's signing key, which signs no \
+             receipt, so it refused every real receipt. Unset it. To pin receipt \
+             signers, set TRACE_COMMONS_WITNESS_MODEL_KEY_PINS to \
+             `model=key[,model=key...]` using each model's own attested ed25519 \
+             key -- see deploy/witness/README.md for the derivation. Leaving it \
+             unset is the dormant default."
+        );
+    }
+
     // Before the listener binds: the agent round trip that derives the signing
     // key and reads the boot measurement. A witness that cannot name itself
     // must not start.

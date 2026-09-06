@@ -98,8 +98,12 @@ services:
       #?model=<MODEL>&signing_algo=ed25519&nonce=$NONCE" \
       #     | jq -r --arg n "$NONCE" --arg m "<MODEL>" \
       #       '.model_attestations[] | select(.model_name==$m)
-      #        | select(.report_data == (.signing_address + $n))
+      #        | select(.intel_quote[1136:1264] == (.signing_address + $n))
       #        | .signing_address'
+      #
+      # A model attestation has NO report_data field -- only the gateway does.
+      # The binding is inside intel_quote at the TDX report_data position,
+      # byte 568 for 64 bytes, which is hex characters [1136:1264].
       #
       # The values are public keys, so they belong here rather than in a
       # deploy-time secret -- which also puts them inside the measurement.

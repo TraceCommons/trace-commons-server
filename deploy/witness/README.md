@@ -767,7 +767,9 @@ curl -s --get https://cloud-api.near.ai/v1/attestation/report \
     .model_attestations[]
     | select(.model_name == $m)
     | select(.signing_algo == "ed25519")
-    | select(.report_data == (.signing_address + $n))
+    # report_data lives INSIDE the quote, at byte offset 568, length 64.
+    # In hex characters that is [1136 : 1264].
+    | select(.intel_quote[1136:1264] == (.signing_address + $n))
     | .signing_address'
 ```
 
@@ -777,9 +779,25 @@ parameter that selects which attestations come back, and the default is ECDSA
 verifies. A report fetched without it looks entirely well formed and attests
 the wrong thing. That omission is what produced the gateway-key mistake above.
 
-The `select(.report_data == (.signing_address + $n))` line is the binding
-check, and it is the reason for the nonce: without it you are pinning a key
-some report once listed, rather than one attested against a value you chose.
+**A `model_attestations` entry carries no `report_data` field.** Only
+`gateway_attestation` has one, as a convenience echo of what its own quote
+already says. On a model attestation the binding is inside `intel_quote`, at
+the TDX quote's standard `report_data` position: byte offset 568, 64 bytes —
+`signing_address` then `request_nonce`, exactly. That is what the slice above
+reads, and it is what the code checks (`attested_ed25519_key` prefers the
+quote and requires the JSON echo to agree with it wherever both exist). An
+earlier draft of this section told you to filter on a `.report_data` field;
+that filter matches nothing on a model attestation and would have yielded an
+empty pin list.
+
+The `select(...)` line is the binding check, and it is the reason for the
+nonce: without it you are pinning a key some report once listed, rather than
+one attested against a value you chose.
+
+Two things this derivation does **not** do, and should not be read as doing:
+it does not verify the quote's signature against Intel collateral, and it does
+not check the quote's measurements. You are trusting the report you read, once,
+at pin time.
 
 The witness does not fetch the report on the request path — it makes no
 outbound calls while serving, and a report fetched at request time would be

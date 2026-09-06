@@ -434,7 +434,12 @@ impl InferenceAttestationPolicy {
                 .iter()
                 .map(|key| normalize_ed25519_key(key).ok_or(ModelKeyPinMalformed))
                 .collect::<Result<Vec<_>, _>>()?;
-            normalised.insert(model, keys);
+            // The *trimmed* name, matching what was validated. Inserting the
+            // padded one would give a programmatic caller a pin keyed by a
+            // string no receipt can ever name -- configured, and unmatchable.
+            // `parse_model_key_pins` already trims; this is for callers that
+            // build the map themselves.
+            normalised.insert(model.trim().to_string(), keys);
         }
         self.model_key_pins = Some(normalised);
         Ok(self)
@@ -1879,15 +1884,38 @@ mod tests {
             &raw,
         );
         // A receipt from the pinned key, bound to a model that is not pinned.
+        //
+        // The bodies here are OTHER_MODEL's, deliberately. Reusing MODEL's
+        // contribution would make `verify_receipt` return `ModelMismatch`
+        // against the request body's model and this case would never reach
+        // the pin branch at all -- it would assert the folding of a failure
+        // it never provoked.
+        let other_request = request_body(OTHER_MODEL, "hello");
+        let other_raw = contribution(&[(other_request.clone(), response.clone())]);
+        assert!(
+            check(
+                &required(),
+                Some(&ed25519_receipt(
+                    MODEL_A_SEED_HEX,
+                    OTHER_MODEL,
+                    &other_request,
+                    &response
+                )),
+                &other_raw
+            )
+            .is_ok(),
+            "this receipt must be valid under no pins, or the refusal below is \
+             a ModelMismatch rather than the pin branch"
+        );
         let unpinned_model = check(
             &policy,
             Some(&ed25519_receipt(
                 MODEL_A_SEED_HEX,
                 OTHER_MODEL,
-                &request,
+                &other_request,
                 &response,
             )),
-            &raw,
+            &other_raw,
         );
         // A receipt from the pinned key, binding no model at all.
         let no_model = check(
