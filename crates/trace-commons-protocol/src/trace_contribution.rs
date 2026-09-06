@@ -2722,8 +2722,7 @@ impl PrivacyFilterAdapter for CommandPrivacyFilterAdapter {
 }
 
 fn privacy_filter_bytes_hash(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    format!("sha256:{}", hex::encode(digest))
+    canonical_json::sha256_prefixed(bytes)
 }
 
 pub fn privacy_filter_adapter_from_env() -> Result<
@@ -6632,8 +6631,7 @@ fn safe_payload_summary(payload: &Value) -> String {
 }
 
 fn canonical_hash(content: &str) -> String {
-    let digest = Sha256::digest(content.as_bytes());
-    format!("sha256:{}", hex::encode(digest))
+    canonical_json::sha256_prefixed(content.as_bytes())
 }
 
 /// Put every event's untyped payload into key order.

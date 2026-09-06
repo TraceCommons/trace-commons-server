@@ -96,7 +96,7 @@ The original `worker_ipc_v0.json` vectors were derived from reading revision
 fixtures, not captured responses or upstream-generated interoperability evidence.
 The signed fake-worker child exercises real endpoint publication, request checking,
 readiness, state transitions and drain, but implements the same source-derived
-model. A running upstream worker transcript remains a release gate.
+model. An independently generated upstream transcript remains a release gate.
 
 ### Orchard-generated compatibility fixture (UNMERGED source)
 
@@ -150,7 +150,7 @@ A third party with only this repository **can**:
 That same reader **cannot**:
 
 - regenerate the fixture. The generating repository is private to the nearai
-  organization, so the reproduce command below runs only in an authorized
+  organization, so the reproduce command above runs only in an authorized
   checkout;
 - establish from this repository that Orchard, rather than a local
   regeneration by Trace, produced the bytes. The seeds are public and the

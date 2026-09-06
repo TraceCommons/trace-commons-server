@@ -284,13 +284,7 @@ impl Sheet {
             .margin_start(space::L)
             .margin_end(space::L)
             .build();
-        let search_prompt = gtk::Label::builder()
-            .label(copy::SEARCH_PROMPT)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        search_prompt.add_css_class("tc-body");
-        search_page.append(&search_prompt);
+        style::append_body(&search_page, copy::SEARCH_PROMPT);
         search_page.append(&search_field);
         search_page.append(&recents);
         search_page.append(&search_summary);
@@ -454,12 +448,7 @@ impl Sheet {
         // The concession, on the footer rather than on a tab, so it is on
         // screen at the moment of the decision whichever tab is open. See
         // `copy::RESIDUAL_RISK`.
-        let residual_risk = gtk::Label::builder()
-            .label(copy::RESIDUAL_RISK)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        residual_risk.add_css_class("tc-caveat");
+        let residual_risk = style::caveat(copy::RESIDUAL_RISK);
 
         // The verdict question: entirely optional, and it never gates
         // `Contribute` -- a contributor who does not answer is
@@ -467,12 +456,7 @@ impl Sheet {
         // see. Reuses the tab strip's segmented-control styling
         // (`.tc-tab-track` / `.tc-tab`) rather than a new one, so this
         // stays the same brand rather than borrowing the GNOME accent.
-        let verdict_question = gtk::Label::builder()
-            .label(copy::VERDICT_QUESTION)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        verdict_question.add_css_class("tc-caveat");
+        let verdict_question = style::caveat(copy::VERDICT_QUESTION);
 
         let verdict_track = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -514,12 +498,7 @@ impl Sheet {
         //
         // Optional throughout. `Contribute` is never gated on it; see
         // `sync_contribute`, which does not read it.
-        let correction_question = gtk::Label::builder()
-            .label(copy::CORRECTION_QUESTION)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        correction_question.add_css_class("tc-caveat");
+        let correction_question = style::caveat(copy::CORRECTION_QUESTION);
 
         let correction_view = gtk::TextView::builder()
             .wrap_mode(gtk::WrapMode::WordChar)
@@ -1047,13 +1026,7 @@ impl Sheet {
         let panel = style::card(gtk::Orientation::Vertical, space::S);
         panel.append(&style::section(copy::REDACTION_PANEL_REMOVED));
         if removed.is_empty() {
-            let none = gtk::Label::builder()
-                .label(copy::NOTHING_MATCHED)
-                .xalign(0.0)
-                .wrap(true)
-                .build();
-            none.add_css_class("tc-meta");
-            panel.append(&none);
+            style::append_meta(&panel, copy::NOTHING_MATCHED);
         }
         for row in &removed {
             panel.append(&summary_row(row, Tone::Neutral));
@@ -1066,15 +1039,10 @@ impl Sheet {
             }
         }
 
-        let caveat = gtk::Label::builder()
-            .label(copy::residual_risk_line(
-                crate::redaction_labels::removed_total(&summary.redactions),
-            ))
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        caveat.add_css_class("tc-caveat");
-        panel.append(&caveat);
+        style::append_caveat(
+            &panel,
+            copy::residual_risk_line(crate::redaction_labels::removed_total(&summary.redactions)),
+        );
 
         self.removed_summary.append(&panel);
     }
@@ -1152,13 +1120,7 @@ impl Sheet {
             badge.append(&style::tag("Not connected yet", Tone::Held));
             badge.set_halign(gtk::Align::Start);
             unenrolled.append(&badge);
-            let body = gtk::Label::builder()
-                .label(copy::UNENROLLED_PREVIEW)
-                .xalign(0.0)
-                .wrap(true)
-                .build();
-            body.add_css_class("tc-body");
-            unenrolled.append(&body);
+            style::append_body(&unenrolled, copy::UNENROLLED_PREVIEW);
             self.whats_in_it.append(&unenrolled);
         }
 
@@ -1167,13 +1129,7 @@ impl Sheet {
         while let Some(child) = self.permissions.first_child() {
             self.permissions.remove(&child);
         }
-        let intro = gtk::Label::builder()
-            .label(copy::PERMISSIONS_INTRO)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        intro.add_css_class("tc-body");
-        self.permissions.append(&intro);
+        style::append_body(&self.permissions, copy::PERMISSIONS_INTRO);
         let sheet = Rc::clone(self);
         let scopes = summary.consent_scopes.clone();
         self.app.call(
@@ -1194,13 +1150,7 @@ impl Sheet {
                         .permissions
                         .append(&super::titled_paragraph(name, &description));
                 }
-                let note = gtk::Label::builder()
-                    .label(copy::PERMISSIONS_REQUESTED_NOTE)
-                    .xalign(0.0)
-                    .wrap(true)
-                    .build();
-                note.add_css_class("tc-caveat");
-                sheet.permissions.append(&note);
+                style::append_caveat(&sheet.permissions, copy::PERMISSIONS_REQUESTED_NOTE);
             },
         );
 
@@ -1314,12 +1264,7 @@ impl Sheet {
             let heading = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             heading.append(&style::tag(copy::NOTHING_MATCHED, Tone::Attention));
             heading.set_halign(gtk::Align::Start);
-            let caution = gtk::Label::builder()
-                .label(copy::NOTHING_MATCHED_BODY)
-                .xalign(0.0)
-                .wrap(true)
-                .build();
-            caution.add_css_class("tc-body");
+            let caution = style::body(copy::NOTHING_MATCHED_BODY);
             card.append(&heading);
             card.append(&caution);
             self.search_results.append(&card);
@@ -1955,13 +1900,7 @@ fn summary_row(row: &crate::redaction_summary::Row, tone: Tone) -> gtk::Box {
     head.append(&counts);
     container.append(&head);
 
-    let description = gtk::Label::builder()
-        .label(row.description)
-        .xalign(0.0)
-        .wrap(true)
-        .build();
-    description.add_css_class("tc-meta");
-    container.append(&description);
+    style::append_meta(&container, row.description);
 
     if !row.detail.is_empty() {
         let detail = gtk::Label::builder()
