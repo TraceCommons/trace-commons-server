@@ -17,6 +17,8 @@ public struct PrivateInferenceCopy: Decodable, Equatable, Sendable {
     public let settingsTitle: String
     public let settingsToggle: String
     public let settingsAppliesAtOnce: String
+    public let stateUnknown: String
+    public let stateStopping: String
     public let stateOff: String
     public let stateRunning: String
     public let stateRunningNoBackends: String
@@ -41,6 +43,8 @@ public struct PrivateInferenceCopy: Decodable, Equatable, Sendable {
         case settingsTitle = "settings_title"
         case settingsToggle = "settings_toggle"
         case settingsAppliesAtOnce = "settings_applies_at_once"
+        case stateUnknown = "state_unknown"
+        case stateStopping = "state_stopping"
         case stateOff = "state_off"
         case stateRunning = "state_running"
         case stateRunningNoBackends = "state_running_no_backends"
@@ -107,7 +111,7 @@ public struct PrivateInferenceState: Equatable, Sendable {
     ///
     /// A daemon that has never heard of the field sends nothing, and that
     /// reads as the empty label -- which the shared table answers with the
-    /// off sentence. Never `nil`: a settings screen with no state at all
+    /// unavailable sentence. Never `nil`: a settings screen with no state at all
     /// would show the switch and nothing beneath it, which is the shape that
     /// says "on" over a listener that refused to start.
     public static func parse(_ object: [String: Any]?) -> PrivateInferenceState {
@@ -151,7 +155,7 @@ public enum PrivateInferenceSurface {
     /// The `set_settings` key recording that the question was put.
     public static let offerSeenKey = "private_inference_offer_seen"
 
-    /// The sentence under the switch. Falls back to the payload's own off
+    /// The sentence under the switch. Falls back to the payload's unavailable
     /// sentence when the Rust caught a panic -- the sentence that claims
     /// nothing, never the one that says it is running.
     public static func stateLine(
@@ -159,7 +163,7 @@ public enum PrivateInferenceSurface {
         copy: PrivateInferenceCopy,
         calls: PrivateInferenceCalls
     ) -> String {
-        calls.stateLine(state.label) ?? copy.stateOff
+        calls.stateLine(state.label) ?? copy.stateUnknown
     }
 
     /// The tone that sentence is painted in.

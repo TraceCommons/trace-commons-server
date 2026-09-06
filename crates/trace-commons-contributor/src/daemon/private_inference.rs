@@ -40,6 +40,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Nothing has been asked for, or the switch was turned off.
 pub const LABEL_OFF: &str = "off";
+/// Shutdown was requested, but owned requests or cleanup are still draining.
+pub const LABEL_STOPPING: &str = "stopping";
 /// This daemon owns a proxy that came up with a usable backend registry.
 pub const LABEL_RUNNING: &str = "running";
 /// This daemon owns a proxy whose backend registry is empty.

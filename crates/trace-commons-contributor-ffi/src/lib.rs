@@ -2202,10 +2202,10 @@ pub extern "C" fn tc_private_inference_copy() -> *mut c_char {
 ///
 /// `state` is the `state` field of `get_settings`/`status`'s
 /// `private_inference_state` object: `off`, `running`, `running_no_backends`,
-/// `running_elsewhere`, `port_in_use`, `start_failed` or `crashed`.
+/// `running_elsewhere`, `stopping`, `port_in_use`, `start_failed` or `crashed`.
 ///
 /// A label this build has never heard of -- and a NULL or non-UTF-8 `state`
-/// -- reads as the off sentence, which claims nothing. It never falls through
+/// -- reads as the unavailable sentence. It never falls through
 /// to one of the three "on" sentences.
 ///
 /// Returns an owned string; free it with [`tc_string_free`]. NULL only on a

@@ -51,6 +51,12 @@ public sealed record PrivateInferenceCopy
     [JsonPropertyName("settings_applies_at_once")]
     public string SettingsAppliesAtOnce { get; init; } = string.Empty;
 
+    [JsonPropertyName("state_unknown")]
+    public string StateUnknown { get; init; } = string.Empty;
+
+    [JsonPropertyName("state_stopping")]
+    public string StateStopping { get; init; } = string.Empty;
+
     [JsonPropertyName("state_off")]
     public string StateOff { get; init; } = string.Empty;
 
@@ -97,6 +103,8 @@ public sealed record PrivateInferenceCopy
             SettingsTitle,
             SettingsToggle,
             SettingsAppliesAtOnce,
+            StateUnknown,
+            StateStopping,
             StateOff,
             StateRunning,
             StateRunningNoBackends,

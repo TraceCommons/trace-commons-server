@@ -2878,7 +2878,7 @@ fn render_private_inference(app: &Rc<App>, settings: &crate::model::Settings) {
     }
     // A daemon that has never heard of the field sends nothing, and the
     // shared table answers an absent label the same way it answers an
-    // unknown one: with the off sentence, which claims nothing.
+    // unknown one: with the unavailable sentence.
     let (label, port) = match settings.private_inference_state.as_ref() {
         Some(state) => (state.state.as_str(), state.port),
         None => ("", None),
@@ -4548,6 +4548,15 @@ mod tests {
         assert_ne!(tone("running_no_backends"), Tone::Clear);
         assert_eq!(tone("running_elsewhere"), Tone::Held);
         assert_eq!(tone("off"), Tone::Neutral);
+        assert_eq!(tone("stopping"), Tone::Held);
+        assert_ne!(
+            copy::private_inference_state_line(""),
+            copy::private_inference_state_line("off")
+        );
+        assert_ne!(
+            copy::private_inference_state_line("stopping"),
+            copy::private_inference_state_line("off")
+        );
         for failure in ["port_in_use", "start_failed", "crashed"] {
             assert_eq!(tone(failure), Tone::Refused, "{failure}");
         }

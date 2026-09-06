@@ -74,7 +74,7 @@ final class PrivateInferenceExportTests: XCTestCase {
         XCTAssertTrue(copy.offerExposure.contains("accounts"), copy.offerExposure)
     }
 
-    /// The seven state sentences the daemon can produce cross intact, and
+    /// The state sentences the daemon can produce cross intact, and
     /// each is the payload field that names it.
     func testEachStateRendersTheSentenceTheRustExports() throws {
         let copy = try XCTUnwrap(copy())
@@ -84,6 +84,7 @@ final class PrivateInferenceExportTests: XCTestCase {
                 PrivateInferenceState(label: label, port: nil), copy: copy, calls: calls)
         }
         XCTAssertEqual(line("off"), copy.stateOff)
+        XCTAssertEqual(line("stopping"), copy.stateStopping)
         XCTAssertEqual(line("running"), copy.stateRunning)
         XCTAssertEqual(line("running_no_backends"), copy.stateRunningNoBackends)
         XCTAssertEqual(line("running_elsewhere"), copy.stateRunningElsewhere)
@@ -91,8 +92,8 @@ final class PrivateInferenceExportTests: XCTestCase {
         XCTAssertEqual(line("start_failed"), copy.stateStartFailed)
         XCTAssertEqual(line("crashed"), copy.stateCrashed)
         // A state a later daemon grows, and no state at all, claim nothing.
-        XCTAssertEqual(line("a_state_from_a_later_daemon"), copy.stateOff)
-        XCTAssertEqual(line(""), copy.stateOff)
+        XCTAssertEqual(line("a_state_from_a_later_daemon"), copy.stateUnknown)
+        XCTAssertEqual(line(""), copy.stateUnknown)
     }
 
     /// Exactly one state may be painted as working, and it is not the one
@@ -107,6 +108,7 @@ final class PrivateInferenceExportTests: XCTestCase {
         XCTAssertEqual(tone("running_no_backends"), .attention)
         XCTAssertNotEqual(tone("running_no_backends"), .clear)
         XCTAssertEqual(tone("running_elsewhere"), .held)
+        XCTAssertEqual(tone("stopping"), .held)
         XCTAssertEqual(tone("off"), .neutral)
         for failure in ["port_in_use", "start_failed", "crashed"] {
             XCTAssertEqual(tone(failure), .refused, failure)

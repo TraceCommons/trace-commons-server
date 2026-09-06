@@ -3360,6 +3360,7 @@ fn the_private_inference_branch_tables_cross_the_abi() {
 
     for state in [
         "off",
+        "stopping",
         "running",
         "running_no_backends",
         "running_elsewhere",
@@ -3410,7 +3411,7 @@ fn the_private_inference_branch_tables_cross_the_abi() {
     );
     assert_eq!(
         take_owned(unsafe { tc_private_inference_state_line(std::ptr::null()) }),
-        copy::STATE_OFF
+        copy::STATE_UNKNOWN
     );
 }
 

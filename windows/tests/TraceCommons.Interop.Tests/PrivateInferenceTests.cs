@@ -125,9 +125,11 @@ public class PrivateInferenceTests
             copy.StateStartFailed, PrivateInferenceSurface.StateLine(State("start_failed"), copy));
         Assert.Equal(copy.StateCrashed, PrivateInferenceSurface.StateLine(State("crashed"), copy));
         Assert.Equal(
-            copy.StateOff,
+            copy.StateUnknown,
             PrivateInferenceSurface.StateLine(State("a_state_from_a_later_daemon"), copy));
-        Assert.Equal(copy.StateOff, PrivateInferenceSurface.StateLine(State(string.Empty), copy));
+        Assert.Equal(copy.StateUnknown, PrivateInferenceSurface.StateLine(State(string.Empty), copy));
+        Assert.Equal(copy.StateStopping, PrivateInferenceSurface.StateLine(State("stopping"), copy));
+        Assert.Equal(PrivateInferenceTone.Held, PrivateInferenceSurface.Tone(State("stopping")));
     }
 
     /// <summary>

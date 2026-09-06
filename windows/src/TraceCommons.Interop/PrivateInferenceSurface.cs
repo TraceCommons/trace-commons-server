@@ -119,7 +119,7 @@ public static class PrivateInferenceSurface
     }
 
     /// <summary>
-    /// The sentence for one state. Falls back to the payload's own off
+    /// The sentence for one state. Falls back to the payload's unavailable
     /// sentence when the Rust caught a panic -- the one that claims nothing,
     /// never the one that says it is running.
     /// </summary>
@@ -128,7 +128,7 @@ public static class PrivateInferenceSurface
         ArgumentNullException.ThrowIfNull(copy);
         return NativeMethods.TakeOwnedString(
                 NativeMethods.tc_private_inference_state_line(state.Label))
-            ?? copy.StateOff;
+            ?? copy.StateUnknown;
     }
 
     /// <summary>The tone that sentence is painted in.</summary>
