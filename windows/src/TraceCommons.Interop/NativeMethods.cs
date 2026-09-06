@@ -251,6 +251,63 @@ internal static class NativeMethods
     internal static extern IntPtr tc_routing_copy();
 
     /// <summary>
+    /// Every fixed word on the private-inference offer and settings card, as
+    /// an owned JSON object.
+    ///
+    /// ONE CALL, NOT ONE PER STRING, for the reason
+    /// <see cref="tc_routing_copy"/> gives. The sentence a per-string export
+    /// would invite this shell to hand-write is the one saying that while the
+    /// switch is on, anything else running on this computer can send calls
+    /// through it, charged to the accounts configured here -- which is the
+    /// reason the offer is allowed to exist at all.
+    /// </summary>
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr tc_private_inference_copy();
+
+    /// <summary>
+    /// The sentence for one <c>private_inference_state</c> label. A label
+    /// this build has never heard of -- and a NULL one -- reads as the off
+    /// sentence, which claims nothing; it never falls through to one of the
+    /// three "on" sentences. NULL only on a caught panic.
+    /// </summary>
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    internal static extern IntPtr tc_private_inference_state_line(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? state);
+
+    /// <summary>
+    /// How that sentence is painted, as a raw
+    /// <c>TC_PRIVATE_INFERENCE_TONE_*</c> value.
+    ///
+    /// Takes what the sentence takes, so the two cannot drift apart. This
+    /// shell must NOT recover the tone by reading the rendered sentence:
+    /// three of the seven begin with the same two words. Never fails --
+    /// anything unreadable answers the neutral tone, which claims nothing and
+    /// is never the working light.
+    /// </summary>
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    internal static extern int tc_private_inference_state_tone(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? state);
+
+    /// <summary>
+    /// Where the listener is answering, already assembled. A port outside
+    /// 1..65535 -- including the 0 this shell passes for a JSON null -- gives
+    /// the EMPTY STRING rather than a sentence naming a number nobody bound.
+    /// </summary>
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr tc_private_inference_serving_line(int port);
+
+    /// <summary>
+    /// Whether to put the offer in front of the contributor. Non-zero to ask.
+    ///
+    /// THE BRANCH TABLE CROSSES, and this branch decides whether to interrupt
+    /// somebody. Three shells each deciding when to ask is three chances to
+    /// re-ask a contributor who already said no. Answers 0 on a caught panic:
+    /// silence is the safe direction for an interruption.
+    /// </summary>
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int tc_private_inference_should_offer(int answered, int on);
+
+    /// <summary>
     /// The routing surface's "that file could not be used" sentence, already
     /// assembled. <paramref name="tokenPath"/> may be NULL, which is the
     /// "nothing resolved at all" case and a different sentence, not an error.

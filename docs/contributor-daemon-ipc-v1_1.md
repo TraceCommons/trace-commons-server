@@ -448,7 +448,7 @@ pins. No account token, device key or PKCE verifier is returned to native views.
 | `discover_routing` | — | `found`, plus `port` and optionally `token_path` when found | reads the pointer a running IronWire published, so the declaring flow can pre-fill instead of asking; no network I/O and **never returns the token**; see "`discover_routing`" below |
 | `quiesce` | `timeout_secs` (optional, default 60, max 300) | `quiesced: true`, `waited_ms` | parks uploads for an update swap; `busy` / `quiesce-timeout` if in-flight work does not finish in time |
 | `get_settings` | — | settings; credential and local paths reported as booleans only | |
-| `set_settings` | any of `quiescence_secs`, `digest_interval_secs`, `approval_hold_secs`, `local_notifications`, `claude_root`, `codex_root`, `claude_source`, `codex_source`, `gemini_source`, `cline_source`, `ironwire`, `ironwire_attested_bodies`, `private_inference`, `max_uploads_per_day`, `max_bytes_per_day` | updated settings | see "`set_settings`" below |
+| `set_settings` | any of `quiescence_secs`, `digest_interval_secs`, `approval_hold_secs`, `local_notifications`, `claude_root`, `codex_root`, `claude_source`, `codex_source`, `gemini_source`, `cline_source`, `ironwire`, `ironwire_attested_bodies`, `private_inference`, `private_inference_offer_seen`, `max_uploads_per_day`, `max_bytes_per_day` | updated settings | see "`set_settings`" below |
 | `consent_options` | — | `scopes[]` of `{name, description, always_on, grants_data_use}` | |
 | `set_consent_scopes` | `scopes[]` (wire-name strings; omitted means floor scope only) | `consent_scopes[]` | requires an existing enrollment |
 | `enroll` | `grant` xor `invite`, `scopes[]` (optional) | `enrolled: bool`, and on success `tenant_id`, `device_key_id`, `consent_scopes[]` | performs real network I/O |
@@ -1488,7 +1488,8 @@ Takes a JSON object of settings to change. Every top-level key must be one
 of `quiescence_secs`, `digest_interval_secs`, `approval_hold_secs`,
 `local_notifications`, `claude_root`, `codex_root`, `claude_source`,
 `codex_source`, `gemini_source`, `cline_source`, `ironwire`,
-`ironwire_attested_bodies`, `private_inference`, `max_uploads_per_day`,
+`ironwire_attested_bodies`, `private_inference`,
+`private_inference_offer_seen`, `max_uploads_per_day`,
 `max_bytes_per_day` --
 a key this method does
 not recognize is
@@ -1595,6 +1596,26 @@ rendered it as running would show a green light over a proxy that cannot
 work. `crashed` is sticky until the switch is turned off and on again,
 rather than restarting every poll tick, so a proxy that cannot stay up is
 visible instead of flickering.
+
+`private_inference_offer_seen` takes a boolean, and it is **not a fourth
+answer**: it records that the question was put, never what the answer was.
+A client that offers the switch on first start writes `true` here on
+*either* button, so declining is remembered exactly as accepting is and the
+contributor is not asked again on the next launch. Nothing in the daemon
+reads it except a client deciding whether to ask; setting it starts nothing,
+stops nothing, and changes no other value.
+
+It lives here rather than in each application's own state file because the
+fact belongs to the machine and not to a window. On Linux the daemon
+outlives the GTK shell and a second shell would otherwise re-ask; on macOS
+and Windows the app is the daemon, and this file is the thing that survives
+a reinstall of neither more nor less than the settings do.
+
+Default `false`, and a settings file written before this key existed loads
+with it false. That default is what makes an offer appear on the first start
+after an upgrade as well as on a fresh install: an installed build's
+settings file has no such key, so the first build that knows the key reads
+it as unanswered and asks once.
 
 `max_uploads_per_day` and `max_bytes_per_day` each take a positive integer,
 validated against a fixed ceiling (1,000 uploads; 5 GiB) rather than

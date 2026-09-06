@@ -9,20 +9,25 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use trace_commons_contributor_ffi::{
-    TC_WITNESS_STATE_ABSENT, TC_WITNESS_STATE_NOT_ENROLLED, TC_WITNESS_STATE_PINNED,
-    TC_WITNESS_STATE_REFUSING_INFERENCE_RECEIPTS_MISSING, TC_WITNESS_STATE_REFUSING_PIN_MALFORMED,
-    TC_WITNESS_STATE_REFUSING_UNPINNED, TC_WITNESS_STATE_UNREADABLE, TC_WITNESS_TONE_ATTENTION,
-    TC_WITNESS_TONE_CLEAR, TC_WITNESS_TONE_HELD, TC_WITNESS_TONE_NEUTRAL, TC_WITNESS_TONE_REFUSED,
-    tc_call, tc_daemon_start, tc_daemon_start_with_settings, tc_daemon_stop, tc_discover_sources,
-    tc_handle, tc_handle_free, tc_invite_issuer_host, tc_last_error, tc_preview, tc_preview_body,
+    TC_PRIVATE_INFERENCE_TONE_ATTENTION, TC_PRIVATE_INFERENCE_TONE_CLEAR,
+    TC_PRIVATE_INFERENCE_TONE_HELD, TC_PRIVATE_INFERENCE_TONE_NEUTRAL,
+    TC_PRIVATE_INFERENCE_TONE_REFUSED, TC_WITNESS_STATE_ABSENT, TC_WITNESS_STATE_NOT_ENROLLED,
+    TC_WITNESS_STATE_PINNED, TC_WITNESS_STATE_REFUSING_INFERENCE_RECEIPTS_MISSING,
+    TC_WITNESS_STATE_REFUSING_PIN_MALFORMED, TC_WITNESS_STATE_REFUSING_UNPINNED,
+    TC_WITNESS_STATE_UNREADABLE, TC_WITNESS_TONE_ATTENTION, TC_WITNESS_TONE_CLEAR,
+    TC_WITNESS_TONE_HELD, TC_WITNESS_TONE_NEUTRAL, TC_WITNESS_TONE_REFUSED, tc_call,
+    tc_daemon_start, tc_daemon_start_with_settings, tc_daemon_stop, tc_discover_sources, tc_handle,
+    tc_handle_free, tc_invite_issuer_host, tc_last_error, tc_preview, tc_preview_body,
     tc_preview_open, tc_preview_search, tc_preview_summary_json, tc_preview_turns_json,
-    tc_routing_copy, tc_routing_discovery_line, tc_routing_last_checked, tc_routing_state_line,
-    tc_routing_state_tone, tc_routing_token_line, tc_routing_tool_tone, tc_routing_tool_word,
-    tc_routing_unreachable_line, tc_scrub_detector_names, tc_search_original, tc_source_check_line,
-    tc_string_free, tc_subscribe, tc_unsubscribe, tc_witness_clear, tc_witness_configure,
-    tc_witness_copy, tc_witness_last_result_json, tc_witness_last_result_line,
-    tc_witness_last_result_tone, tc_witness_state_line, tc_witness_state_tone,
-    tc_witness_status_json, tc_witness_trust_state,
+    tc_private_inference_copy, tc_private_inference_serving_line,
+    tc_private_inference_should_offer, tc_private_inference_state_line,
+    tc_private_inference_state_tone, tc_routing_copy, tc_routing_discovery_line,
+    tc_routing_last_checked, tc_routing_state_line, tc_routing_state_tone, tc_routing_token_line,
+    tc_routing_tool_tone, tc_routing_tool_word, tc_routing_unreachable_line,
+    tc_scrub_detector_names, tc_search_original, tc_source_check_line, tc_string_free,
+    tc_subscribe, tc_unsubscribe, tc_witness_clear, tc_witness_configure, tc_witness_copy,
+    tc_witness_last_result_json, tc_witness_last_result_line, tc_witness_last_result_tone,
+    tc_witness_state_line, tc_witness_state_tone, tc_witness_status_json, tc_witness_trust_state,
 };
 
 fn cstr(p: &Path) -> CString {
@@ -3296,4 +3301,180 @@ fn a_malformed_pin_is_readable_so_a_contributor_can_repair_it() {
     let label = unsafe { CStr::from_ptr(err) }.to_str().unwrap().to_string();
     unsafe { tc_string_free(err) };
     assert_eq!(label, "witness-pin-malformed");
+}
+
+// --- the private-inference surface ---------------------------------------
+
+/// Every sentence the offer needs arrives in one payload, finished.
+///
+/// The field set is compared against the Rust's own serialisation rather
+/// than a list kept here, so a field the Rust grows and this test forgot
+/// cannot pass by being absent from both.
+#[test]
+fn the_private_inference_payload_crosses_whole_and_finished() {
+    let json = take_owned(tc_private_inference_copy());
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+
+    let expected = serde_json::to_value(
+        trace_commons_contributor::private_inference_copy::private_inference_copy(),
+    )
+    .expect("the Rust payload serialises");
+    assert_eq!(value, expected, "the export is not the shared payload");
+
+    let fields = value.as_object().expect("an object");
+    for (field, value) in fields {
+        let text = value.as_str().expect("every field is a string");
+        assert!(!text.trim().is_empty(), "{field} arrived empty");
+        for marker in ["{}", "{port}", "%@", "%s", "%d"] {
+            assert!(
+                !text.contains(marker),
+                "{field} crossed as a template: {text}"
+            );
+        }
+    }
+
+    // The sentence this whole surface exists to print. Named here rather
+    // than asserted as "some field mentions accounts": a shell that dropped
+    // it would still render an offer, and the offer would be a lie by
+    // omission.
+    let exposure = fields["offer_exposure"].as_str().unwrap();
+    assert!(exposure.contains("anything else running"), "{exposure}");
+    assert!(exposure.contains("accounts"), "{exposure}");
+}
+
+/// The state sentence and its tone are one decision, and they cross as one.
+///
+/// Asserted against the Rust's own two functions, so this proves the exports
+/// ARE the shared tables rather than a second copy that happens to agree.
+#[test]
+fn the_private_inference_branch_tables_cross_the_abi() {
+    use trace_commons_contributor::private_inference_copy as copy;
+    let line = |state: &str| {
+        let state = cstr_str(state);
+        take_owned(unsafe { tc_private_inference_state_line(state.as_ptr()) })
+    };
+    let tone = |state: &str| {
+        let state = cstr_str(state);
+        unsafe { tc_private_inference_state_tone(state.as_ptr()) }
+    };
+
+    for state in [
+        "off",
+        "running",
+        "running_no_backends",
+        "running_elsewhere",
+        "port_in_use",
+        "start_failed",
+        "crashed",
+        "",
+        "RUNNING",
+        "a_state_from_a_later_daemon",
+    ] {
+        assert_eq!(line(state), copy::state_line(state), "{state:?}");
+        let expected = match copy::state_tone(state) {
+            copy::PrivateInferenceTone::Neutral => TC_PRIVATE_INFERENCE_TONE_NEUTRAL,
+            copy::PrivateInferenceTone::Held => TC_PRIVATE_INFERENCE_TONE_HELD,
+            copy::PrivateInferenceTone::Clear => TC_PRIVATE_INFERENCE_TONE_CLEAR,
+            copy::PrivateInferenceTone::Attention => TC_PRIVATE_INFERENCE_TONE_ATTENTION,
+            copy::PrivateInferenceTone::Refused => TC_PRIVATE_INFERENCE_TONE_REFUSED,
+        };
+        assert_eq!(tone(state), expected, "{state:?}");
+    }
+
+    // Exactly one state may be painted as working, and it is not the one
+    // with nowhere to send a call.
+    assert_eq!(tone("running"), TC_PRIVATE_INFERENCE_TONE_CLEAR);
+    assert_ne!(
+        tone("running_no_backends"),
+        TC_PRIVATE_INFERENCE_TONE_CLEAR,
+        "a listener with nowhere to send is not a working light"
+    );
+    for failure in ["port_in_use", "start_failed", "crashed"] {
+        assert_eq!(
+            tone(failure),
+            TC_PRIVATE_INFERENCE_TONE_REFUSED,
+            "{failure}"
+        );
+        assert!(line(failure).contains("off and on again"), "{failure}");
+    }
+
+    // A state this build has never heard of, and no pointer at all, claim
+    // nothing rather than falling through to the working light.
+    assert_eq!(
+        tone("a_state_from_a_later_daemon"),
+        TC_PRIVATE_INFERENCE_TONE_NEUTRAL
+    );
+    assert_eq!(
+        unsafe { tc_private_inference_state_tone(std::ptr::null()) },
+        TC_PRIVATE_INFERENCE_TONE_NEUTRAL
+    );
+    assert_eq!(
+        take_owned(unsafe { tc_private_inference_state_line(std::ptr::null()) }),
+        copy::STATE_OFF
+    );
+}
+
+/// The tone numbering is disjoint from the two that already cross this ABI.
+///
+/// Not a style rule. A shell that fed a private-inference tone to the
+/// routing mapper would get NEUTRAL for a refusal, and one that fed it to
+/// the witness mapper would get a witness meaning; a disjoint range makes
+/// both mistakes wrong for every value rather than only for the dangerous
+/// one.
+#[test]
+fn the_private_inference_tones_share_no_number_with_another_surface() {
+    let mine = [
+        TC_PRIVATE_INFERENCE_TONE_NEUTRAL,
+        TC_PRIVATE_INFERENCE_TONE_HELD,
+        TC_PRIVATE_INFERENCE_TONE_CLEAR,
+        TC_PRIVATE_INFERENCE_TONE_ATTENTION,
+        TC_PRIVATE_INFERENCE_TONE_REFUSED,
+    ];
+    let others = [
+        TONE_NEUTRAL,
+        TONE_HELD,
+        TONE_CLEAR,
+        TONE_ATTENTION,
+        TC_WITNESS_TONE_NEUTRAL,
+        TC_WITNESS_TONE_HELD,
+        TC_WITNESS_TONE_CLEAR,
+        TC_WITNESS_TONE_ATTENTION,
+        TC_WITNESS_TONE_REFUSED,
+    ];
+    for value in mine {
+        assert!(
+            !others.contains(&value),
+            "{value} is another surface's tone"
+        );
+    }
+}
+
+/// The port sentence names the bound port, and says nothing when there is
+/// none -- including for the 0 a caller passes for JSON `null`.
+#[test]
+fn the_serving_sentence_names_a_port_or_is_empty() {
+    assert!(take_owned(tc_private_inference_serving_line(8463)).contains("8463"));
+    assert_eq!(take_owned(tc_private_inference_serving_line(0)), "");
+    assert_eq!(take_owned(tc_private_inference_serving_line(-1)), "");
+    assert_eq!(take_owned(tc_private_inference_serving_line(70_000)), "");
+}
+
+/// When to ask crosses the ABI, so three shells cannot disagree about
+/// whether a contributor has already been asked.
+#[test]
+fn whether_to_offer_crosses_the_abi() {
+    assert_eq!(tc_private_inference_should_offer(0, 0), 1, "fresh install");
+    assert_eq!(
+        tc_private_inference_should_offer(1, 0),
+        0,
+        "a remembered answer is not re-asked"
+    );
+    assert_eq!(
+        tc_private_inference_should_offer(0, 1),
+        0,
+        "nobody is offered what they already have"
+    );
+    assert_eq!(tc_private_inference_should_offer(1, 1), 0);
+    // Any non-zero is true, as the header says.
+    assert_eq!(tc_private_inference_should_offer(2, 0), 0);
 }

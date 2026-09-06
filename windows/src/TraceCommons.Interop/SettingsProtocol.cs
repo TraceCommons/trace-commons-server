@@ -106,6 +106,54 @@ public sealed class DaemonSettingsSnapshot
     /// <summary>Whether IronWire is declared on this machine.</summary>
     public bool RoutingDeclared =>
         string.Equals(Routing?.Mode, "watch", System.StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether this daemon was asked to answer model calls itself. What was
+    /// ASKED FOR; what happened is <see cref="PrivateInferenceState"/> beside
+    /// it, and the two differ exactly when the listener refused to start.
+    /// </summary>
+    [JsonPropertyName("private_inference")]
+    public bool? PrivateInference { get; set; }
+
+    /// <summary>Whether that switch is on.</summary>
+    public bool PrivateInferenceOn => PrivateInference == true;
+
+    /// <summary>
+    /// Whether the contributor has already been asked about that switch.
+    /// Absent on a daemon that predates the key, which reads as unanswered --
+    /// and is what makes the offer appear once after an upgrade.
+    /// </summary>
+    [JsonPropertyName("private_inference_offer_seen")]
+    public bool? PrivateInferenceOfferSeen { get; set; }
+
+    /// <summary>Whether the question has been put.</summary>
+    public bool PrivateInferenceAnswered => PrivateInferenceOfferSeen == true;
+
+    /// <summary>
+    /// What the listener is actually doing.
+    ///
+    /// Named <c>Report</c> rather than <c>State</c> so it cannot shadow the
+    /// <see cref="PrivateInferenceState"/> type at a call site that needs
+    /// both -- which is every call site, since the type is what reads it.
+    /// </summary>
+    [JsonPropertyName("private_inference_state")]
+    public PrivateInferenceStateSnapshot? PrivateInferenceReport { get; set; }
+}
+
+/// <summary>
+/// <c>private_inference_state</c>, as <c>get_settings</c>, <c>set_settings</c>
+/// and <c>status</c> all report it.
+///
+/// Carries the daemon's own label string. No path, no token, no account: the
+/// port is a loopback number this shell already knows how to print.
+/// </summary>
+public sealed class PrivateInferenceStateSnapshot
+{
+    [JsonPropertyName("state")]
+    public string State { get; set; } = string.Empty;
+
+    [JsonPropertyName("port")]
+    public ushort? Port { get; set; }
 }
 
 public enum BehaviorSetting
