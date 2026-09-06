@@ -1062,17 +1062,7 @@ fn parse_session(bytes: &[u8]) -> ParsedSession {
                 map_assistant_record(&record, record_timestamp, &mut events);
             }
             other => {
-                events.push(SessionEvent {
-                    served_by: None,
-                    kind: SessionEventKind::Opaque,
-                    timestamp: record_timestamp,
-                    content: None,
-                    structured: json!({ "record_type": other }),
-                    tool_name: None,
-                    token_counts: None,
-                    tool_call_id: None,
-                    success: None,
-                });
+                events.push(SessionEvent::opaque(other, record_timestamp));
             }
         }
     }
@@ -1095,17 +1085,7 @@ fn map_user_record(
     let content = record.pointer("/message/content");
     match content {
         Some(Value::String(s)) => {
-            events.push(SessionEvent {
-                served_by: None,
-                kind: SessionEventKind::User,
-                timestamp,
-                content: Some(s.clone()),
-                structured: Value::Null,
-                tool_name: None,
-                token_counts: None,
-                tool_call_id: None,
-                success: None,
-            });
+            events.push(SessionEvent::user(s.clone(), timestamp));
         }
         Some(Value::Array(blocks)) => {
             let mut texts = Vec::new();

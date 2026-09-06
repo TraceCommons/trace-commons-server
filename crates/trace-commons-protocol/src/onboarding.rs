@@ -102,8 +102,7 @@ impl TraceOnboardErrorCode {
 }
 
 pub fn device_key_id_from_public_key_bytes(public_key_bytes: &[u8]) -> String {
-    let digest = Sha256::digest(public_key_bytes);
-    format!("sha256:{}", hex::encode(digest))
+    crate::canonical_json::sha256_prefixed(public_key_bytes)
 }
 
 /// Canonical, unambiguous signing bytes for an enrollment attestation. Each

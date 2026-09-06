@@ -256,17 +256,12 @@ pub(crate) fn parse_trajectory(bytes: &[u8]) -> Result<ParsedTrajectory> {
                 if !seen_call_ids.contains(&id) {
                     bail!("orphaned_tool_result");
                 }
-                events.push(SessionEvent {
-                    served_by: None,
-                    kind: SessionEventKind::ToolResult,
-                    timestamp: parse_timestamp(record)?,
-                    content: Some(required_str(record, "content")?),
-                    structured: Value::Null,
-                    tool_name: None,
-                    token_counts: None,
-                    tool_call_id: Some(id),
-                    success: None,
-                });
+                events.push(SessionEvent::tool_result(
+                    parse_timestamp(record)?,
+                    Some(required_str(record, "content")?),
+                    Some(id),
+                    None,
+                ));
             }
             _ => bail!("unknown_record"),
         }

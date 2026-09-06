@@ -410,6 +410,11 @@ final class AppModel: ObservableObject {
     /// it.
     private(set) var configDirectory: String = ""
 
+    var traceNavigationReady: Bool {
+        guard case .running = startup else { return false }
+        return status.loggedIn && isOnboardingComplete
+    }
+
     func start() {
         guard case .starting = startup else { return }
         let resolved: DaemonHost.Resolution
@@ -419,8 +424,15 @@ final class AppModel: ObservableObject {
             startup = .refused("\(error)")
             return
         }
-        configDirectory = resolved.path
-        startDaemon(at: resolved.path, settingsJSON: nil)
+        start(configDirectory: resolved.path)
+    }
+
+    /// Explicit directory seam also exercises first-install startup without
+    /// touching the developer's state or altering process-global environment.
+    func start(configDirectory path: String) {
+        guard case .starting = startup else { return }
+        configDirectory = path
+        startDaemon(at: path, settingsJSON: nil)
     }
 
     /// Start (or restart) the in-process daemon against an already-resolved
@@ -974,6 +986,10 @@ final class AppModel: ObservableObject {
     /// onboarding, not straight to the main window with whatever scopes
     /// `enroll`'s floor-only default happened to leave in place -- see the
     /// coordinator's atomicity note.
+    var requiresOnboarding: Bool {
+        startup == .needsRoots || !status.loggedIn || !isOnboardingComplete
+    }
+
     var isOnboardingComplete: Bool {
         guard let tenantID = status.tenantID else { return false }
         return UserDefaults.standard.bool(forKey: Self.onboardingCompleteKey(tenantID))
@@ -1004,6 +1020,8 @@ final class AppModel: ObservableObject {
     /// tenant-keyed onboarding marker without a running daemon and a real
     /// enrolment. Debug-only, and deliberately routed through
     /// `publishIfChanged` so a test observes exactly what the app does.
+    func setStartupForTesting(_ startup: Startup) { self.startup = startup }
+
     func setStatusForTesting(_ status: DaemonStatus) {
         publishIfChanged(\.status, status)
     }

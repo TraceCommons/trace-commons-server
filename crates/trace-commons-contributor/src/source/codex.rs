@@ -434,17 +434,7 @@ fn load_session(path: &Path) -> anyhow::Result<SessionTranscript> {
                 map_response_item(payload, record_timestamp, &mut events);
             }
             other => {
-                events.push(SessionEvent {
-                    served_by: None,
-                    kind: SessionEventKind::Opaque,
-                    timestamp: record_timestamp,
-                    content: None,
-                    structured: json!({ "record_type": other }),
-                    tool_name: None,
-                    token_counts: None,
-                    tool_call_id: None,
-                    success: None,
-                });
+                events.push(SessionEvent::opaque(other, record_timestamp));
             }
         }
     }
@@ -500,17 +490,7 @@ fn map_response_item(
     events: &mut Vec<SessionEvent>,
 ) {
     let Some(payload) = payload else {
-        events.push(SessionEvent {
-            served_by: None,
-            kind: SessionEventKind::Opaque,
-            timestamp,
-            content: None,
-            structured: json!({ "record_type": "response_item" }),
-            tool_name: None,
-            token_counts: None,
-            tool_call_id: None,
-            success: None,
-        });
+        events.push(SessionEvent::opaque("response_item", timestamp));
         return;
     };
 
@@ -523,17 +503,7 @@ fn map_response_item(
                 "user" => SessionEventKind::User,
                 "assistant" => SessionEventKind::Assistant,
                 _ => {
-                    events.push(SessionEvent {
-                        served_by: None,
-                        kind: SessionEventKind::Opaque,
-                        timestamp,
-                        content: None,
-                        structured: json!({ "record_type": "message" }),
-                        tool_name: None,
-                        token_counts: None,
-                        tool_call_id: None,
-                        success: None,
-                    });
+                    events.push(SessionEvent::opaque("message", timestamp));
                     return;
                 }
             };
@@ -599,23 +569,19 @@ fn map_response_item(
                 Some(other) => serde_json::to_string(other).ok(),
                 None => None,
             };
-            events.push(SessionEvent {
-                served_by: None,
-                kind: SessionEventKind::ToolResult,
+            // Only an explicit verdict counts. An exit code would have to be
+            // interpreted per tool, and guessing here would put a fabricated
+            // outcome on a real trace.
+            let success = payload
+                .get("output")
+                .and_then(|output| output.get("success"))
+                .and_then(|v| v.as_bool());
+            events.push(SessionEvent::tool_result(
                 timestamp,
                 content,
-                structured: Value::Null,
-                tool_name: None,
-                token_counts: None,
-                tool_call_id: call_id(payload),
-                // Only an explicit verdict counts. An exit code would have to
-                // be interpreted per tool, and guessing here would put a
-                // fabricated outcome on a real trace.
-                success: payload
-                    .get("output")
-                    .and_then(|output| output.get("success"))
-                    .and_then(|v| v.as_bool()),
-            });
+                call_id(payload),
+                success,
+            ));
         }
         "reasoning" => {
             // Reasoning is captured as a first-class event and redacted
@@ -649,17 +615,7 @@ fn map_response_item(
             }
         }
         other => {
-            events.push(SessionEvent {
-                served_by: None,
-                kind: SessionEventKind::Opaque,
-                timestamp,
-                content: None,
-                structured: json!({ "record_type": other }),
-                tool_name: None,
-                token_counts: None,
-                tool_call_id: None,
-                success: None,
-            });
+            events.push(SessionEvent::opaque(other, timestamp));
         }
     }
 }

@@ -47,6 +47,30 @@ pub struct SessionTooLarge {
     pub budget_bytes: u64,
 }
 
+/// This machine's home directory, or an empty path when the platform will
+/// not name one.
+///
+/// Preserve the adapters' existing empty-path fallback when the platform
+/// cannot resolve a home. Joining a conventional suffix to that fallback
+/// produces a relative path; this helper does not claim that such a path is
+/// absent or replace the source-declaration and consent checks.
+pub(crate) fn home_dir() -> PathBuf {
+    dirs::home_dir().unwrap_or_default()
+}
+
+/// Resolves a source's `conventional_root` against this machine's real home
+/// and environment.
+///
+/// Each adapter keeps its own layout rule and takes `(home, env)` so a test
+/// can hand it a temporary directory and a fake environment. This is the
+/// shared bridge used by the adapter wrappers to supply the real pair; tests
+/// can continue calling the adapter resolvers without reading process state.
+pub(crate) fn conventional_root_on_this_machine(
+    conventional_root: fn(&Path, fn(&str) -> Option<String>) -> PathBuf,
+) -> PathBuf {
+    conventional_root(&home_dir(), |key| std::env::var(key).ok())
+}
+
 pub const SOURCE_CLAUDE_CODE: &str = "claude-code";
 pub const SOURCE_CODEX: &str = "codex";
 pub const SOURCE_TRAJECTORY: &str = "trajectory";
@@ -101,13 +125,18 @@ pub struct SessionRef {
     pub group_member_count: u32,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum SessionEventKind {
     User,
     Assistant,
     Reasoning,
     ToolCall,
     ToolResult,
+    /// The default for the same reason `SessionTranscript`'s is an empty
+    /// one: a step nobody has described yet is a step this crate makes no
+    /// claim about, and `Opaque` is exactly that claim. Every other variant
+    /// asserts something about what happened.
+    #[default]
     Opaque,
 }
 
@@ -128,7 +157,7 @@ pub struct ServedBy {
     pub cache_write_1h_tokens: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SessionEvent {
     pub kind: SessionEventKind,
     pub timestamp: Option<DateTime<Utc>>,
@@ -159,6 +188,52 @@ pub struct SessionEvent {
     /// `None` means the harness did not record an outcome, which is not the
     /// same as failure.
     pub success: Option<bool>,
+}
+
+/// Common event shapes without inferred provenance, usage, or outcomes.
+///
+/// Fields not supplied by the adapter remain absent. Adapters that record
+/// additional structure, `served_by`, or `token_counts` construct those
+/// events explicitly so the observed claims stay visible at the call site.
+impl SessionEvent {
+    /// A user turn: what they said, and when, if the transcript dated it.
+    pub fn user(content: impl Into<String>, timestamp: Option<DateTime<Utc>>) -> Self {
+        Self {
+            kind: SessionEventKind::User,
+            timestamp,
+            content: Some(content.into()),
+            ..Default::default()
+        }
+    }
+
+    /// A record the adapter recognised but does not model. The record's own
+    /// type name is kept as structure; its body deliberately is not.
+    pub fn opaque(record_type: &str, timestamp: Option<DateTime<Utc>>) -> Self {
+        Self {
+            kind: SessionEventKind::Opaque,
+            timestamp,
+            structured: serde_json::json!({ "record_type": record_type }),
+            ..Default::default()
+        }
+    }
+
+    /// The answering half of a tool call. `success` is the harness's own
+    /// verdict where it recorded one; `None` is not failure.
+    pub fn tool_result(
+        timestamp: Option<DateTime<Utc>>,
+        content: Option<String>,
+        tool_call_id: Option<String>,
+        success: Option<bool>,
+    ) -> Self {
+        Self {
+            kind: SessionEventKind::ToolResult,
+            timestamp,
+            content,
+            tool_call_id,
+            success,
+            ..Default::default()
+        }
+    }
 }
 
 /// `Default` exists for tests that only care about one or two fields and
@@ -451,17 +526,13 @@ struct SourceSpec {
 static NATIVE_SOURCES: &[SourceSpec] = &[
     SourceSpec {
         name: SOURCE_CLAUDE_CODE,
-        conventional_root: || {
-            dirs::home_dir()
-                .unwrap_or_default()
-                .join(".claude/projects")
-        },
+        conventional_root: || home_dir().join(".claude/projects"),
         build: |path| Box::new(claude_code::ClaudeCodeSource::new(path)),
         undeclared: Undeclared::Conventional,
     },
     SourceSpec {
         name: SOURCE_CODEX,
-        conventional_root: || dirs::home_dir().unwrap_or_default().join(".codex/sessions"),
+        conventional_root: || home_dir().join(".codex/sessions"),
         build: |path| Box::new(codex::CodexSource::new(path)),
         undeclared: Undeclared::Conventional,
     },
@@ -934,7 +1005,7 @@ mod tests {
         // Pinned separately from the count above: the failure mode that
         // matters is not "an extra adapter appeared", it is "an adapter
         // appeared pointing at the contributor's real home directory".
-        let home = dirs::home_dir().unwrap_or_default();
+        let home = super::home_dir();
         for sources in [
             all_sources(
                 &SourceRoots::new()

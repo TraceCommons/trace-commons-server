@@ -254,9 +254,7 @@ mod tests {
     use super::*;
     use crate::config::tests_support::temp_store;
 
-    fn at(s: &str) -> DateTime<Utc> {
-        s.parse().unwrap()
-    }
+    use crate::daemon::test_support::at;
 
     #[test]
     fn roll_day_resets_counters_on_a_utc_day_change() {
