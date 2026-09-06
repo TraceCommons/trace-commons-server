@@ -24,6 +24,7 @@ struct HealthCopy: Equatable {
     let severity: Severity
     /// Present only where there is a real action behind it.
     let actionTitle: String?
+    var reviewsQueue = false
 
     /// The banner for a spent daily budget, built from the numbers the
     /// daemon actually reported.
@@ -105,7 +106,8 @@ struct HealthCopy: Equatable {
                 -- 500 are already waiting. Review or clear some to start again.
                 """,
                 severity: .actionable,
-                actionTitle: "Review"
+                actionTitle: "Review",
+                reviewsQueue: true
             )
         case "daily-cap-reached":
             // The fallback for a daemon that reported the label without a
