@@ -37,10 +37,10 @@ final class SourceCheckExportTests: XCTestCase {
             "Claude Code sessions read from the usual place")
         XCTAssertEqual(
             line(TCSourceChecks.claude, "off"),
-            "Claude Code marked not used, so nothing is opened for it")
+            "Claude Code marked not used, so nothing is opened for it. Previously queued sessions are not removed")
         XCTAssertEqual(
             line(TCSourceChecks.codex, "off"),
-            "Codex marked not used, so nothing is opened for it")
+            "Codex marked not used, so nothing is opened for it. Previously queued sessions are not removed")
     }
 
     /// No mode's sentence contains another's. "Private" is a substring of
@@ -77,5 +77,21 @@ final class SourceCheckExportTests: XCTestCase {
     func testAnUnknownToolIsRefused() {
         XCTAssertNil(TCSourceChecks.checkLine(tool: "claude-code", sourceMode: "watch"))
         XCTAssertNil(TCSourceChecks.checkLine(tool: "", sourceMode: "off"))
+    }
+}
+
+extension SourceCheckExportTests {
+    func testSettingsMetadataFollowsActualUndeclaredSourcePolicy() throws {
+        let copy = try XCTUnwrap(TCSourceChecks.settingsCopy())
+        XCTAssertEqual(Set(copy.tools.keys), ["claude-code", "codex", "gemini-cli", "cline"])
+        for (adapter, tool) in copy.tools {
+            XCTAssertEqual(tool.unsetScansConventional, adapter == "claude-code" || adapter == "codex")
+            let unset = try XCTUnwrap(TCSourceChecks.checkLine(tool: tool.key, sourceMode: "unset"))
+            XCTAssertEqual(unset.contains("read from the usual place"), tool.unsetScansConventional)
+            let off = try XCTUnwrap(TCSourceChecks.checkLine(tool: tool.key, sourceMode: "off"))
+            XCTAssertTrue(off.contains("Previously queued sessions are not removed"))
+        }
+        XCTAssertTrue(copy.explanation.contains("does not remove sessions already queued"))
+        XCTAssertTrue(copy.consentSaveFailed.contains("Couldn't confirm"))
     }
 }

@@ -539,6 +539,7 @@ struct CenteredNotice: View {
 /// carry a button.
 struct HealthBanner: View {
     let health: HealthCopy
+    var onAction: (() -> Void)? = nil
 
     private var tone: TC.Tone {
         health.severity == .actionable ? .attention : .neutral
@@ -562,15 +563,11 @@ struct HealthBanner: View {
             }
             Spacer(minLength: TC.Space.m)
             if let action = health.actionTitle {
-                // Deliberately inert: the flows behind Reconnect and Review
-                // and confirm are onboarding surfaces, which are not built
-                // yet. A button that lies about working is worse than one
-                // that says it is not here.
-                Button(action) {}
-                    .disabled(true)
+                Button(action) { onAction?() }
+                    .disabled(onAction == nil)
                     .lineLimit(1)
                     .fixedSize()
-                    .help("Not wired up in this build.")
+                    .help(onAction == nil ? "Not wired up in this build." : action)
             }
         }
         .padding(.vertical, TC.Space.m)
