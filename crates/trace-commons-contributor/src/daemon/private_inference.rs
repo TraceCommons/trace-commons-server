@@ -40,6 +40,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Nothing has been asked for, or the switch was turned off.
 pub const LABEL_OFF: &str = "off";
+/// Shutdown was requested, but owned requests or cleanup are still draining.
+pub const LABEL_STOPPING: &str = "stopping";
 /// This daemon owns a proxy that came up with a usable backend registry.
 pub const LABEL_RUNNING: &str = "running";
 /// This daemon owns a proxy whose backend registry is empty.
@@ -58,6 +60,11 @@ pub const LABEL_CRASHED: &str = "crashed";
 pub enum PrivateInferenceState {
     /// The switch is off, and nothing is bound.
     Off,
+    /// The owned proxy is draining; its home and listener are not yet released.
+    Stopping {
+        /// The previously bound port; None while an unfinished start drains.
+        port: Option<u16>,
+    },
     /// This daemon's proxy is serving on `port` and can route.
     Running {
         /// The bound loopback port.
@@ -89,6 +96,7 @@ impl PrivateInferenceState {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Off => LABEL_OFF,
+            Self::Stopping { .. } => LABEL_STOPPING,
             Self::Running { .. } => LABEL_RUNNING,
             Self::RunningWithoutBackends { .. } => LABEL_RUNNING_NO_BACKENDS,
             Self::RunningElsewhere { .. } => LABEL_RUNNING_ELSEWHERE,
@@ -100,6 +108,7 @@ impl PrivateInferenceState {
     #[must_use]
     pub fn port(&self) -> Option<u16> {
         match self {
+            Self::Stopping { port } => *port,
             Self::Running { port }
             | Self::RunningWithoutBackends { port }
             | Self::RunningElsewhere { port } => Some(*port),
@@ -203,6 +212,12 @@ pub struct PrivateInference {
     /// asks for an ephemeral one.
     port: Option<u16>,
     proxy: Option<EmbeddedProxy>,
+    // Kept across canceled callers and deadlines. Dropping a wait must not
+    // turn a still-owned listener into Off or permit another bind.
+    starting: Option<tokio::task::JoinHandle<Result<EmbeddedProxy, EmbedError>>>,
+    stopping: Option<tokio::task::JoinHandle<bool>>,
+    cleanup_unconfirmed: bool,
+    requested_generation: Option<u64>,
     /// The runtime a proxy's tasks must be spawned onto, when it is not the
     /// one this call happens to be running on.
     ///
@@ -246,6 +261,10 @@ impl PrivateInference {
             home,
             port: None,
             proxy: None,
+            starting: None,
+            stopping: None,
+            cleanup_unconfirmed: false,
+            requested_generation: None,
             runtime: None,
             state: PrivateInferenceState::Off,
             crashed: false,
@@ -259,6 +278,30 @@ impl PrivateInference {
     pub fn with_port(home: PathBuf, port: u16) -> Self {
         Self {
             port: Some(port),
+            ..Self::new(home)
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_pending_start_for_test(
+        home: PathBuf,
+        task: tokio::task::JoinHandle<Result<EmbeddedProxy, EmbedError>>,
+    ) -> Self {
+        Self {
+            starting: Some(task),
+            ..Self::new(home)
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_shutdown_for_test(
+        home: PathBuf,
+        port: u16,
+        task: tokio::task::JoinHandle<bool>,
+    ) -> Self {
+        Self {
+            stopping: Some(task),
+            state: PrivateInferenceState::Stopping { port: Some(port) },
             ..Self::new(home)
         }
     }
@@ -282,6 +325,13 @@ impl PrivateInference {
         self.runtime = runtime;
     }
 
+    /// Whether accepted settings superseded the request this instance observed.
+    pub(crate) fn accept_generation(&mut self, generation: u64) -> bool {
+        self.requested_generation
+            .replace(generation)
+            .is_some_and(|old| old != generation)
+    }
+
     /// What the daemon reports right now.
     #[must_use]
     pub fn state(&self) -> PrivateInferenceState {
@@ -290,20 +340,52 @@ impl PrivateInference {
 
     /// Bring the instance in line with the switch. Idempotent both ways.
     pub async fn apply(&mut self, on: bool) {
-        if !on {
-            if let Some(proxy) = self.proxy.take() {
-                proxy.shutdown().await;
-                tracing::info!(pass = "private_inference", "proxy stopped");
-            }
-            self.crashed = false;
-            self.state = PrivateInferenceState::Off;
-            return;
-        }
         self.poll().await;
-        if self.proxy.is_some() || self.crashed {
+        if self.cleanup_unconfirmed {
             return;
         }
-        if let Some(port) = existing_instance(&self.home).await {
+        if !on {
+            if let Some(starting) = self.starting.take() {
+                let runtime = self
+                    .runtime
+                    .clone()
+                    .unwrap_or_else(tokio::runtime::Handle::current);
+                self.stopping = Some(runtime.spawn(async move {
+                    match starting.await {
+                        Ok(Ok(proxy)) => {
+                            proxy.shutdown().await;
+                            true
+                        }
+                        Ok(Err(_)) => true,
+                        Err(_) => false,
+                    }
+                }));
+                self.state = PrivateInferenceState::Stopping { port: None };
+            }
+            if let Some(proxy) = self.proxy.take() {
+                let port = proxy.port();
+                let runtime = self
+                    .runtime
+                    .clone()
+                    .unwrap_or_else(tokio::runtime::Handle::current);
+                self.stopping = Some(runtime.spawn(async move {
+                    proxy.shutdown().await;
+                    true
+                }));
+                self.state = PrivateInferenceState::Stopping { port: Some(port) };
+            }
+            if self.stopping.is_none() {
+                self.crashed = false;
+                self.state = PrivateInferenceState::Off;
+            }
+            return;
+        }
+        if self.proxy.is_some() || self.stopping.is_some() || self.crashed {
+            return;
+        }
+        if self.starting.is_none()
+            && let Some(port) = existing_instance(&self.home).await
+        {
             tracing::info!(
                 pass = "private_inference",
                 port,
@@ -372,32 +454,42 @@ impl PrivateInference {
         }
     }
 
-    /// Start the proxy on the runtime that must own it.
-    ///
-    /// With no runtime named -- the daemon's own poll tick -- this is a
-    /// plain call and the ambient runtime is already the right one. With one
-    /// named, the start is spawned onto it, so `embed::start`'s own
-    /// `tokio::spawn` calls land on that runtime and the proxy outlives
-    /// whatever short-lived runtime the caller is standing on.
-    ///
-    /// A join failure (the spawned start panicked, or its runtime shut down
-    /// underneath it) is reported as a refusal to start, which is what it
-    /// is; there is no proxy either way.
-    async fn start_proxy(&self) -> Result<EmbeddedProxy, StartRefusal> {
-        let Some(handle) = self.runtime.clone() else {
-            return embed::start(&self.home, self.port)
-                .await
-                .map_err(StartRefusal::Embed);
-        };
-        let home = self.home.clone();
-        let port = self.port;
-        match handle
-            .spawn(async move { embed::start(&home, port).await })
-            .await
-        {
+    /// Start on the daemon runtime and retain the task across canceled callers.
+    /// A missing adopted runtime uses the caller's current runtime, as before.
+    async fn start_proxy(&mut self) -> Result<EmbeddedProxy, StartRefusal> {
+        if self.starting.is_none() {
+            let runtime = self
+                .runtime
+                .clone()
+                .unwrap_or_else(tokio::runtime::Handle::current);
+            let home = self.home.clone();
+            let port = self.port;
+            self.starting = Some(runtime.spawn(async move { embed::start(&home, port).await }));
+        }
+        // Await through the retained handle. Canceling a caller leaves the
+        // startup owned so a stop can drain any eventual proxy it produces.
+        let started = self
+            .starting
+            .as_mut()
+            .expect("retained proxy startup")
+            .await;
+        self.starting = None;
+        match started {
             Ok(started) => started.map_err(StartRefusal::Embed),
             Err(_) => Err(StartRefusal::Spawn),
         }
+    }
+
+    /// Wait for the retained shutdown task. Canceling this wait retains ownership.
+    pub(crate) async fn finish_stop(&mut self) -> bool {
+        self.apply(false).await;
+        while self.stopping.is_some() {
+            self.poll().await;
+            if self.stopping.is_some() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+        self.state == PrivateInferenceState::Off
     }
 
     /// Notice a proxy that ended without being asked to.
@@ -407,6 +499,23 @@ impl PrivateInference {
     /// A proxy that ends must never take the daemon down, so nothing here
     /// propagates.
     pub async fn poll(&mut self) {
+        if self
+            .stopping
+            .as_ref()
+            .is_some_and(|task| task.is_finished())
+        {
+            let completed = self.stopping.take().expect("finished shutdown task").await;
+            if matches!(completed, Ok(true)) {
+                self.state = PrivateInferenceState::Off;
+                self.crashed = false;
+            } else {
+                // A failed join is not proof that upstream released ownership.
+                self.cleanup_unconfirmed = true;
+                self.state = PrivateInferenceState::Failed {
+                    label: LABEL_CRASHED,
+                };
+            }
+        }
         let Some(proxy) = self.proxy.as_mut() else {
             return;
         };
@@ -429,6 +538,113 @@ impl PrivateInference {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn a_canceled_drain_wait_retains_ownership_and_blocks_rebinding() {
+        let home = tempfile::tempdir().unwrap();
+        let absent = home.path().join("unused");
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (release, pending) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(async move {
+            let _ = pending.await;
+            drop(listener);
+            true
+        });
+        let task_id = task.id();
+        let mut host = PrivateInference::with_shutdown_for_test(absent.clone(), port, task);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), host.finish_stop())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            host.state(),
+            PrivateInferenceState::Stopping { port: Some(port) }
+        );
+        assert_eq!(host.stopping.as_ref().unwrap().id(), task_id);
+        host.apply(true).await;
+        assert_eq!(
+            host.state(),
+            PrivateInferenceState::Stopping { port: Some(port) }
+        );
+        assert!(!absent.exists());
+        assert!(
+            tokio::net::TcpListener::bind(("127.0.0.1", port))
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), host.finish_stop())
+                .await
+                .unwrap()
+        );
+        assert_eq!(host.state(), PrivateInferenceState::Off);
+        assert!(host.stopping.is_none());
+        // The completed task has dropped the listener. Rebinding this freed
+        // ephemeral port here would race unrelated parallel proxy tests;
+        // the real start/stop test separately exercises listener release.
+    }
+
+    #[tokio::test]
+    async fn canceled_start_is_retained_and_its_eventual_proxy_is_drained() {
+        let home = tempfile::tempdir().unwrap();
+        let start_home = home.path().to_path_buf();
+        let (release, pending) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(async move {
+            pending.await.unwrap();
+            embed::start(&start_home, Some(0)).await
+        });
+        let task_id = task.id();
+        let mut host = PrivateInference::with_port(home.path().to_path_buf(), 0);
+        host.starting = Some(task);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), host.apply(true))
+                .await
+                .is_err()
+        );
+        assert_eq!(host.starting.as_ref().unwrap().id(), task_id);
+        host.apply(false).await;
+        assert_eq!(host.state(), PrivateInferenceState::Stopping { port: None });
+        assert!(host.starting.is_none());
+        host.apply(true).await;
+        assert_eq!(host.state(), PrivateInferenceState::Stopping { port: None });
+        release.send(()).unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), host.finish_stop())
+                .await
+                .unwrap()
+        );
+        assert_eq!(host.state(), PrivateInferenceState::Off);
+        assert!(!home.path().join("endpoint.json").exists());
+        // Reusing the isolated home proves the late startup's ownership was
+        // released; it cannot leave a server or home lock behind after Off.
+        let next = embed::start(home.path(), Some(0)).await.unwrap();
+        next.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn failed_shutdown_never_claims_off_or_restarts() {
+        let home = tempfile::tempdir().unwrap();
+        let absent = home.path().join("unused");
+        let task = tokio::spawn(async {
+            panic!("controlled shutdown panic");
+        });
+        let mut host = PrivateInference::with_shutdown_for_test(absent.clone(), 1, task);
+        assert!(!host.finish_stop().await);
+        host.apply(false).await;
+        host.apply(true).await;
+        assert_eq!(
+            host.state(),
+            PrivateInferenceState::Failed {
+                label: LABEL_CRASHED
+            }
+        );
+        assert!(!absent.exists());
+    }
+
     /// The pointer IronWire publishes in its home, as a test writes it.
     fn write_pointer(home: &Path, port: u16) {
         let body = serde_json::json!({
@@ -447,6 +663,7 @@ mod tests {
         let mut host = PrivateInference::new(home.path().to_path_buf());
         assert_eq!(host.state(), PrivateInferenceState::Off);
         host.apply(false).await;
+        assert!(host.finish_stop().await);
         assert_eq!(host.state(), PrivateInferenceState::Off);
     }
 
@@ -470,6 +687,7 @@ mod tests {
         );
 
         host.apply(false).await;
+        assert!(host.finish_stop().await);
         assert_eq!(host.state(), PrivateInferenceState::Off);
         assert!(
             tokio::net::TcpListener::bind(("127.0.0.1", port))
@@ -639,6 +857,7 @@ mod tests {
     fn every_state_has_its_own_label() {
         let states = [
             PrivateInferenceState::Off,
+            PrivateInferenceState::Stopping { port: Some(1) },
             PrivateInferenceState::Running { port: 1 },
             PrivateInferenceState::RunningWithoutBackends { port: 1 },
             PrivateInferenceState::RunningElsewhere { port: 1 },

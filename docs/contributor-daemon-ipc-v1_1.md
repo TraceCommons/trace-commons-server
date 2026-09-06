@@ -1582,12 +1582,24 @@ on `get_settings`, `set_settings` and `status`. It is an object,
 | `state` | meaning | `port` |
 |---|---|---|
 | `off` | the switch is off and nothing is bound | `null` |
+| `stopping` | startup or an owned proxy is still draining and releasing resources | the previously bound port, or `null` while startup is unfinished |
 | `running` | this daemon's proxy is serving and has a backend registered | the bound port |
 | `running_no_backends` | this daemon's proxy is serving but no backend is configured, so nothing will route through it | the bound port |
 | `running_elsewhere` | an IronWire this daemon did not start owns the home and is answering; nothing was bound and nothing was stopped | the existing instance's port |
 | `port_in_use` | something that is not this daemon's proxy holds the port | `null` |
 | `start_failed` | the proxy refused to start for any other reason | `null` |
 | `crashed` | a proxy this daemon started ended without being asked to | `null` |
+
+Turning hosting off persists the request before stopping the owned proxy. The
+reply may report `stopping` while requests drain; it does not mean the listener,
+pointer, or home lock has been released. A new on request waits for that cleanup
+before another listener can start. Daemon termination prevents any later restart
+and waits up to five seconds for cleanup, including waiting for a startup already
+in progress. On expiry the retained cleanup continues while the runtime lives;
+process exit or runtime destruction can interrupt remaining streams. Closing or
+dropping the embedded daemon requests cleanup without blocking synchronously.
+Drop-based cleanup requires unwinding; a `panic=abort` build terminates the
+process instead and cannot finish in-flight requests.
 
 `running_no_backends` is deliberately not `running`: the proxy answers its
 health endpoint and no inference can pass through it, so a client that
