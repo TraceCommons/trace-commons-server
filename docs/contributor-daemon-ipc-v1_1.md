@@ -1588,7 +1588,7 @@ on `get_settings`, `set_settings` and `status`. It is an object,
 | `running_elsewhere` | an IronWire this daemon did not start owns the home and is answering; nothing was bound and nothing was stopped | the existing instance's port |
 | `port_in_use` | something that is not this daemon's proxy holds the port | `null` |
 | `start_failed` | the proxy refused to start for any other reason | `null` |
-| `crashed` | a proxy this daemon started ended without being asked to | `null` |
+| `crashed` | startup, serving, or cleanup failed; release of owned resources may be unconfirmed | `null` |
 
 Turning hosting off persists the request before stopping the owned proxy. The
 reply may report `stopping` while requests drain; it does not mean the listener,
@@ -1606,7 +1606,11 @@ health endpoint and no inference can pass through it, so a client that
 rendered it as running would show a green light over a proxy that cannot
 work. `crashed` is sticky until the switch is turned off and on again,
 rather than restarting every poll tick, so a proxy that cannot stay up is
-visible instead of flickering.
+visible instead of flickering. If startup or shutdown lost its completion
+signal, Off does not claim cleanup succeeded. A newly accepted off/on cycle may
+retry through IronWire's exclusive home lock; only a successful start clears
+that uncertainty. If the prior owner still holds the lock, the failure remains
+visible and no second proxy is started.
 
 `max_uploads_per_day` and `max_bytes_per_day` each take a positive integer,
 validated against a fixed ceiling (1,000 uploads; 5 GiB) rather than

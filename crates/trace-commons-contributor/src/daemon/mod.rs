@@ -422,6 +422,9 @@ async fn supervise_passes(shared: &Arc<ipc::DaemonShared>, dry_run: bool) -> Res
                 tracing::info!("daemon stopping on request");
                 return Ok(());
             }
+            _ = shared.private_inference_changed.notified() => {
+                shared.reconcile_private_inference().await;
+            }
             _ = proxy_cleanup_tick.tick(), if shared.private_inference_is_stopping() => {
                 shared.reconcile_private_inference().await;
             }
