@@ -62,6 +62,14 @@
   </provides>
 
   <releases>
+    <release version="0.10.0" date="2026-09-06">
+      <description>
+        <p>On first start the app now asks once whether to answer model calls on this computer. It says plainly what that costs before you answer: while it is on, anything else running on this computer can send calls through it as well, charged to the accounts you have set up here, and on a shared machine that is anyone who can log in. It is off until you say yes, declining is remembered rather than asked again, and the setting stays where you can find it afterwards.</p>
+        <p>When it is on, the app says what it is actually doing rather than assuming. It distinguishes running, running with nothing to answer with, stopping, another copy of this app holding the setup, and a failure that will not clear until you turn the setting off and on again. Where it cannot tell, it says so instead of showing a state it did not check.</p>
+        <p>The sentences shown before you approve a session are now written once and read by every version of this app, so the Linux, macOS and Windows versions say the same thing about what leaves your machine. They had drifted apart.</p>
+        <p>A control that fails now says so. Where a setting could previously be left showing the value you chose after the app failed to save it, the app now reads back what was actually stored and shows that.</p>
+      </description>
+    </release>
     <release version="0.8.0" date="2026-09-04">
       <description>
         <p>A new Tools section can read a record kept on this machine of where each of your tools sends its requests first, and says so one tool at a time: Private, Sends direct, Not known, or Not used. It is off until you turn it on, and changes apply straight away. On a machine already keeping such a record the port is found for you rather than asked for. It says where a request goes first and nothing about what happens to it afterwards, and where it does not know it says so rather than guessing.</p>
