@@ -390,9 +390,10 @@ final class NativeFlowAdapterTests: XCTestCase {
 
 private final class SourceSettingsDaemon: DaemonCalling {
     let refuseWrite: Bool
-    init(refuseWrite: Bool) { self.refuseWrite = refuseWrite }
+    let refuseRead: Bool
+    init(refuseWrite: Bool, refuseRead: Bool = false) { self.refuseWrite = refuseWrite; self.refuseRead = refuseRead }
     func call(_ method: String, params paramsJSON: String) -> String {
-        if method == "set_settings", refuseWrite {
+        if (method == "set_settings" && refuseWrite) || (method == "get_settings" && refuseRead) {
             return #"{"id":1,"error":{"code":"unavailable","message":"settings-save-failed"}}"#
         }
         return settingsFrame.replacingOccurrences(
@@ -420,5 +421,50 @@ final class SourceSettingsModelTests: XCTestCase {
         let succeeded = await model.setSourceRoot(.claudeCode, .watch(path: "/requested"))
         XCTAssertFalse(succeeded)
         XCTAssertEqual(model.daemonSettings?.claudeSourceMode, "off")
+    }
+}
+
+private final class ConsentReconciliationDaemon: DaemonCalling {
+    let failRead: Bool
+    private(set) var calls: [String] = []
+    init(failRead: Bool) { self.failRead = failRead }
+    func call(_ method: String, params paramsJSON: String) -> String {
+        calls.append(method)
+        if method == "status", !failRead {
+            return #"{"result":{"logged_in":true,"consent_scopes":["debugging_evaluation","training"],"health":{}}}"#
+        }
+        return #"{"error":{"code":"unavailable","message":"reply-lost"}}"#
+    }
+    func searchOriginal(entryID: String, needle: String) -> Int? { nil }
+    func openPreview(entryID: String) throws -> TCPreview { throw TCDaemon.TCError.daemonGone }
+}
+
+extension SourceSettingsModelTests {
+    @MainActor
+    func testFailedWriteAndReadKeepLastConfirmedSourceSettings() async {
+        let model = AppModel()
+        model.setClientForTesting(DaemonClient(daemon: SourceSettingsDaemon(refuseWrite: false)))
+        _ = await model.setSourceRoot(.claudeCode, .off)
+        model.setClientForTesting(DaemonClient(daemon: SourceSettingsDaemon(refuseWrite: true, refuseRead: true)))
+        let saved = await model.setSourceRoot(.claudeCode, .watch(path: "/requested"))
+        XCTAssertFalse(saved)
+        XCTAssertEqual(model.daemonSettings?.claudeSourceMode, "off")
+    }
+
+    @MainActor
+    func testFailedConsentReplyReconcilesBeforeReturningAndPreservesPriorStateIfReadFails() async {
+        for failRead in [false, true] {
+            let model = AppModel()
+            model.setStatusForTesting(DaemonStatus(schemaVersion: "1.1", loggedIn: true,
+                tenantID: "fixture", consentScopes: ["debugging_evaluation"], paused: false,
+                queueDepth: 0, nextDigestAt: nil, health: DaemonHealth(lastErrorLabel: nil, since: nil)))
+            let daemon = ConsentReconciliationDaemon(failRead: failRead)
+            model.setClientForTesting(DaemonClient(daemon: daemon))
+            let outcome = await model.setConsentScopes(["debugging_evaluation", "training"])
+            XCTAssertEqual(outcome, .failed)
+            XCTAssertEqual(daemon.calls, ["set_consent_scopes", "status"])
+            XCTAssertEqual(model.status.consentScopes,
+                failRead ? ["debugging_evaluation"] : ["debugging_evaluation", "training"])
+        }
     }
 }

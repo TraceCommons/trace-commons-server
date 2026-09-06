@@ -787,7 +787,9 @@ final class AppModel: ObservableObject {
         case .failure:
             // A lost response does not prove the write failed. Read back the
             // authoritative modes, and never retain the requested path.
-            daemonSettings = await Task.detached { try? client.settings() }.value
+            if let confirmed = await Task.detached(operation: { try? client.settings() }).value {
+                daemonSettings = confirmed
+            }
             return false
         }
     }
@@ -957,6 +959,8 @@ final class AppModel: ObservableObject {
             status.consentScopes = confirmed
             refreshStatus()
             refreshAudit()
+        } else if let confirmed = await Task.detached(operation: { try? client.status() }).value {
+            publishIfChanged(\.status, confirmed)
         }
         return outcome
     }
@@ -982,7 +986,9 @@ final class AppModel: ObservableObject {
             daemonSettings = settings
             refreshAudit()
         case .failure:
-            daemonSettings = await Task.detached { try? client.settings() }.value
+            if let confirmed = await Task.detached(operation: { try? client.settings() }).value {
+                daemonSettings = confirmed
+            }
             inferenceEvidenceSaveFailed = true
         }
     }

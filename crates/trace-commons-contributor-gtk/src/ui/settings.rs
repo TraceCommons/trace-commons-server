@@ -3980,11 +3980,11 @@ mod tests {
         assert_eq!(unset[0].0, "Claude Code sessions read from the usual place");
         assert_eq!(
             off[0].0,
-            "Claude Code marked not used, so nothing is opened for it"
+            "Claude Code marked not used, so nothing is opened for it. Previously queued sessions are not removed"
         );
         assert_eq!(
             off[1].0,
-            "Codex marked not used, so nothing is opened for it"
+            "Codex marked not used, so nothing is opened for it. Previously queued sessions are not removed"
         );
 
         for (a, b) in [(&watch, &unset), (&watch, &off), (&unset, &off)] {
@@ -4012,7 +4012,7 @@ mod tests {
         let rows = source_check_rows(&settings_with_modes("off", "unset"));
         assert_eq!(
             rows[0].0,
-            "Claude Code marked not used, so nothing is opened for it"
+            "Claude Code marked not used, so nothing is opened for it. Previously queued sessions are not removed"
         );
         assert_eq!(rows[1].0, "Codex sessions read from the usual place");
         assert_eq!((rows[0].1, rows[1].1), (false, false));

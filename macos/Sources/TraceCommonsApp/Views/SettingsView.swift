@@ -404,7 +404,7 @@ struct SettingsContent: View {
                 // server would have allowed.
             }
             if let consentSaveError {
-                Text(consentSaveError)
+                Label(consentSaveError, systemImage: TC.Tone.refused.symbol)
                     .font(TC.Font_.caption)
                     .foregroundStyle(TC.coralText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -485,7 +485,7 @@ struct SettingsContent: View {
             case .succeeded:
                 break
             case .failed:
-                consentSaveError = "Couldn't change that -- the watcher may not be running. Try again."
+                consentSaveError = TCSourceChecks.settingsCopy()?.consentSaveFailed
             }
             consentBusy = false
         }
@@ -760,41 +760,40 @@ struct SettingsContent: View {
     /// path, including after a write. The same explanation the roots screen gives
     /// applies, and is given, because a blank Claude Code or Codex row still
     /// means the standard location.
+    @ViewBuilder
     private var watchedFolders: some View {
-        VStack(alignment: .leading, spacing: TC.Space.sm) {
-            TCSectionHeader(title: "Watched folders")
-            Text("""
-            Which session folders this app reads. Declining is an answer; for \
-            Claude Code and Codex a row left blank means the standard location.
-            """)
-            .font(TC.Font_.meta)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            if sourceSaveFailed {
-                Text("Couldn't confirm that folder change. Check the current setting and try again.")
-                    .font(TC.Font_.caption)
-                    .foregroundStyle(TC.coralText)
+        if let copy = TCSourceChecks.settingsCopy() {
+            VStack(alignment: .leading, spacing: TC.Space.sm) {
+                TCSectionHeader(title: copy.heading)
+                Text(copy.explanation).font(TC.Font_.meta).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-            }
-            ForEach(OnboardingRootsView.offeredKinds, id: \.self) { kind in
-                SourceRootRow(
-                    kind: kind,
-                    candidate: sourceCandidates.first { $0.source == kind },
-                    choice: sourceChoice(for: kind),
-                    onWatchCandidate: { candidate in
-                        saveSource(kind, .watch(path: candidate.path))
-                    },
-                    onChoose: { path in
-                        saveSource(kind, .watch(path: path))
-                    },
-                    onDecline: {
-                        saveSource(kind, .off)
+                if sourceSaveFailed {
+                    Label(copy.saveFailed, systemImage: TC.Tone.refused.symbol)
+                        .font(TC.Font_.caption).foregroundStyle(TC.coralText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if model.daemonSettings != nil {
+                    ForEach(OnboardingRootsView.offeredKinds, id: \.self) { kind in
+                        SourceRootRow(
+                            kind: kind,
+                            candidate: sourceCandidates.first { $0.source == kind },
+                            choice: sourceChoice(for: kind),
+                            reportedMode: sourceMode(for: kind),
+                            onWatchCandidate: { saveSource(kind, .watch(path: $0.path)) },
+                            onChoose: { saveSource(kind, .watch(path: $0)) },
+                            onDecline: { saveSource(kind, .off) }
+                        )
                     }
-                )
+                } else {
+                    Text(copy.unavailable).font(TC.Font_.meta).foregroundStyle(.secondary)
+                }
+                if sourceSaveFailed || model.daemonSettings == nil {
+                    Button(copy.retry) { model.refreshSettings() }
+                }
             }
+            .disabled(sourceBusy)
+            .onAppear(perform: discoverSources)
         }
-        .disabled(sourceBusy)
-        .onAppear(perform: discoverSources)
     }
 
     private func saveSource(_ kind: SourceKind, _ choice: SourceChoice) {
@@ -810,18 +809,20 @@ struct SettingsContent: View {
     /// The daemon's answer for one source, as the row shows it. The path
     /// is deliberately absent: the daemon only says that a folder is watched.
     private func sourceChoice(for kind: SourceKind) -> SourceChoice {
-        guard let modes = model.daemonSettings?.routingSourceModes else { return .undecided }
-        let mode: String
-        switch kind {
-        case .claudeCode: mode = modes.claude
-        case .codex: mode = modes.codex
-        case .geminiCli: mode = modes.gemini
-        case .cline: mode = modes.cline
-        }
-        switch mode {
+        switch sourceMode(for: kind) {
         case "watch": return .watch(path: "")
         case "off": return .off
         default: return .undecided
+        }
+    }
+
+    private func sourceMode(for kind: SourceKind) -> String {
+        guard let modes = model.daemonSettings?.routingSourceModes else { return "unset" }
+        switch kind {
+        case .claudeCode: return modes.claude
+        case .codex: return modes.codex
+        case .geminiCli: return modes.gemini
+        case .cline: return modes.cline
         }
     }
 
