@@ -1,8 +1,12 @@
 //! The consent surface's words, in one place, for all three shells.
 //!
-//! Four sentences, and the highest-value four in the app: they are the
+//! Three sentences, and the highest-value three in the app: they are the
 //! safety claim shown at the instant of consent, above an irreversible
-//! button. Until this module existed the claim was written three times --
+//! button. They stood as four literals in each shell, because every shell
+//! also kept its own copy of the branch that picks between the two help
+//! sentences; [`gate_help`] is that fourth literal's replacement, and it is
+//! not a sentence. Until this module existed the claim was written three
+//! times --
 //! `windows/src/TraceCommons.Interop/ReadGate.cs`,
 //! `macos/Sources/TCShellCore/ReadGate.swift` and the GTK shell's
 //! `copy.rs` -- and held together by a Rust test that opened the other two

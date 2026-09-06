@@ -449,12 +449,11 @@ public sealed class PreviewSheetViewModel : INotifyPropertyChanged, IDisposable
     /// </remarks>
     public bool OriginalOutcomeIsCalm => HasOriginalOutcome && !OriginalOutcomeIsAlarming;
 
-    /// <summary>Whether there is a pinned preview to contribute, and no
-    /// decision already in flight.</summary>
     /// <summary>
-    /// Armed only with a pinned preview and the sentences that explain the
-    /// button. See <see cref="ReadGate.CanArm"/>: a build that cannot read
-    /// the claim must not take an approval against it.
+    /// Armed only with a pinned preview, the sentences that explain the
+    /// button, and no decision already in flight. See
+    /// <see cref="ReadGate.CanArm"/>: a build that cannot read the claim
+    /// must not take an approval against it.
     /// </summary>
     public bool CanContribute => ReadGate.CanArm(_consent, Gate.CanContribute) && !_deciding;
 

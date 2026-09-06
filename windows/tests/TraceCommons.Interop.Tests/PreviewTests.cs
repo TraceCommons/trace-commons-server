@@ -43,7 +43,6 @@ public sealed class ReadGateTests
         gate.SetPinnedPreview(true);
 
         Assert.True(gate.CanContribute);
-        Assert.Equal(ConsentSurface.GateHelp(true), ConsentSurface.GateHelp(gate.CanContribute));
     }
 
     [Fact]
@@ -55,7 +54,6 @@ public sealed class ReadGateTests
         var gate = new ReadGate();
 
         Assert.False(gate.CanContribute);
-        Assert.Equal(ConsentSurface.GateHelp(false), ConsentSurface.GateHelp(gate.CanContribute));
     }
 
     [Fact]

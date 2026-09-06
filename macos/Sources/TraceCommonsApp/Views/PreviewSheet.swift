@@ -488,8 +488,17 @@ struct PreviewSheet: View {
         consent != nil && ReadGate.canContribute(hasPinnedPreview: summary?.enrolled == true)
     }
 
+    /// The tooltip that explains the current answer, chosen by the ABI.
+    ///
+    /// Empty when the sentences are unavailable -- the same condition that
+    /// disarms `canContribute`, so nothing is claimed and nothing is
+    /// pressable. Without the guard a build whose bundle would not decode
+    /// but whose `tc_consent_gate_help` still answered would paint a
+    /// disarmed button with the not-connected sentence, which is a claim
+    /// about the device rather than about the missing copy.
     private var gateHelp: String {
-        TCConsentCopy.gateHelp(pinned: canContribute) ?? ""
+        guard consent != nil else { return "" }
+        return TCConsentCopy.gateHelp(pinned: canContribute) ?? ""
     }
 
     /// The sentence the acknowledgement checkbox used to carry, printed
