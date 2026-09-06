@@ -112,12 +112,20 @@ jobs:
           done
 
       # Pinned, not the runner image's preinstalled Rust. These crates declare
-      # rust-version = 1.92, and windows-latest is newly added here -- an
+      # rust-version = 1.96, and windows-latest is newly added here -- an
       # image lagging that floor, or two release legs building on different
       # toolchains, is a real-runner-only outcome.
+      #
+      # The floor was 1.92 until 2026-09-06. It rose because
+      # trace-commons-contributor gained an unconditional git dependency on
+      # ironwire_proxy, whose ironwire_*/ironclaw_* crates declare
+      # rust-version = 1.96. Keep this in step with the workspace
+      # rust-version in Cargo.toml: every job in ci.yml uses @stable, so this
+      # pin is the ONLY thing in the repository that builds on the declared
+      # floor, and it only runs on a tag.
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master@2026-05-27
         with:
-          toolchain: "1.92"
+          toolchain: "1.96"
           targets: ${{ matrix.target }}
 
       # By binary name, not by package: `-p trace-commons-contributor` also

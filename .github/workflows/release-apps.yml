@@ -127,12 +127,18 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       # Pinned by commit SHA, so dtolnay/rust-toolchain cannot infer the
-      # toolchain from a ref name (@stable, @1.92) the way it does when
+      # toolchain from a ref name (@stable, @1.96) the way it does when
       # pinned to a branch or tag -- `toolchain` becomes a required input.
-      # The version tracks the workspace's rust-version (Cargo.toml).
+      # The version tracks the workspace's rust-version (Cargo.toml), which
+      # rose from 1.92 to 1.96 on 2026-09-06: trace-commons-contributor takes
+      # an unconditional git dependency on ironwire_proxy, and the
+      # ironwire_*/ironclaw_* crates behind it declare rust-version = 1.96.
+      # ci.yml builds everything on @stable, so these tag-only pins are the
+      # only place the declared floor is ever exercised -- when you change
+      # one, change all of them in this file and in release-contributor.yml.
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master@2026-05-27
         with:
-          toolchain: "1.92"
+          toolchain: "1.96"
           # make-app-bundle.sh (invoked below via make-release-dmg.sh) builds
           # the FFI dylib for both targets itself and lipos them together, so
           # both need to be installed here.
@@ -204,7 +210,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master@2026-05-27
         with:
-          toolchain: "1.92"
+          toolchain: "1.96"
           targets: x86_64-pc-windows-msvc
       # No build cache in a release job, deliberately. A cache is a
       # write-target a lower-privilege job can poison, and this job holds
@@ -616,7 +622,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master@2026-05-27
         with:
-          toolchain: "1.92"
+          toolchain: "1.96"
           targets: x86_64-pc-windows-msvc
       # windows/global.json pins the SDK to 8.0.x. MSBuild otherwise selects
       # the newest installed SDK regardless of what setup-dotnet put there,
@@ -955,10 +961,10 @@ jobs:
             https://dl.flathub.org/repo/flathub.flatpakrepo
           # No org.freedesktop.Sdk.Extension.rust-stable here anymore. The
           # first real release run (app-v0.1.0, run 31959830328) proved the
-          # extension's rustc is 11 minor versions behind the crate's
-          # rust-version = "1.92" floor, and the build is network-sandboxed
+          # extension's rustc is 15 minor versions behind the crate's
+          # rust-version floor (now "1.96"), and the build is network-sandboxed
           # so rustup cannot rescue it at build time. The manifest now
-          # bundles a pinned rust 1.92.0 toolchain as a source instead (see
+          # bundles a pinned rust 1.96.0 toolchain as a source instead (see
           # ai.tracecommons.Contributor.yml), so this job no longer needs
           # the extension at all.
           sudo flatpak install -y --noninteractive flathub \
