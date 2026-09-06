@@ -290,6 +290,14 @@ public sealed class ContributorSettingsViewModel : INotifyPropertyChanged
     public bool HasRoutingProbeText => _routingProbeText.Length > 0;
 
     /// <summary>The daemon's three-state view of what it is seeing.</summary>
+    private string _routingOrigin = string.Empty;
+    public string RoutingOrigin
+    {
+        get => _routingOrigin;
+        private set { if (Set(ref _routingOrigin, value)) Raise(nameof(HasRoutingOrigin)); }
+    }
+    public bool HasRoutingOrigin => RoutingOrigin.Length > 0;
+
     public string RoutingStateText
     {
         get => _routingStateText;
@@ -1715,6 +1723,7 @@ public sealed class ContributorSettingsViewModel : INotifyPropertyChanged
             _routingCopy,
             status?.RoutingState ?? string.Empty,
             status?.Routing?.LastRefreshAt);
+        RoutingOrigin = status?.Routing?.Derived == true ? _routingCopy.DerivedOrigin : string.Empty;
         RoutingStateText = line.Text;
         RoutingStateTone = line.Tone;
         SetRoutingLastChecked(line.LastChecked);

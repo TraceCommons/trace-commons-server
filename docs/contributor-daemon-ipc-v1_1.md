@@ -575,7 +575,11 @@ Every routing snapshot includes `derived: true|false`. True identifies automatic
 metadata routing from this daemon's owned proxy; false identifies an explicit or
 absent declaration. With `state: "unknown"`, false is only a conservative default,
 not evidence that metadata is disabled. Shells use the effective status and its
-origin alongside the independent explicit declaration controls.
+origin alongside the independent explicit declaration controls. The shared routing
+copy payload includes `derived_origin` for that explanation and `state_unknown`
+for unavailable nonempty labels. The origin is descriptive and never turns the
+explicit routing switch on or enables body reading. Older snapshots without
+`derived` omit that explanation; they do not synthesize it from a hosting flag.
 
 `token_unreadable` is what a declared proxy that is not running looks like,
 and it is the one state a contributor has to act on. It was reported as

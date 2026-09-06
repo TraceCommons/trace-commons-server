@@ -2291,10 +2291,10 @@ fn the_state_branch_table_crosses_the_abi_and_an_unknown_state_claims_nothing() 
     // with the switch on sees.
     assert_ne!(state_line("token_unreadable"), copy::IRONWIRE_STATE_OFF);
 
-    // A state a later daemon grows, an empty one, and no pointer at all all
-    // read as the off line. None of them falls through to either "on"
-    // sentence -- named here rather than asserted as "not waiting".
-    assert_eq!(state_line("something_new"), copy::IRONWIRE_STATE_OFF);
+    // A new nonempty state is unavailable; legacy empty input retains its
+    // existing behavior. None falls through to an "on" sentence.
+    assert_eq!(state_line("something_new"), copy::IRONWIRE_STATE_UNKNOWN);
+    assert_eq!(state_line("unknown"), copy::IRONWIRE_STATE_UNKNOWN);
     assert_eq!(state_line(""), copy::IRONWIRE_STATE_OFF);
     assert_eq!(
         take_owned(unsafe { tc_routing_state_line(std::ptr::null()) }),

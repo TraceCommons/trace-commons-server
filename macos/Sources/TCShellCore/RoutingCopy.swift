@@ -44,6 +44,8 @@ public struct RoutingCopy: Decodable, Equatable, Sendable {
     public let checkUnavailable: String
     public let probeReachable: String
     public let stateOff: String
+    public let stateUnknown: String
+    public let derivedOrigin: String
     public let stateWaiting: String
     public let stateReading: String
     /// Declared, and no reader could be built. Carried because the payload
@@ -51,7 +53,7 @@ public struct RoutingCopy: Decodable, Equatable, Sendable {
     /// dropped would be a sentence it could not show.
     public let stateTokenUnreadable: String
 
-    enum CodingKeys: String, CodingKey {
+    public enum CodingKeys: String, CodingKey, CaseIterable {
         case toolsHeading = "tools_heading"
         case wordPrivate = "word_private"
         case wordDirect = "word_direct"
@@ -77,6 +79,8 @@ public struct RoutingCopy: Decodable, Equatable, Sendable {
         case checkUnavailable = "check_unavailable"
         case probeReachable = "probe_reachable"
         case stateOff = "state_off"
+        case stateUnknown = "state_unknown"
+        case derivedOrigin = "derived_origin"
         case stateWaiting = "state_waiting"
         case stateReading = "state_reading"
         case stateTokenUnreadable = "state_token_unreadable"

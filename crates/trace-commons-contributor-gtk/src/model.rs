@@ -49,6 +49,9 @@ pub struct Status {
 /// identifying, no port and no path.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct RoutingStatus {
+    /// The effective metadata reader is derived from this app's owned service.
+    #[serde(default)]
+    pub derived: bool,
     /// `not_declared`, `awaiting_rows` or `rows_seen`. Empty when the
     /// daemon did not report the block at all, which reads as the first.
     #[serde(default)]
@@ -962,4 +965,19 @@ mod tests {
         .unwrap();
         assert_eq!(p.project_path, "");
     }
+}
+
+#[cfg(test)]
+#[test]
+fn routing_origin_is_only_the_reported_derived_flag() {
+    let derived: RoutingStatus =
+        serde_json::from_str(r#"{"state":"awaiting_rows","derived":true}"#).unwrap();
+    assert!(derived.derived);
+    let legacy: RoutingStatus = serde_json::from_str(r#"{"state":"awaiting_rows"}"#).unwrap();
+    assert!(!legacy.derived);
+    let unknown: RoutingStatus =
+        serde_json::from_str(r#"{"state":"unknown","derived":false}"#).unwrap();
+    assert_eq!(unknown.state, "unknown");
+    assert!(!unknown.derived);
+    assert!(serde_json::from_str::<RoutingStatus>(r#"{"derived":"true"}"#).is_err());
 }

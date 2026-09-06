@@ -252,6 +252,12 @@ macro_rules! ironwire_point_at_the_folder {
 pub const IRONWIRE_PROBE_REACHABLE: &str =
     concat!(crate::app_name!(), " can read the local record.");
 
+/// The reported origin is independent of whether the reader is succeeding.
+pub const IRONWIRE_DERIVED_ORIGIN: &str = "The local record is selected from this app's model-call service. This does not enable reading session bodies.";
+/// Unknown internal state is not evidence of an Off declaration or a bad token.
+pub const IRONWIRE_STATE_UNKNOWN: &str =
+    "The local-record state is unavailable. Check again before relying on it.";
+
 pub const IRONWIRE_STATE_OFF: &str = concat!(
     "Off. ",
     crate::app_name!(),
@@ -439,8 +445,8 @@ pub fn ironwire_discovery_line(port: Option<u16>) -> String {
     }
 }
 
-/// The daemon's four states, in words. A state this build does not know
-/// says what the off state says: it claims nothing.
+/// The daemon's states, in words. An unfamiliar nonempty state is unavailable,
+/// never evidence that the reader is off or that a token needs fixing.
 ///
 /// Four and not three. "Declared, and the reader could not be built" used
 /// to arrive here as the catch-all and read as off, which told a
@@ -452,7 +458,8 @@ pub fn ironwire_state_line(state: &str) -> &'static str {
         "awaiting_rows" => IRONWIRE_STATE_WAITING,
         "rows_seen" => IRONWIRE_STATE_READING,
         "token_unreadable" => IRONWIRE_STATE_TOKEN_UNREADABLE,
-        _ => IRONWIRE_STATE_OFF,
+        "not_declared" | "" => IRONWIRE_STATE_OFF,
+        _ => IRONWIRE_STATE_UNKNOWN,
     }
 }
 
@@ -582,6 +589,8 @@ pub struct RoutingCopy {
     pub check_unavailable: &'static str,
     pub probe_reachable: &'static str,
     pub state_off: &'static str,
+    pub state_unknown: &'static str,
+    pub derived_origin: &'static str,
     pub state_waiting: &'static str,
     pub state_reading: &'static str,
     pub state_token_unreadable: &'static str,
@@ -619,6 +628,8 @@ pub fn routing_copy() -> RoutingCopy {
         check_unavailable: IRONWIRE_CHECK_UNAVAILABLE,
         probe_reachable: IRONWIRE_PROBE_REACHABLE,
         state_off: IRONWIRE_STATE_OFF,
+        state_unknown: IRONWIRE_STATE_UNKNOWN,
+        derived_origin: IRONWIRE_DERIVED_ORIGIN,
         state_waiting: IRONWIRE_STATE_WAITING,
         state_reading: IRONWIRE_STATE_READING,
         state_token_unreadable: IRONWIRE_STATE_TOKEN_UNREADABLE,
@@ -904,10 +915,7 @@ mod tests {
     /// fall through to either of the two "on" sentences.
     #[test]
     fn an_unreadable_state_says_nothing_rather_than_guessing() {
-        assert_eq!(
-            ironwire_state_line("something_new"),
-            ironwire_state_line("not_declared")
-        );
+        assert_eq!(ironwire_state_line("something_new"), IRONWIRE_STATE_UNKNOWN);
         assert_eq!(ironwire_state_line(""), ironwire_state_line("not_declared"));
     }
 

@@ -43,6 +43,28 @@ public class RoutingSurfaceTests
     /// exactly one shared word.
     /// </summary>
     [Fact]
+    public void RoutingOriginIsReportedSeparatelyFromTheExplicitDeclaration()
+    {
+        var derived = System.Text.Json.JsonSerializer.Deserialize<RoutingStatusSnapshot>("{\"state\":\"awaiting_rows\",\"derived\":true}");
+        Assert.True(derived!.Derived);
+        var old = System.Text.Json.JsonSerializer.Deserialize<RoutingStatusSnapshot>("{\"state\":\"awaiting_rows\"}");
+        Assert.False(old!.Derived);
+        Assert.Equal(Copy().StateUnknown, RoutingSurface.StateLine("unknown"));
+        Assert.Equal(RoutingTone.Neutral, RoutingSurface.StateTone("unknown"));
+        Assert.False(string.IsNullOrWhiteSpace(Copy().DerivedOrigin));
+    }
+
+    [Fact]
+    public void EveryRoutingCopyFieldIsDecoded()
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(NativeMethods.TakeOwnedString(NativeMethods.tc_routing_copy())!);
+        var declared = typeof(RoutingCopy).GetProperties()
+            .SelectMany(property => property.GetCustomAttributes(typeof(System.Text.Json.Serialization.JsonPropertyNameAttribute), false))
+            .Cast<System.Text.Json.Serialization.JsonPropertyNameAttribute>().Select(attribute => attribute.Name).OrderBy(name => name);
+        Assert.Equal(declared, document.RootElement.EnumerateObject().Select(property => property.Name).OrderBy(name => name));
+    }
+
+    [Fact]
     public void EachToolReadsExactlyOneOfTheFourSharedWords()
     {
         RoutingCopy copy = Copy();
@@ -367,7 +389,7 @@ public class RoutingSurfaceTests
         Assert.NotEqual(copy.StateOff, RoutingTools.StateLine(copy, RoutingTools.TokenUnreadable));
         // A state this build has never heard of says what the off state says:
         // it claims nothing.
-        Assert.Equal(copy.StateOff, RoutingTools.StateLine(copy, "brand-new-state"));
+        Assert.Equal(copy.StateUnknown, RoutingTools.StateLine(copy, "brand-new-state"));
         Assert.Equal(copy.StateOff, RoutingTools.StateLine(copy, ""));
     }
 
@@ -883,7 +905,7 @@ public class RoutingSurfaceTests
         Assert.DoesNotContain("RowsSeen =>", source, StringComparison.Ordinal);
 
         // The words may be reached only as the fallback for a call the ABI
-        // refused, never as the arms of a table. WordUnknown and StateOff are
+        // refused, never as the arms of a table. WordUnknown and StateUnknown are
         // those fallbacks; the rest would mean a word is still chosen here.
         foreach (string field in new[]
                  {
@@ -988,13 +1010,13 @@ public class RoutingSurfaceTests
 
     /// <summary>
     /// A state this build has never heard of claims nothing: it reads as the
-    /// off line and never falls through to either "on" sentence.
+    /// unavailable line; legacy empty input preserves its previous behavior.
     /// </summary>
     [Fact]
-    public void AnUnknownStateReadsAsTheOffLineAcrossTheAbi()
+    public void AnUnknownNonemptyStateReadsAsUnavailableAcrossTheAbi()
     {
         RoutingCopy copy = Copy();
-        Assert.Equal(copy.StateOff, RoutingSurface.StateLine("a_state_from_a_later_daemon"));
+        Assert.Equal(copy.StateUnknown, RoutingSurface.StateLine("a_state_from_a_later_daemon"));
         Assert.Equal(copy.StateOff, RoutingSurface.StateLine(""));
         Assert.Equal(copy.StateOff, RoutingSurface.StateLine(null));
         Assert.Equal(copy.StateWaiting, RoutingSurface.StateLine(RoutingTools.AwaitingRows));
@@ -1182,7 +1204,7 @@ public class RoutingSurfaceTests
         {
             RoutingTone tone = RoutingTools.StateTone(state);
             // The tone and the sentence are one decision.
-            Assert.Equal(tone == RoutingTone.Neutral, RoutingTools.StateLine(copy, state) == copy.StateOff);
+            Assert.Equal(tone == RoutingTone.Neutral, RoutingTools.StateLine(copy, state) == copy.StateOff || RoutingTools.StateLine(copy, state) == copy.StateUnknown);
             // And the stamp is gated on that same reading.
             Assert.Equal(
                 tone != RoutingTone.Neutral,
@@ -1275,7 +1297,7 @@ public class RoutingSurfaceTests
             "token_path", "tools", "id", "installed", "wired",
             // The daemon's routing states, and the status block they arrive in.
             "not_declared", "awaiting_rows", "rows_seen",
-            "state", "last_refresh_at",
+            "state", "last_refresh_at", "derived",
             // IronWire's own stable tool ids.
             "claude", "codex", "gemini", "cline",
             // Punctuation, not wording.

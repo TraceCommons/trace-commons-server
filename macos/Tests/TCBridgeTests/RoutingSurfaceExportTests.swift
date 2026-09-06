@@ -12,6 +12,13 @@ import XCTest
 /// stands behind the claim that this shell prints the shared wording rather
 /// than a copy of its own.
 final class RoutingSurfaceExportTests: XCTestCase {
+    func testRoutingCopyInventoryIncludesOriginAndUnknownState() throws {
+        let json = try XCTUnwrap(TCRoutingCopy.copyJSON())
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertEqual(Set(object.keys), Set(RoutingCopy.CodingKeys.allCases.map(\.rawValue)))
+        XCTAssertFalse(try XCTUnwrap(copy()).derivedOrigin.isEmpty)
+    }
+
     private func copy(file: StaticString = #filePath, line: UInt = #line) -> RoutingCopy? {
         guard let json = TCRoutingCopy.copyJSON() else {
             XCTFail("the routing copy export returned nil", file: file, line: line)
@@ -187,7 +194,7 @@ final class RoutingSurfaceExportTests: XCTestCase {
             let tone = RoutingSurface.tone(forState: state, calls: calls)
             let line = RoutingSurface.stateLine(state, copy: copy, calls: calls)
             // The tone and the sentence are one decision.
-            XCTAssertEqual(tone == .neutral, line == copy.stateOff, state)
+            XCTAssertEqual(tone == .neutral, line == copy.stateOff || line == copy.stateUnknown, state)
             // The stamp is gated on the same reading: shown exactly where a
             // reader exists to have answered.
             XCTAssertEqual(
@@ -203,12 +210,12 @@ final class RoutingSurfaceExportTests: XCTestCase {
     }
 
     /// A state this build has never heard of claims nothing: it reads as the
-    /// off line and never falls through to any "on" sentence.
-    func testAStateThisBuildHasNeverHeardOfReadsAsTheOffLine() {
+    /// unavailable line and never falls through to an Off or "on" sentence.
+    func testAStateThisBuildHasNeverHeardOfReadsAsUnavailable() {
         guard let copy = copy() else { return }
-        for state in ["a_state_from_a_later_daemon", "", "ROWS_SEEN"] {
+        for state in ["a_state_from_a_later_daemon", "unknown", "ROWS_SEEN"] {
             let line = RoutingSurface.stateLine(state, copy: copy, calls: calls)
-            XCTAssertEqual(line, copy.stateOff, state)
+            XCTAssertEqual(line, copy.stateUnknown, state)
             XCTAssertNotEqual(line, copy.stateReading, state)
             XCTAssertNotEqual(line, copy.stateWaiting, state)
             XCTAssertNotEqual(line, copy.stateTokenUnreadable, state)
