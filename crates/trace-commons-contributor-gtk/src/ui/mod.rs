@@ -895,7 +895,8 @@ impl App {
         self.health_banner.set_visible(true);
     }
 
-    /// The 4-hour digest, and its actions can only ever open the window or
+    /// The digest, rate-limited to the daemon's configured interval rather
+    /// than a fixed one. Its actions can only ever open the window or
     /// dismiss.
     ///
     /// Posted when either half has something to say. It used to return early

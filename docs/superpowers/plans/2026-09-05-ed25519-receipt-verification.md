@@ -456,6 +456,7 @@ async fn a_receipt_without_signing_algo_is_read_as_ecdsa() {
     assert_eq!(response.status(), 403);
     assert_eq!(refusal_label(response).await, "witness_inference_receipt_unverified");
 }
+```
 
 ```rust
 /// `signing_algo` is carried through to the verifier. This test cannot
@@ -978,15 +979,54 @@ In `crates/trace-commons-contributor/src/routing/receipt.rs`, give `receipt_for_
 
 with refusal label `receipt_signer_not_attested` wherever that enum maps to labels.
 
-After the receipt is fetched and parsed, and only when `check_attestation` is true:
+There is no shared text-fetch helper; `fetch_receipt` inlines its GET. Mirror its exact shape — allowlist check BEFORE the request, the same `client`, `FETCH_TIMEOUT`, a success-status check, the declared-length hint checked and then the body bounded again after reading — in a sibling function in `routing/receipt.rs`:
+
+```rust
+/// GET the attestation report. Same gate and same bounds as
+/// [`fetch_receipt`]: the allowlist is checked before the request so a
+/// second call site cannot omit it, and the body is bounded after reading
+/// because a chunked response declares no length. Returns the raw JSON;
+/// parsing is `attestation_report::gateway_ed25519_key`'s job.
+async fn fetch_attestation_report(
+    client: &reqwest::Client,
+    allowlist: &HostAllowlist,
+    base: &str,
+    model: &str,
+    nonce: &str,
+) -> Result<String, ReceiptFetchError> {
+    let url = crate::routing::attestation_report::attestation_report_url(base, model, nonce)
+        .map_err(|_| ReceiptFetchError::SignerNotAttested)?;
+    allowlist.check(&url).map_err(|_| ReceiptFetchError::EndpointNotAllowed)?;
+    let response = client
+        .get(url)
+        .timeout(FETCH_TIMEOUT)
+        .send()
+        .await
+        .map_err(|_| ReceiptFetchError::Unreachable)?;
+    if !response.status().is_success() {
+        return Err(ReceiptFetchError::Unreachable);
+    }
+    if response
+        .content_length()
+        .is_some_and(|declared| declared > MAX_ATTESTATION_REPORT_BYTES as u64)
+    {
+        return Err(ReceiptFetchError::ResponseTooLarge);
+    }
+    let body = response.text().await.map_err(|_| ReceiptFetchError::Unreachable)?;
+    if body.len() > MAX_ATTESTATION_REPORT_BYTES {
+        return Err(ReceiptFetchError::ResponseTooLarge);
+    }
+    Ok(body)
+}
+```
+
+with `const MAX_ATTESTATION_REPORT_BYTES: usize = 1 << 20;` beside `MAX_RECEIPT_BYTES` — a live report was measured at 284,003 bytes, so 1 MiB is a bound, not a guess. Then in `receipt_for_attested_call`, after `fetch_receipt` succeeds and only when `check_attestation` is true:
 
 ```rust
     if check_attestation {
         let nonce = fresh_nonce_hex(); // 32 random bytes, lowercase hex, via ring::rand::SystemRandom as identity.rs does
-        let url = crate::routing::attestation_report::attestation_report_url(endpoint, model, &nonce)
-            .map_err(|_| ReceiptFetchError::SignerNotAttested)?;
-        let body = fetch_text(&url).await?;   // the same client, timeout and no-retry policy the receipt fetch uses
-        let attested = crate::routing::attestation_report::gateway_ed25519_key(&body, &nonce)
+        let report = fetch_attestation_report(&client, allowlist, endpoint, model, &nonce).await?;
+        let attested = crate::routing::attestation_report::gateway_ed25519_key(&report, &nonce)
             .map_err(|_| ReceiptFetchError::SignerNotAttested)?;
         if !crate::routing::attestation_report::signer_is_attested(&payload.signing_address, &attested) {
             return Err(ReceiptFetchError::SignerNotAttested);
@@ -994,7 +1034,7 @@ After the receipt is fetched and parsed, and only when `check_attestation` is tr
     }
 ```
 
-`fetch_text` is whatever the existing receipt fetch already uses to GET a URL and read the body; reuse it, do not add a second client. Update the one caller in `submit.rs` to pass `self.effective_cfg.inference_receipt_check_attestation`. Never log the nonce, the key, or the report.
+`receipt_for_attested_call` already builds `client` and holds `endpoint`, `allowlist` and `model`; reuse them. Update the one caller in `submit.rs` to pass `self.effective_cfg.inference_receipt_check_attestation`. Never log the nonce, the key, or the report.
 
 The existing refusal tests (`an_unconfigured_endpoint_fetches_nothing`, `an_endpoint_outside_the_allowlist_is_refused`, `a_plaintext_endpoint_is_refused_even_when_allowlisted`) must still pass unchanged with `false` passed through — they are the regression net for this wiring.
 

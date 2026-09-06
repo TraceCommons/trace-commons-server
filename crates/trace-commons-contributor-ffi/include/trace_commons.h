@@ -678,6 +678,8 @@ int32_t     tc_private_inference_should_offer(int32_t answered, int32_t on);
  * for tc_last_error.
  */
 char*       tc_source_check_line(const char* tool, const char* source_mode);
+/* Shared settings copy JSON; caller frees with tc_string_free. */
+char*       tc_source_settings_copy(void);
 
 /* The names of the secret detectors the scrubber runs, so a shell can tell a
  * contributor what is removed without transcribing the list.
@@ -936,6 +938,8 @@ char*       tc_witness_last_result_json(void);
  * Returns NULL only on a caught panic.
  */
 char*       tc_witness_copy(void);
+/* Owned JSON; release with tc_string_free. */
+char*       tc_onboarding_copy(void);
 
 /* The sentence for a witness state, given a TC_WITNESS_STATE_* value.
  * Returns an OWNED string; free with tc_string_free.

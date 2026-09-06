@@ -39,6 +39,13 @@ namespace TraceCommons.Interop;
 /// </summary>
 internal static class NativeMethods
 {
+    // Windows activation argument parsing; these are OS imports, not C ABI exports.
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern IntPtr CommandLineToArgvW(string commandLine, out int count);
+
+    [DllImport("kernel32.dll")]
+    internal static extern IntPtr LocalFree(IntPtr memory);
+
     /// <summary>
     /// The cdylib's base name. .NET's probing appends the platform decoration:
     /// <c>trace_commons_contributor_ffi.dll</c> on Windows,
@@ -531,6 +538,9 @@ internal static class NativeMethods
     /// </summary>
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr tc_witness_copy();
+
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr tc_onboarding_copy();
 
     /// <summary>
     /// The sentence for a <c>TC_WITNESS_STATE_*</c> value, as an owned char*.

@@ -34,7 +34,7 @@
             <TextBlock Style="{StaticResource TcBodyTextStyle}" TextWrapping="Wrap"
                        Text="Coding agents get better when there are real transcripts to learn from. Almost all of that data is locked inside companies. Trace Commons is a shared pool that isn't." />
             <TextBlock Style="{StaticResource TcBodyTextStyle}" TextWrapping="Wrap"
-                       Text="This app watches for finished Claude Code and Codex sessions on this machine and shows them to you." />
+                       Text="{x:Bind ViewModel.WelcomeBody}" />
             <!--
                 "Good and it is not perfect" is load bearing. A developer
                 knows automatic redaction is imperfect, and conceding it
@@ -271,14 +271,29 @@
                                         <TextBlock Style="{StaticResource TcCaptionTextStyle}"
                                                    Text="{x:Bind SubLine, Mode=OneWay}" TextWrapping="Wrap" />
                                     </StackPanel>
-                                    <Button Grid.Column="1" Content="Ignore"
+                                    <!--
+                                        Hidden rather than disabled when the
+                                        mode has no transition out of it: a
+                                        disabled button with no words on it is
+                                        a zero-width control that says nothing.
+                                    -->
+                                    <Button Grid.Column="1" Content="{x:Bind ActionText, Mode=OneWay}"
                                             VerticalAlignment="Top"
-                                            IsEnabled="{x:Bind IsNotIgnored, Mode=OneWay}"
+                                            Visibility="{x:Bind HasAction, Mode=OneWay}"
+                                            IsEnabled="{x:Bind CanToggle, Mode=OneWay}"
                                             Click="OnIgnoreProject" />
                                 </Grid>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <!--
+                        A refused project-mode write. Settings says so on the
+                        same refusal; without this the row simply re-enables
+                        and a refusal reads as a click that did nothing.
+                    -->
+                    <TextBlock Style="{StaticResource TcHeadingAlertTextStyle}" TextWrapping="Wrap"
+                               Text="{x:Bind ViewModel.ProjectNotice, Mode=OneWay}"
+                               Visibility="{x:Bind ViewModel.HasProjectNotice, Mode=OneWay}" />
                 </StackPanel>
             </ScrollViewer>
             <Button Grid.Row="4" Content="Continue" HorizontalAlignment="Right" Click="OnWatch" />
@@ -289,7 +304,7 @@
             <TextBlock Style="{StaticResource TcTitleScreenTextStyle}"
                        Text="You're set up. Nothing has been sent." TextWrapping="Wrap" />
             <TextBlock Style="{StaticResource TcBodyTextStyle}" TextWrapping="Wrap"
-                       Text="When a session finishes and goes quiet for 30 minutes, it'll show up here. You'll get at most one notification every 4 hours, and none at all if there's nothing waiting." />
+                       Text="{x:Bind ViewModel.DoneBody}" />
             <Button Content="Finish" HorizontalAlignment="Right" Click="OnFinish" />
         </StackPanel>
 
