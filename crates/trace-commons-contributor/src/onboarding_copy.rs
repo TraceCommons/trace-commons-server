@@ -1,7 +1,7 @@
 //! Shared onboarding and digest-permission words for every native shell.
 
 pub const WELCOME_BODY: &str = "This app finds finished coding-agent sessions on this machine according to your source settings. Review those settings to see which folders are read.";
-pub const DONE_BODY: &str = "Sessions waiting for a decision appear for review. Notifications summarize waiting sessions and recent contributions at the configured digest interval; an empty digest is not sent.";
+pub const DONE_BODY: &str = "Sessions waiting for a decision appear for review. Notifications summarize waiting sessions and recent contributions no more often than the configured digest interval; an empty digest is not sent.";
 pub const NOTIFICATION_PURPOSE: &str = "Notifications tell you about sessions waiting for review and recent contributions. They never submit a session for you.";
 pub const NOTIFICATION_HEADING: &str = "Notifications";
 pub const NOTIFICATION_OFFER: &str = "Let Trace Commons notify you?";
