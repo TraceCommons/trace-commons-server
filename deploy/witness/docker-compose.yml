@@ -73,15 +73,20 @@ services:
       # certificates can lift the PII backstop hold at all.
       TRACE_COMMONS_WITNESS_REDACTION: "full-pipeline"
 
-      # The NEAR AI gateway's ed25519 signing key, read live from the
-      # gateway's own attestation report (gateway_attestation.signing_address,
-      # nonce-bound) at pin time. With this set, an offered inference receipt
-      # verifies only under this key; any other signer is refused with the
-      # same folded label as every other receipt failure. The value is a
-      # public key -- it appears in the gateway's published attestation -- so
-      # it lives here rather than in a deploy-time secret. Rotation upstream
-      # means re-reading the report and moving this pin deliberately.
-      TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN: "cb6fc58f6bd685919fa42fb54d3fcfe03222e324bdda91f0bac6d5c73dc4f1c6"
+      # The gateway key pin is DELIBERATELY UNSET.
+      #
+      # It was set on 2026-09-06 to the gateway's ed25519 key. A live run that
+      # same day established that hosted-model receipts are not signed by the
+      # gateway key at all: they carry `signature_kind: provider_tee` and a
+      # PER-MODEL ed25519 key, published in the attestation report's
+      # `model_attestations` when the report is fetched with
+      # `signing_algo=ed25519`. One pinned key therefore cannot be correct for
+      # more than one model, and the gateway key is correct for none -- with it
+      # set, every real receipt is refused.
+      #
+      # Left unset until the per-model verification lands, so the witness is
+      # dormant on this control rather than confidently wrong. See
+      # docs/superpowers/reports/2026-09-06-attested-inference-first-run.md.
 
       # The classifier, resolved at startup: a witness told to run
       # `full-pipeline` with no usable backend does not bind, and a backend
