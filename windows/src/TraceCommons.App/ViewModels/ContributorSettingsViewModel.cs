@@ -1875,8 +1875,7 @@ public sealed class ProjectSettingViewModel : INotifyPropertyChanged
 
     public string ActionText => _mode switch
     {
-        "auto_upload" => WatchCopy.AskMeFirst,
-        "ignore" => "Ask again",
+        "auto_upload" or "ignore" => "Ask again",
         _ => "Ignore",
     };
 
