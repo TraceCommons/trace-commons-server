@@ -2206,6 +2206,21 @@ pub unsafe extern "C" fn tc_source_check_line(
     })
 }
 
+/// Shared editable-source settings copy and undeclared-source policy metadata.
+/// Returns an owned JSON string; release it with `tc_string_free`.
+#[unsafe(no_mangle)]
+pub extern "C" fn tc_source_settings_copy() -> *mut c_char {
+    guard(|| {
+        let copy = trace_commons_contributor::source_copy::source_settings_copy();
+        let json = serde_json::to_string(&copy)?;
+        Ok(to_owned_cstring(&json))
+    })
+    .unwrap_or_else(|_| {
+        set_last_error("panic");
+        std::ptr::null_mut()
+    })
+}
+
 /// The names of the secret detectors the scrubber runs, so a shell can tell
 /// a contributor what is removed without transcribing the list.
 ///

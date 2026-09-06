@@ -569,6 +569,8 @@ char*       tc_routing_last_checked(const char* when);
  * for tc_last_error.
  */
 char*       tc_source_check_line(const char* tool, const char* source_mode);
+/* Shared settings copy JSON; caller frees with tc_string_free. */
+char*       tc_source_settings_copy(void);
 
 /* The names of the secret detectors the scrubber runs, so a shell can tell a
  * contributor what is removed without transcribing the list.
