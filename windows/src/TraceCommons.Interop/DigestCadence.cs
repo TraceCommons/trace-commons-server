@@ -4,19 +4,10 @@ using System.Collections.Generic;
 namespace TraceCommons.Interop;
 
 /// <summary>
-/// The one rule that governs every interruption this app is allowed to make:
-/// at most one digest every four hours, and none at all when nothing is
-/// waiting.
+/// A conservative in-process digest backstop. The daemon owns the configured
+/// digest interval; this gate can suppress events, never create them.
 /// </summary>
 /// <remarks>
-/// <para>
-/// That is not a preference. The onboarding "Done" screen tells a
-/// contributor, in <c>OnboardingWindow.xaml</c> and word for word on all
-/// three shells, that they "will get at most one notification every 4 hours,
-/// and none at all if there's nothing waiting". A notification path that can
-/// exceed it turns that sentence into a false promise, and the contributor
-/// has no way to check.
-/// </para>
 /// <para>
 /// <b>Why this exists when the daemon already decides.</b> The daemon is the
 /// primary gate: <c>daemon/notify.rs::digest_due</c> refuses on an empty
@@ -61,7 +52,7 @@ public sealed class DigestCadence
 {
     /// <summary>
     /// Four hours, matching the daemon's default <c>digest_interval_secs</c>
-    /// (14400) and the sentence the onboarding screen shows.
+    /// (14400). A shorter configured daemon interval can still be suppressed.
     /// </summary>
     public static readonly TimeSpan MinimumInterval = TimeSpan.FromHours(4);
 
@@ -77,9 +68,7 @@ public sealed class DigestCadence
     }
 
     /// <summary>
-    /// Uses an explicit interval. For tests only -- nothing in the app may
-    /// shorten this, because the promise on the onboarding screen names four
-    /// hours rather than "whatever is configured".
+    /// Uses an explicit interval for deterministic tests.
     /// </summary>
     internal DigestCadence(TimeSpan interval)
     {

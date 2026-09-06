@@ -21,8 +21,8 @@ import SwiftUI
 /// animation, the mark's assembly, and "the coin only turns on the website".
 /// The face carries no `$`. Section 5.9.1's frame draws one, but section
 /// 7.3's standing rule is that no currency symbol appears in the native UI
-/// and the `$` lives only on the website's coin -- which is what the card's
-/// own disclaimer says out loud.
+/// and the `$` lives only on the website's coin -- which is why the card's
+/// own coin face carries no glyph.
 ///
 /// A single reusable view rather than two copies, since the two call sites
 /// (onboarding and `HistoryView`) must never drift on this wording.
@@ -76,10 +76,13 @@ struct CreditRecordView: View {
                     }
                 }
 
+                // The disclaimer, and only the disclaimer. This used to
+                // carry two design notes -- about the website's coin and
+                // why it does not turn here -- which were written for a
+                // reviewer and rendered to every contributor.
                 Text("""
-                A credit is a signed record that a contribution was accepted. It is not \
-                currency — the $ on the coin is the website's joke, and the app keeps the \
-                disclaimer.
+                A credit is a signed record that a contribution was accepted. It is \
+                not currency.
                 """)
                 .font(TC.Font_.caption)
                 .foregroundStyle(TC.inkSecondary)
@@ -90,12 +93,6 @@ struct CreditRecordView: View {
             .padding(.horizontal, TC.Space.l)
             .frame(maxWidth: .infinity, alignment: .leading)
             .tcCard()
-
-            // Outside the card, in the smallest type on the screen: the
-            // stillness is a stated decision, not an oversight.
-            Text("Still, always. The coin only turns on the website.")
-                .font(TC.Font_.captionSmall)
-                .foregroundStyle(TC.inkTertiary)
         }
     }
 

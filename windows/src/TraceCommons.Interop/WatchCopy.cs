@@ -49,6 +49,45 @@ public static class WatchCopy
     /// </summary>
     public const string Ignored = "Ignored";
 
+    /// <summary>
+    /// The state of a project that uploads without asking.
+    ///
+    /// Onboarding never arms a project, but a contributor who armed one in
+    /// Settings and later walks this screen still sees the row, and a consent
+    /// surface that leaves the armed state blank is the one row that must not
+    /// go quiet. The words are Settings' own -- that screen reads them from
+    /// here too, so the armed mode has one name.
+    /// </summary>
+    public const string Armed = "Contributed without asking";
+
+    /// <summary>
+    /// What the row's button says when an ignored or armed project returns
+    /// to manual review: the action is to start being asked again. Settings' word, shared for the reason
+    /// <see cref="AskMeFirst"/> is shared -- two screens driving one field must
+    /// not name one transition two ways.
+    /// </summary>
+    public const string RestoreAction = "Ask again";
+
+    /// <summary>The button on an ask-first row.</summary>
+    public const string IgnoreAction = "Ignore";
+
+    /// <summary>
+    /// What is said when the daemon refused the write. Settings' sentence,
+    /// shared so both surfaces report one refusal the same way.
+    /// </summary>
+    public const string WriteFailed = "That project setting couldn't be changed.";
+
+    /// <summary>
+    /// What is said when the write was accepted but the stored state could not
+    /// be read back -- the row vanished from the re-read, or the re-read itself
+    /// failed. Neither "changed" nor "unchanged" is known to be true, so this
+    /// says only what is known: this surface cannot see the stored answer, and
+    /// Settings is where it lives.
+    /// </summary>
+    public const string WriteUnconfirmed =
+        "That project setting was sent, but its state couldn't be read back just now. "
+        + "Check it in Settings.";
+
     /// <summary>Shown when the daemon reports no projects at all.</summary>
     public const string Empty =
         "No projects yet. Sessions you run later will appear here, and in Settings.";
@@ -105,6 +144,37 @@ public static class WatchCopy
             return UnknownNote;
         }
 
-        return string.Equals(mode, "ignore", StringComparison.Ordinal) ? Ignored : AskMeFirst;
+        return mode switch
+        {
+            "ignore" => Ignored,
+
+            // An armed row says that it is armed. Falling through to
+            // "Ask me first" here would tell a contributor the opposite of
+            // what the daemon will do with their next session, and rendering
+            // nothing would leave the one row that most needs a state line
+            // without one.
+            "auto_upload" => Armed,
+
+            // Anything else, including a mode this build does not know, is
+            // ask-first: that is the claim that cannot overstate consent, and
+            // no row is left blank to reach it.
+            _ => AskMeFirst,
+        };
     }
+
+    /// <summary>
+    /// What the row's button says, or <c>null</c> when there is no action to
+    /// offer because <see cref="ProjectManualMode.Next"/> has no transition out
+    /// of the mode. A caller holding <c>null</c> hides the control: a disabled
+    /// button with no words on it is a zero-width target that says nothing.
+    ///
+    /// Both project surfaces read this. The transition is the same one on both,
+    /// so the words are too.
+    /// </summary>
+    public static string? ActionFor(string? mode) => ProjectManualMode.Next(mode) switch
+    {
+        "ignore" => IgnoreAction,
+        "ask" => RestoreAction,
+        _ => null,
+    };
 }

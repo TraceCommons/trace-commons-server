@@ -161,6 +161,42 @@ fn guarded_string_no_err(
     })
 }
 
+/// [`guarded_string`]'s panic tail for the exports that do not return an
+/// owned string: the `i32` status and tone codes, and the `*mut tc_handle`
+/// the daemon starts return. `sentinel` is the value that export documents
+/// for a caught panic -- `-1`, `TC_WITNESS_STATE_UNREADABLE`,
+/// `TC_WITNESS_TONE_REFUSED`, a NULL handle -- and it is per-call precisely
+/// because those differ, and because each one is the fail-closed direction
+/// for its own surface. Only a caught panic reaches this tail: every
+/// converted closure turns its own business refusals into `Ok(..)` first, so
+/// an ordinary refusal keeps the label it set and is never reclassified.
+/// Callers must uphold their exported function's writable `err` contract.
+fn guarded_scalar<T>(
+    err: *mut *mut c_char,
+    sentinel: T,
+    f: impl FnOnce() -> anyhow::Result<T> + UnwindSafe,
+) -> T {
+    guard(f).unwrap_or_else(|_| {
+        // `set_last_error`/`to_owned_cstring` are audited not to panic (see
+        // their doc comments), so this tail cannot recurse.
+        set_last_error("panic");
+        if !err.is_null() {
+            unsafe { *err = to_owned_cstring("panic") };
+        }
+        sentinel
+    })
+}
+
+/// Like [`guarded_scalar`], for the exported functions with no `*err`
+/// out-param, which report a caught panic through [`tc_last_error`] and
+/// their sentinel alone.
+fn guarded_scalar_no_err<T>(sentinel: T, f: impl FnOnce() -> anyhow::Result<T> + UnwindSafe) -> T {
+    guard(f).unwrap_or_else(|_| {
+        set_last_error("panic");
+        sentinel
+    })
+}
+
 thread_local! {
     static LAST_ERROR: std::cell::RefCell<Option<CString>> = const { std::cell::RefCell::new(None) };
 }
@@ -528,7 +564,7 @@ pub unsafe extern "C" fn tc_daemon_start(
     config_dir: *const c_char,
     err: *mut *mut c_char,
 ) -> *mut tc_handle {
-    let outcome = guard(|| {
+    guarded_scalar(err, std::ptr::null_mut(), || {
         let store_result: anyhow::Result<ConfigStore> = (|| {
             let dir = unsafe { borrow_str(config_dir) }?;
             ConfigStore::open(std::path::PathBuf::from(dir))
@@ -551,22 +587,13 @@ pub unsafe extern "C" fn tc_daemon_start(
 
         let result = start_daemon_handle(store);
         // Everything from here on, including turning a failure into the
-        // out-param the caller sees, stays inside `guard`'s catch_unwind:
-        // `set_last_error` and `to_owned_cstring` are audited not to panic
-        // themselves (see their doc comments), so nothing here can escape
-        // it either.
+        // out-param the caller sees, stays inside `guarded_scalar`'s
+        // catch_unwind: `set_last_error` and `to_owned_cstring` are audited
+        // not to panic themselves (see their doc comments), so nothing here
+        // can escape it either. Only a genuine caught panic reaches
+        // `guarded_scalar`'s tail -- this closure converts every
+        // business-logic error to `Ok` and never lets one get there.
         Ok(finish_daemon_start(result, err))
-    });
-    outcome.unwrap_or_else(|_| {
-        // A genuine caught panic (not a business-logic error, which the
-        // closure above always converts to `Ok` and never lets reach
-        // here). `set_last_error`/`to_owned_cstring` are audited not to
-        // panic (see their doc comments), so this cannot recurse.
-        set_last_error("panic");
-        if !err.is_null() {
-            unsafe { *err = to_owned_cstring("panic") };
-        }
-        std::ptr::null_mut()
     })
 }
 
@@ -679,7 +706,7 @@ pub unsafe extern "C" fn tc_daemon_start_with_settings(
     settings_json: *const c_char,
     err: *mut *mut c_char,
 ) -> *mut tc_handle {
-    let outcome = guard(|| {
+    guarded_scalar(err, std::ptr::null_mut(), || {
         let store_result: anyhow::Result<ConfigStore> = (|| {
             let dir = unsafe { borrow_str(config_dir) }?;
             ConfigStore::open(std::path::PathBuf::from(dir))
@@ -723,13 +750,6 @@ pub unsafe extern "C" fn tc_daemon_start_with_settings(
 
         let result = start_daemon_handle(store);
         Ok(finish_daemon_start(result, err))
-    });
-    outcome.unwrap_or_else(|_| {
-        set_last_error("panic");
-        if !err.is_null() {
-            unsafe { *err = to_owned_cstring("panic") };
-        }
-        std::ptr::null_mut()
     })
 }
 
@@ -2206,6 +2226,21 @@ pub unsafe extern "C" fn tc_source_check_line(
     })
 }
 
+/// Shared editable-source settings copy and undeclared-source policy metadata.
+/// Returns an owned JSON string; release it with `tc_string_free`.
+#[unsafe(no_mangle)]
+pub extern "C" fn tc_source_settings_copy() -> *mut c_char {
+    guard(|| {
+        let copy = trace_commons_contributor::source_copy::source_settings_copy();
+        let json = serde_json::to_string(&copy)?;
+        Ok(to_owned_cstring(&json))
+    })
+    .unwrap_or_else(|_| {
+        set_last_error("panic");
+        std::ptr::null_mut()
+    })
+}
+
 /// The names of the secret detectors the scrubber runs, so a shell can tell
 /// a contributor what is removed without transcribing the list.
 ///
@@ -2344,7 +2379,7 @@ fn witness_fail(label: &'static str, err: *mut *mut c_char) -> *mut c_char {
 /// `config_dir` must be a valid, NUL-terminated UTF-8 C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tc_witness_trust_state(config_dir: *const c_char) -> i32 {
-    guard(|| {
+    guarded_scalar_no_err(TC_WITNESS_STATE_UNREADABLE, || {
         Ok(match unsafe { witness_config_at(config_dir) } {
             Ok(Some((_, cfg))) => trace_commons_contributor::witness::status::witness_status(&cfg)
                 .state
@@ -2358,10 +2393,6 @@ pub unsafe extern "C" fn tc_witness_trust_state(config_dir: *const c_char) -> i3
                 TC_WITNESS_STATE_UNREADABLE
             }
         })
-    })
-    .unwrap_or_else(|_| {
-        set_last_error("panic");
-        TC_WITNESS_STATE_UNREADABLE
     })
 }
 
@@ -2493,7 +2524,7 @@ pub unsafe extern "C" fn tc_witness_configure(
     measurements_json: *const c_char,
     err: *mut *mut c_char,
 ) -> i32 {
-    let outcome = guard(|| {
+    guarded_scalar(err, -1, || {
         let (store, mut cfg) = match unsafe { witness_config_at(config_dir) } {
             Ok(Some(loaded)) => loaded,
             Ok(None) => {
@@ -2564,13 +2595,6 @@ pub unsafe extern "C" fn tc_witness_configure(
             return Ok(-1);
         }
         Ok(0)
-    });
-    outcome.unwrap_or_else(|_| {
-        set_last_error("panic");
-        if !err.is_null() {
-            unsafe { *err = to_owned_cstring("panic") };
-        }
-        -1
     })
 }
 
@@ -2591,7 +2615,7 @@ pub unsafe extern "C" fn tc_witness_configure(
 /// non-null, must point to writable `*mut c_char` storage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tc_witness_clear(config_dir: *const c_char, err: *mut *mut c_char) -> i32 {
-    let outcome = guard(|| {
+    guarded_scalar(err, -1, || {
         let (store, mut cfg) = match unsafe { witness_config_at(config_dir) } {
             Ok(Some(loaded)) => loaded,
             Ok(None) => {
@@ -2612,13 +2636,6 @@ pub unsafe extern "C" fn tc_witness_clear(config_dir: *const c_char, err: *mut *
             return Ok(-1);
         }
         Ok(1)
-    });
-    outcome.unwrap_or_else(|_| {
-        set_last_error("panic");
-        if !err.is_null() {
-            unsafe { *err = to_owned_cstring("panic") };
-        }
-        -1
     })
 }
 
@@ -2772,7 +2789,7 @@ pub extern "C" fn tc_witness_state_line(state_code: i32) -> *mut c_char {
 /// the machine is "they are not".
 #[unsafe(no_mangle)]
 pub extern "C" fn tc_witness_state_tone(state_code: i32) -> i32 {
-    guard(|| {
+    guarded_scalar_no_err(TC_WITNESS_TONE_REFUSED, || {
         let Some(state) =
             trace_commons_contributor::witness::status::WitnessTrustState::from_abi_code(
                 state_code,
@@ -2782,10 +2799,6 @@ pub extern "C" fn tc_witness_state_tone(state_code: i32) -> i32 {
             return Ok(TC_WITNESS_TONE_REFUSED);
         };
         Ok(trace_commons_contributor::witness_copy::witness_state_tone(state).abi_code())
-    })
-    .unwrap_or_else(|_| {
-        set_last_error("panic");
-        TC_WITNESS_TONE_REFUSED
     })
 }
 
@@ -2822,13 +2835,18 @@ pub extern "C" fn tc_witness_last_result_line() -> *mut c_char {
 /// fail-closed reason.
 #[unsafe(no_mangle)]
 pub extern "C" fn tc_witness_last_result_tone() -> i32 {
-    guard(|| {
+    guarded_scalar_no_err(TC_WITNESS_TONE_REFUSED, || {
         let result = trace_commons_contributor::witness::status::last_result();
         Ok(trace_commons_contributor::witness_copy::witness_last_result_tone(&result).abi_code())
     })
-    .unwrap_or_else(|_| {
-        set_last_error("panic");
-        TC_WITNESS_TONE_REFUSED
+}
+
+/// Shared native onboarding and notification copy. Free with `tc_string_free`.
+#[unsafe(no_mangle)]
+pub extern "C" fn tc_onboarding_copy() -> *mut c_char {
+    guarded_string_no_err(|| {
+        let copy = trace_commons_contributor::onboarding_copy::onboarding_copy();
+        Ok(to_owned_cstring(&serde_json::to_string(&copy)?))
     })
 }
 
@@ -2891,5 +2909,93 @@ mod string_guard_tests {
             owned_text(guarded_string_no_err(|| Ok(to_owned_cstring("result")))),
             "result"
         );
+    }
+}
+
+#[cfg(test)]
+mod scalar_guard_tests {
+    use super::*;
+
+    fn borrowed_text(pointer: *const c_char) -> String {
+        assert!(!pointer.is_null());
+        unsafe { CStr::from_ptr(pointer) }
+            .to_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    fn owned_text(pointer: *mut c_char) -> String {
+        assert!(!pointer.is_null());
+        let text = unsafe { CStr::from_ptr(pointer) }
+            .to_str()
+            .unwrap()
+            .to_owned();
+        unsafe { tc_string_free(pointer) };
+        text
+    }
+
+    #[test]
+    fn caught_scalar_panics_return_the_sentinel_and_the_fixed_owned_error_label() {
+        let mut error = std::ptr::null_mut();
+        let result = guarded_scalar(&mut error, -1, || panic!("fixture-panic-payload"));
+        assert_eq!(result, -1);
+        assert_eq!(owned_text(error), "panic");
+        assert_eq!(borrowed_text(tc_last_error()), "panic");
+    }
+
+    #[test]
+    fn each_scalar_guard_reports_a_panic_through_its_own_sentinel() {
+        assert_eq!(
+            guarded_scalar(std::ptr::null_mut(), TC_WITNESS_STATE_UNREADABLE, || {
+                panic!("fixture-panic-payload")
+            }),
+            TC_WITNESS_STATE_UNREADABLE
+        );
+        assert_eq!(borrowed_text(tc_last_error()), "panic");
+        assert_eq!(
+            guarded_scalar_no_err(TC_WITNESS_TONE_REFUSED, || panic!("fixture-panic-payload")),
+            TC_WITNESS_TONE_REFUSED
+        );
+        assert_eq!(borrowed_text(tc_last_error()), "panic");
+        // The daemon-start shape: the sentinel is a NULL handle pointer,
+        // not an integer, and the panic tail must still report through it.
+        let mut error = std::ptr::null_mut();
+        let handle: *mut tc_handle = guarded_scalar(&mut error, std::ptr::null_mut(), || {
+            panic!("fixture-panic-payload")
+        });
+        assert!(handle.is_null());
+        assert_eq!(owned_text(error), "panic");
+        assert_eq!(borrowed_text(tc_last_error()), "panic");
+    }
+
+    #[test]
+    fn ordinary_scalar_refusals_keep_their_label_instead_of_becoming_panics() {
+        let mut error = std::ptr::null_mut();
+        let slot = &mut error as *mut *mut c_char;
+        let result = guarded_scalar(slot, -1, || {
+            witness_fail("fixture-refusal", slot);
+            Ok(-1)
+        });
+        assert_eq!(result, -1);
+        assert_eq!(owned_text(error), "fixture-refusal");
+        assert_eq!(borrowed_text(tc_last_error()), "fixture-refusal");
+        assert_eq!(
+            guarded_scalar_no_err(TC_WITNESS_STATE_UNREADABLE, || {
+                set_last_error("fixture-refusal-no-err");
+                Ok(TC_WITNESS_STATE_NOT_ENROLLED)
+            }),
+            TC_WITNESS_STATE_NOT_ENROLLED
+        );
+        assert_eq!(borrowed_text(tc_last_error()), "fixture-refusal-no-err");
+    }
+
+    #[test]
+    fn successful_scalar_guards_pass_the_value_through_untouched() {
+        let mut error = std::ptr::null_mut();
+        assert_eq!(guarded_scalar(&mut error, -1, || Ok(7)), 7);
+        assert!(error.is_null());
+        set_last_error("fixture-untouched");
+        assert_eq!(guarded_scalar_no_err(TC_WITNESS_TONE_REFUSED, || Ok(3)), 3);
+        assert_eq!(borrowed_text(tc_last_error()), "fixture-untouched");
     }
 }
