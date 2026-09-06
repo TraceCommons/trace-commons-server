@@ -1185,7 +1185,8 @@ pub fn entry_value(e: &super::queue::QueueEntry) -> serde_json::Value {
 ///
 /// The helpers below return `Result<_, Box<Response>>` so the refusal is built
 /// once, next to the check that produces it; this unwraps the value or
-/// returns the refusal from the enclosing handler.
+/// returns the refusal from the enclosing handler. This local macro has textual
+/// scope: only handlers below its definition can use it.
 macro_rules! try_response {
     ($e:expr) => {
         match $e {
@@ -7329,6 +7330,27 @@ mod tests {
             let request = req(method, serde_json::Value::Null);
             let response = handle_request(&s, &request);
             assert_eq!(response.id, request.id);
+            let error = response.error.expect("synchronous dispatcher must refuse");
+            assert_eq!(error.code, ERR_UNAVAILABLE);
+            assert_eq!(error.message, label);
+        }
+    }
+
+    #[test]
+    fn every_async_only_method_is_advertised_and_refused_synchronously() {
+        let s = shared();
+        assert_eq!(ASYNC_ONLY_METHODS.len(), 15);
+        let mut seen = std::collections::BTreeSet::new();
+        for &(method, label) in ASYNC_ONLY_METHODS {
+            assert!(
+                METHODS.contains(&method),
+                "async-only method must be advertised: {method}"
+            );
+            assert!(seen.insert(method), "duplicate async-only method: {method}");
+            let request = req(method, serde_json::Value::Null);
+            let response = handle_request(&s, &request);
+            assert_eq!(response.id, request.id);
+            assert!(response.result.is_none());
             let error = response.error.expect("synchronous dispatcher must refuse");
             assert_eq!(error.code, ERR_UNAVAILABLE);
             assert_eq!(error.message, label);
