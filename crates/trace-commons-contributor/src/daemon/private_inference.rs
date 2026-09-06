@@ -203,12 +203,38 @@ pub struct PrivateInference {
     /// asks for an ephemeral one.
     port: Option<u16>,
     proxy: Option<EmbeddedProxy>,
+    /// The runtime a proxy's tasks must be spawned onto, when it is not the
+    /// one this call happens to be running on.
+    ///
+    /// `embed::start` puts the axum server and IronWire's housekeeping on
+    /// the ambient runtime via `tokio::spawn`, so whichever runtime is in
+    /// context when it is called owns the proxy for its whole life. On the
+    /// daemon's own poll tick that is the daemon runtime and nothing is
+    /// needed. On the synchronous path it is a throwaway current-thread
+    /// runtime built inside a scoped thread, which is dropped microseconds
+    /// later -- taking every one of the proxy's tasks with it while the
+    /// response says `running`. That path sets this.
+    runtime: Option<tokio::runtime::Handle>,
     state: PrivateInferenceState,
     /// A proxy this daemon started has ended on its own. Sticky until the
     /// switch is turned off and on again: restarting it every poll tick
     /// would hide a proxy that cannot stay up behind a state that keeps
     /// flickering back to green.
     crashed: bool,
+}
+
+/// Why a start did not produce a proxy.
+///
+/// A separate type from `EmbedError` because one of the two ways to fail is
+/// not IronWire's: the spawned start can fail to join at all. Folding that
+/// into an `EmbedError` variant would put a specific, wrong cause -- a bind
+/// failure, say -- on a condition that never reached the bind.
+enum StartRefusal {
+    /// IronWire refused, and said why.
+    Embed(EmbedError),
+    /// The start was spawned onto the daemon runtime and never came back:
+    /// it panicked, or that runtime went away underneath it.
+    Spawn,
 }
 
 impl PrivateInference {
@@ -220,6 +246,7 @@ impl PrivateInference {
             home,
             port: None,
             proxy: None,
+            runtime: None,
             state: PrivateInferenceState::Off,
             crashed: false,
         }
@@ -234,6 +261,25 @@ impl PrivateInference {
             port: Some(port),
             ..Self::new(home)
         }
+    }
+
+    /// Name the runtime this instance's proxy must live on.
+    ///
+    /// Idempotent and cheap, so the reconcile pass sets it every time
+    /// rather than relying on a one-shot at construction: `PrivateInference`
+    /// is built by `DaemonShared::load`, which is synchronous and is called
+    /// from places that are not inside any runtime at all, so there is no
+    /// handle to capture there.
+    ///
+    /// A `Handle` and not an `EnterGuard`: entering a runtime sets a
+    /// thread-local, and `apply` awaits, so a guard taken here would have to
+    /// be held across await points -- where a future resumed on a different
+    /// worker thread would find the context missing and drop the guard
+    /// against a thread that never had it. Spawning the start *onto* the
+    /// handle is the version that does not depend on which thread polls
+    /// what.
+    pub fn set_runtime(&mut self, runtime: Option<tokio::runtime::Handle>) {
+        self.runtime = runtime;
     }
 
     /// What the daemon reports right now.
@@ -266,7 +312,7 @@ impl PrivateInference {
             self.state = PrivateInferenceState::RunningElsewhere { port };
             return;
         }
-        match embed::start(&self.home, self.port).await {
+        match self.start_proxy().await {
             Ok(proxy) => {
                 let port = proxy.port();
                 self.state = state_after_start(port, proxy.startup_report().no_backends);
@@ -279,8 +325,41 @@ impl PrivateInference {
                 );
             }
             Err(error) => {
+                // `Lock` is not a failure to report as one: it means
+                // another IronWire already owns this home, which is the
+                // documented meaning of `running_elsewhere`. The pointer
+                // probe above would usually have caught it, but that probe
+                // is advisory -- the pointer can be missing, stale, or not
+                // yet written by an owner that is still starting -- so the
+                // home lock is the authoritative answer and this is where
+                // it arrives. Upstream documents the carried port as the
+                // owner's published one *or* the port we asked for, so the
+                // label is exact and the number is the best available.
+                let error = match error {
+                    StartRefusal::Embed(error) => error,
+                    StartRefusal::Spawn => {
+                        tracing::warn!(
+                            pass = "private_inference",
+                            reason = LABEL_START_FAILED,
+                            "the proxy start did not come back from the daemon runtime"
+                        );
+                        self.state = PrivateInferenceState::Failed {
+                            label: LABEL_START_FAILED,
+                        };
+                        return;
+                    }
+                };
+                if let EmbedError::Lock { port } = error {
+                    tracing::info!(
+                        pass = "private_inference",
+                        port,
+                        "an existing IronWire owns this home"
+                    );
+                    self.state = PrivateInferenceState::RunningElsewhere { port };
+                    return;
+                }
                 let label = match error {
-                    EmbedError::PortInUse { .. } | EmbedError::Lock { .. } => LABEL_PORT_IN_USE,
+                    EmbedError::PortInUse { .. } => LABEL_PORT_IN_USE,
                     _ => LABEL_START_FAILED,
                 };
                 tracing::warn!(
@@ -290,6 +369,34 @@ impl PrivateInference {
                 );
                 self.state = PrivateInferenceState::Failed { label };
             }
+        }
+    }
+
+    /// Start the proxy on the runtime that must own it.
+    ///
+    /// With no runtime named -- the daemon's own poll tick -- this is a
+    /// plain call and the ambient runtime is already the right one. With one
+    /// named, the start is spawned onto it, so `embed::start`'s own
+    /// `tokio::spawn` calls land on that runtime and the proxy outlives
+    /// whatever short-lived runtime the caller is standing on.
+    ///
+    /// A join failure (the spawned start panicked, or its runtime shut down
+    /// underneath it) is reported as a refusal to start, which is what it
+    /// is; there is no proxy either way.
+    async fn start_proxy(&self) -> Result<EmbeddedProxy, StartRefusal> {
+        let Some(handle) = self.runtime.clone() else {
+            return embed::start(&self.home, self.port)
+                .await
+                .map_err(StartRefusal::Embed);
+        };
+        let home = self.home.clone();
+        let port = self.port;
+        match handle
+            .spawn(async move { embed::start(&home, port).await })
+            .await
+        {
+            Ok(started) => started.map_err(StartRefusal::Embed),
+            Err(_) => Err(StartRefusal::Spawn),
         }
     }
 
@@ -412,6 +519,79 @@ mod tests {
                 .await
                 .is_ok_and(|r| r.status().is_success()),
             "their proxy must still be serving"
+        );
+
+        theirs.shutdown().await;
+    }
+
+    /// A pointer left behind by an IronWire that is gone must not stop this
+    /// daemon from starting its own.
+    ///
+    /// The pointer file outlives the process that wrote it whenever that
+    /// process was killed rather than shut down, so a daemon that treated
+    /// any pointer as proof of a live owner would refuse forever, on a
+    /// machine where nothing is running, until someone found and deleted a
+    /// file they were never told about. The probe is what separates the two,
+    /// and this is the branch that says so.
+    #[tokio::test]
+    async fn a_pointer_to_a_dead_port_does_not_stop_a_start() {
+        let home = tempfile::tempdir().expect("a temp home");
+
+        // A port that is definitely not answering: bind it, read the number
+        // back, then drop the listener.
+        let dead = {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .expect("a port to abandon");
+            listener.local_addr().unwrap().port()
+        };
+        write_pointer(home.path(), dead);
+
+        let mut host = PrivateInference::with_port(home.path().to_path_buf(), 0);
+        host.apply(true).await;
+
+        let port = match host.state() {
+            PrivateInferenceState::Running { port } => port,
+            other => panic!("a stale pointer must not block a start, got {other:?}"),
+        };
+        assert_ne!(port, dead, "the start must have bound its own port");
+        assert!(
+            reqwest::get(format!("http://127.0.0.1:{port}/_ironwire/health"))
+                .await
+                .is_ok_and(|r| r.status().is_success())
+        );
+
+        host.apply(false).await;
+    }
+
+    /// An IronWire owning the home with no pointer to find is still
+    /// `running_elsewhere`, not a failure.
+    ///
+    /// The pointer probe is advisory: it can be missing, stale, or not yet
+    /// written by an owner still starting up. When it misses, the home lock
+    /// is what answers, and `EmbedError::Lock` means exactly what the probe
+    /// would have said -- another IronWire owns this home. Reporting that as
+    /// a failed start would tell a contributor their proxy is broken when
+    /// the truth is that theirs is already running.
+    #[tokio::test]
+    async fn a_locked_home_with_no_pointer_is_still_running_elsewhere() {
+        let home = tempfile::tempdir().expect("a temp home");
+        let theirs = ironwire_proxy::embed::start(home.path(), Some(0))
+            .await
+            .expect("their proxy starts");
+
+        // Whatever pointer their start published, take it away: this is the
+        // case where discovery has nothing to offer and only the home lock
+        // knows.
+        let _ = std::fs::remove_file(home.path().join("endpoint.json"));
+
+        let mut host = PrivateInference::with_port(home.path().to_path_buf(), 0);
+        host.apply(true).await;
+
+        assert!(
+            matches!(host.state(), PrivateInferenceState::RunningElsewhere { .. }),
+            "a locked home is someone else's proxy, got {:?}",
+            host.state()
         );
 
         theirs.shutdown().await;

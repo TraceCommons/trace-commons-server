@@ -1557,6 +1557,24 @@ contributor asking this daemon to. Turning it on repoints no agent -- which
 tools route through IronWire stays a per-tool declaration -- and turning it
 off stops only the instance this daemon started.
 
+**What turning it on exposes.** Until this key, a running daemon bound one
+thing: its own IPC socket or named pipe, guarded by the 0700 state directory
+on unix and by the pipe DACL on Windows. With the switch on it also binds
+IronWire's loopback listener, and that listener is not the same shape of
+thing. IronWire's *control* API is token-gated -- a caller needs the token
+file out of the proxy home -- but the *inference* path is not: any process
+running as any user who can reach `127.0.0.1` on that port can send
+inference requests through it, and they are billed and authenticated with
+whatever upstream credentials the proxy home is configured with. On a
+single-user desktop that is the contributor's own software; on a shared or
+multi-user machine it is anyone with a local shell. Enabling it also starts
+IronWire's own background work, including catalogue discovery, which makes
+network calls the daemon did not previously make.
+
+This is why the default is off and why nothing turns it on by discovery. A
+client offering the switch should say plainly what it turns on, rather than
+presenting it as a performance or privacy toggle alone.
+
 What actually happened is reported separately, as `private_inference_state`
 on `get_settings`, `set_settings` and `status`. It is an object,
 `{"state": <label>, "port": <number or null>}`, with these labels:

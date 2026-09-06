@@ -264,6 +264,14 @@ pub async fn start_embedded(store: ConfigStore) -> Result<EmbeddedDaemon> {
     // daemon had started, and produced a confident wrong diagnosis.
     let started = async {
         let shared = Arc::new(ipc::DaemonShared::load(store)?);
+        // Claim this runtime for anything the daemon hosts that outlives one
+        // request. This block is `async` and runs on the real daemon runtime
+        // in both entry points, which is the whole reason the call belongs
+        // here rather than in `load` -- `load` is synchronous and has callers
+        // that are inside no runtime at all. Without this a proxy started
+        // through the synchronous IPC path would be spawned onto the
+        // throwaway runtime that path builds, and would die with it.
+        shared.adopt_runtime();
         // The two transports are the same protocol over different plumbing: a
         // unix socket guarded by its 0700 state directory, or a Windows named
         // pipe guarded by its DACL. See `win_pipe` for why the Windows side
@@ -361,10 +369,18 @@ pub(crate) fn run_blocking<R>(f: impl FnOnce() -> R) -> R {
 ///
 /// Private inference is applied from settings before the first tick, so a
 /// daemon that starts with the switch already on is hosting the proxy by the
-/// time it answers its first `status`, and it is stopped on the way out
-/// however the loop ended -- request, signal, or error. A proxy left running
-/// past the daemon that started it would hold the port, the pointer and the
-/// home lock against the next start.
+/// time it answers its first `status`, and it is stopped on the way out for
+/// every way the loop *returns* -- request, signal, or error. A proxy left
+/// running past the daemon that started it would hold the port, the pointer
+/// and the home lock against the next start.
+///
+/// Two exits skip this stop: a panic unwinding through `supervise_passes`,
+/// and this future being dropped rather than driven to completion. Neither
+/// leaks the port -- `EmbeddedProxy::drop` requests shutdown, and process
+/// exit releases everything regardless -- but the difference is real: the
+/// explicit stop *awaits* the drain, so in-flight requests finish and the
+/// pointer and home lock are released before this returns, where the drop
+/// path only asks and does not wait.
 async fn supervise(shared: Arc<ipc::DaemonShared>, dry_run: bool) -> Result<()> {
     shared.reconcile_private_inference().await;
     let result = supervise_passes(&shared, dry_run).await;
@@ -1450,6 +1466,30 @@ mod tests {
     /// `start_embedded` directly rather than through the FFI, is the one
     /// that actually proves the second failure is the lock, not something
     /// else: it asserts on the typed `StartFailure` the error carries.
+    /// Starting a daemon claims the runtime that hosted proxies must live
+    /// on.
+    ///
+    /// The mechanism has its own test in `ipc`, which flips the switch
+    /// through `handle_local` and probes the port afterwards -- but that
+    /// test calls `adopt_runtime` itself, so it proves the mechanism works
+    /// and not that anything calls it. This is the other half: delete the
+    /// call in `start_embedded` and a real daemon goes back to starting
+    /// proxies on whatever short-lived runtime the caller was standing on,
+    /// with nothing failing until an app flips the switch.
+    #[tokio::test]
+    async fn a_started_daemon_claims_a_runtime_for_hosted_proxies() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::config::ConfigStore::open(dir.path().to_path_buf()).unwrap();
+        let embedded = start_embedded(store).await.unwrap();
+        assert!(
+            embedded.shared.has_adopted_runtime(),
+            "a started daemon must claim its runtime, or a proxy started \
+             through the synchronous IPC path dies with the throwaway \
+             runtime that path builds"
+        );
+        embedded.close();
+    }
+
     #[tokio::test]
     async fn a_second_start_embedded_fails_specifically_on_the_lock() {
         let dir = tempfile::tempdir().unwrap();
