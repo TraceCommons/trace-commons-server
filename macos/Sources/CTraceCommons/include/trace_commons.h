@@ -589,9 +589,8 @@ char*       tc_private_inference_copy(void);
  * state is "off", "running", "running_no_backends", "running_elsewhere",
  * "stopping", "port_in_use", "start_failed" or "crashed".
  *
- * A label this build has never heard of -- and a NULL or non-UTF-8 state --
- * reads as the unavailable sentence. It never falls through to
- * one of the three "on" sentences.
+ * An empty, NULL or non-UTF-8 label reports that no usable status was provided.
+ * An unfamiliar nonempty label reads as unavailable. Neither implies off.
  *
  * Returns an owned string; free it with tc_string_free. NULL only on a caught
  * panic.
@@ -602,8 +601,8 @@ char*       tc_private_inference_state_line(const char* state);
  * of the TC_PRIVATE_INFERENCE_TONE_* values.
  *
  * Takes what the sentence takes, so the two stay in step by construction. A
- * SHELL MUST NOT RECOVER THIS BY READING THE RENDERED SENTENCE: three of the
- * state sentences may begin with the same words.
+ * SHELL MUST NOT RECOVER THIS BY READING THE RENDERED SENTENCE: port_in_use,
+ * start_failed and crashed all begin "Not on." but have distinct recoveries.
  *
  * Answers TC_PRIVATE_INFERENCE_TONE_NEUTRAL for a label this build has never
  * heard of, for a NULL or non-UTF-8 state, and on a caught panic. There is no

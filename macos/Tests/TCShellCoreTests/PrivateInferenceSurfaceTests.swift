@@ -14,7 +14,7 @@ final class PrivateInferenceSurfaceTests: XCTestCase {
          "offer_no_repoint":"NO-REPOINT","offer_accept":"ACCEPT",
          "offer_decline":"DECLINE","offer_asked_once":"ONCE",
          "settings_title":"S-TITLE","settings_toggle":"S-TOGGLE",
-         "settings_applies_at_once":"S-AT-ONCE","state_off":"S-OFF","state_unknown":"S-UNKNOWN","state_stopping":"S-STOPPING",
+         "settings_applies_at_once":"S-AT-ONCE","state_off":"S-OFF","state_unknown":"S-UNKNOWN","state_unreported":"S-UNREPORTED","state_stopping":"S-STOPPING",
          "state_running":"S-RUNNING","state_running_no_backends":"S-NO-BACKENDS",
          "state_running_elsewhere":"S-ELSEWHERE","state_port_in_use":"S-PORT",
          "state_start_failed":"S-FAILED","state_crashed":"S-CRASHED",

@@ -127,7 +127,7 @@ public class PrivateInferenceTests
         Assert.Equal(
             copy.StateUnknown,
             PrivateInferenceSurface.StateLine(State("a_state_from_a_later_daemon"), copy));
-        Assert.Equal(copy.StateUnknown, PrivateInferenceSurface.StateLine(State(string.Empty), copy));
+        Assert.Equal(copy.StateUnreported, PrivateInferenceSurface.StateLine(State(string.Empty), copy));
         Assert.Equal(copy.StateStopping, PrivateInferenceSurface.StateLine(State("stopping"), copy));
         Assert.Equal(PrivateInferenceTone.Held, PrivateInferenceSurface.Tone(State("stopping")));
     }

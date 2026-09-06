@@ -2877,8 +2877,8 @@ fn render_private_inference(app: &Rc<App>, settings: &crate::model::Settings) {
         status.remove(&child);
     }
     // A daemon that has never heard of the field sends nothing, and the
-    // shared table answers an absent label the same way it answers an
-    // unknown one: with the unavailable sentence.
+    // shared table renders that as unreported, separately from an unfamiliar
+    // nonempty state. Neither is evidence that a listener stopped.
     let (label, port) = match settings.private_inference_state.as_ref() {
         Some(state) => (state.state.as_str(), state.port),
         None => ("", None),

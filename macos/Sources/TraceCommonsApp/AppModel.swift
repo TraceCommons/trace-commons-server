@@ -161,7 +161,7 @@ final class AppModel: ObservableObject {
     /// What the listener is doing, from the daemon's own report.
     ///
     /// Never nil: a daemon that has never heard of the field reads as the
-    /// empty label, which the shared table answers as unavailable.
+    /// empty label, which the shared table answers as unreported.
     var privateInferenceState: PrivateInferenceState {
         daemonSettings?.privateInferenceState?.surfaceState
             ?? PrivateInferenceState(label: "", port: nil)

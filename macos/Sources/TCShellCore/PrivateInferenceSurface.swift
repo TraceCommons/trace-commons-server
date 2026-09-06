@@ -17,6 +17,7 @@ public struct PrivateInferenceCopy: Decodable, Equatable, Sendable {
     public let settingsTitle: String
     public let settingsToggle: String
     public let settingsAppliesAtOnce: String
+    public let stateUnreported: String
     public let stateUnknown: String
     public let stateStopping: String
     public let stateOff: String
@@ -43,6 +44,7 @@ public struct PrivateInferenceCopy: Decodable, Equatable, Sendable {
         case settingsTitle = "settings_title"
         case settingsToggle = "settings_toggle"
         case settingsAppliesAtOnce = "settings_applies_at_once"
+        case stateUnreported = "state_unreported"
         case stateUnknown = "state_unknown"
         case stateStopping = "state_stopping"
         case stateOff = "state_off"
@@ -110,8 +112,8 @@ public struct PrivateInferenceState: Equatable, Sendable {
     /// From `get_settings`/`status`'s `private_inference_state` object.
     ///
     /// A daemon that has never heard of the field sends nothing, and that
-    /// reads as the empty label -- which the shared table answers with the
-    /// unavailable sentence. Never `nil`: a settings screen with no state at all
+    /// reads as the empty label -- which the shared table answers as unreported,
+    /// separately from an unfamiliar nonempty state. Never `nil`: a settings screen with no state at all
     /// would show the switch and nothing beneath it, which is the shape that
     /// says "on" over a listener that refused to start.
     public static func parse(_ object: [String: Any]?) -> PrivateInferenceState {

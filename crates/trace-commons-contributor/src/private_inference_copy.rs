@@ -96,7 +96,10 @@ pub const SETTINGS_APPLIES_AT_ONCE: &str =
 /// `off`.
 pub const STATE_OFF: &str = "Off. This app is not answering model calls.";
 
-/// Missing or unrecognized daemon state is not evidence of shutdown.
+/// A settings response without this status may come from an older daemon.
+pub const STATE_UNREPORTED: &str = "This daemon does not report model-call status.";
+
+/// An unrecognized daemon state is not evidence of shutdown.
 pub const STATE_UNKNOWN: &str =
     "The current state is unavailable. Check again before relying on this app to answer calls.";
 
@@ -124,7 +127,7 @@ pub const STATE_RUNNING_NO_BACKENDS: &str = "On, but nothing is set up here for 
 /// stopped. Saying "left alone" rather than "already on" matters: a
 /// contributor reading "already on" would go looking in this app's settings
 /// for something this app does not control.
-pub const STATE_RUNNING_ELSEWHERE: &str = "Something else on this computer holds the files needed to answer these calls. This \
+pub const STATE_RUNNING_ELSEWHERE: &str = "Another program is using this computer's model-call setup. This \
      app started nothing and stopped nothing; whether calls can get through is not confirmed.";
 
 /// `port_in_use`.
@@ -203,11 +206,12 @@ pub enum PrivateInferenceTone {
 
 /// The sentence for one state label, as reported by `private_inference_state`.
 ///
-/// Missing and unrecognized states say that the current state is unavailable.
+/// Missing status is unreported; unfamiliar nonempty states are unavailable.
 /// They must not claim that a listener has stopped or can answer calls.
 #[must_use]
 pub fn state_line(label: &str) -> &'static str {
     match label {
+        "" => STATE_UNREPORTED,
         LABEL_OFF => STATE_OFF,
         LABEL_STOPPING => STATE_STOPPING,
         LABEL_RUNNING => STATE_RUNNING,
@@ -306,6 +310,7 @@ pub struct PrivateInferenceCopy {
     pub settings_applies_at_once: &'static str,
     pub state_off: &'static str,
     pub state_unknown: &'static str,
+    pub state_unreported: &'static str,
     pub state_stopping: &'static str,
     pub state_running: &'static str,
     pub state_running_no_backends: &'static str,
@@ -332,6 +337,7 @@ pub fn private_inference_copy() -> PrivateInferenceCopy {
         settings_applies_at_once: SETTINGS_APPLIES_AT_ONCE,
         state_off: STATE_OFF,
         state_unknown: STATE_UNKNOWN,
+        state_unreported: STATE_UNREPORTED,
         state_stopping: STATE_STOPPING,
         state_running: STATE_RUNNING,
         state_running_no_backends: STATE_RUNNING_NO_BACKENDS,
@@ -450,7 +456,7 @@ mod tests {
     /// through to an on-sentence.
     #[test]
     fn an_unknown_label_claims_nothing() {
-        for label in ["", "something_later"] {
+        for label in ["something_later", "RUNNING"] {
             assert_eq!(state_line(label), STATE_UNKNOWN, "{label}");
             assert_eq!(state_tone(label), PrivateInferenceTone::Neutral, "{label}");
         }
@@ -458,6 +464,8 @@ mod tests {
 
     #[test]
     fn stopping_and_foreign_ownership_do_not_claim_readiness() {
+        assert_eq!(state_line(""), STATE_UNREPORTED);
+        assert_ne!(state_line(""), STATE_OFF);
         assert_eq!(state_line(LABEL_OFF), STATE_OFF);
         assert_eq!(state_line(LABEL_STOPPING), STATE_STOPPING);
         assert_eq!(state_tone(LABEL_STOPPING), PrivateInferenceTone::Held);
@@ -497,7 +505,7 @@ mod tests {
         let fields = payload.as_object().expect("a JSON object");
         assert_eq!(
             fields.len(),
-            20,
+            21,
             "the payload's field count changed -- update the shells' decoders \
              and the tests that pin the set"
         );

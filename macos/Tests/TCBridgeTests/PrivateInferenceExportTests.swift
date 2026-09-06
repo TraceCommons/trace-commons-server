@@ -93,7 +93,7 @@ final class PrivateInferenceExportTests: XCTestCase {
         XCTAssertEqual(line("crashed"), copy.stateCrashed)
         // A state a later daemon grows, and no state at all, claim nothing.
         XCTAssertEqual(line("a_state_from_a_later_daemon"), copy.stateUnknown)
-        XCTAssertEqual(line(""), copy.stateUnknown)
+        XCTAssertEqual(line(""), copy.stateUnreported)
     }
 
     /// Exactly one state may be painted as working, and it is not the one

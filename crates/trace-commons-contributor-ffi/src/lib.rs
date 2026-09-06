@@ -2204,9 +2204,8 @@ pub extern "C" fn tc_private_inference_copy() -> *mut c_char {
 /// `private_inference_state` object: `off`, `running`, `running_no_backends`,
 /// `running_elsewhere`, `stopping`, `port_in_use`, `start_failed` or `crashed`.
 ///
-/// A label this build has never heard of -- and a NULL or non-UTF-8 `state`
-/// -- reads as the unavailable sentence. It never falls through
-/// to one of the three "on" sentences.
+/// An empty, NULL or non-UTF-8 label reports that no usable status was provided.
+/// An unfamiliar nonempty label reads as unavailable. Neither implies off.
 ///
 /// Returns an owned string; free it with [`tc_string_free`]. NULL only on a
 /// caught panic.
