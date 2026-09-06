@@ -22,6 +22,10 @@ name: ci
 on:
   push:
     branches: [main]
+  # The merge queue tests each candidate batch on a temporary branch and
+  # reports the same required checks there; without this trigger a queued
+  # PR never gets its checks and times out of the queue.
+  merge_group:
   # Deliberately unfiltered by base branch. This repository uses stacked
   # PRs, and a `branches: [main]` filter here means a PR targeting another
   # branch gets no CI at all -- the work is only ever tested once it reaches
