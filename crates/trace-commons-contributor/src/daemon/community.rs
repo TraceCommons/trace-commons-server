@@ -284,9 +284,7 @@ pub async fn fetch_standing(
 mod tests {
     use super::*;
 
-    fn at(s: &str) -> DateTime<Utc> {
-        s.parse().unwrap()
-    }
+    use crate::daemon::test_support::at;
 
     /// A realistic body: exactly what the server pre-renders into
     /// `trace_leaderboard_snapshots.contents_jsonb` and serves verbatim.

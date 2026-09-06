@@ -23952,38 +23952,39 @@ async fn credit_cycle_scheduler_run_handler(
     Ok(Json(response))
 }
 
+/// Trim `value`, reject it when empty or longer than 1024 bytes, and return the
+/// trimmed copy. The two rejection messages are supplied verbatim by the caller.
+fn validate_free_text_field_messages(
+    value: &str,
+    empty_message: &str,
+    too_long_message: &str,
+) -> ApiResult<String> {
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        return Err(api_error(StatusCode::BAD_REQUEST, empty_message));
+    }
+    if value.len() > 1024 {
+        return Err(api_error(StatusCode::BAD_REQUEST, too_long_message));
+    }
+    Ok(value)
+}
+
+/// [`validate_free_text_field_messages`] with the standard message pair:
+/// `"{subject} requires a non-empty {field}"` and `"{subject} {field} is too long"`.
+fn validate_free_text_field(value: &str, subject: &str, field: &str) -> ApiResult<String> {
+    validate_free_text_field_messages(
+        value,
+        &format!("{subject} requires a non-empty {field}"),
+        &format!("{subject} {field} is too long"),
+    )
+}
+
 fn validate_credit_cycle_scheduler_reason(reason: &str) -> ApiResult<String> {
-    let reason = reason.trim().to_string();
-    if reason.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "credit cycle scheduler requires a non-empty reason",
-        ));
-    }
-    if reason.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "credit cycle scheduler reason is too long",
-        ));
-    }
-    Ok(reason)
+    validate_free_text_field(reason, "credit cycle scheduler", "reason")
 }
 
 fn validate_credit_settlement_scheduler_reason(reason: &str) -> ApiResult<String> {
-    let reason = reason.trim().to_string();
-    if reason.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "credit settlement scheduler requires a non-empty reason",
-        ));
-    }
-    if reason.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "credit settlement scheduler reason is too long",
-        ));
-    }
-    Ok(reason)
+    validate_free_text_field(reason, "credit settlement scheduler", "reason")
 }
 
 fn validate_credit_cycle_scheduler_limit(limit: Option<usize>) -> ApiResult<usize> {
@@ -24407,20 +24408,7 @@ async fn credit_cycle_worker_run_handler(
 }
 
 fn validate_credit_cycle_worker_reason(reason: &str) -> ApiResult<String> {
-    let reason = reason.trim().to_string();
-    if reason.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "credit cycle worker run requires a non-empty reason",
-        ));
-    }
-    if reason.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "credit cycle worker run reason is too long",
-        ));
-    }
-    Ok(reason)
+    validate_free_text_field(reason, "credit cycle worker run", "reason")
 }
 
 fn credit_cycle_worker_run_total_limit(body: &TraceCreditCycleWorkerRunRequest) -> usize {
@@ -25840,20 +25828,11 @@ fn validate_credit_policy_version(value: &str, surface: &str) -> ApiResult<Strin
 }
 
 fn validate_credit_settlement_issuer_approval_reason(reason: &str) -> ApiResult<String> {
-    let reason = reason.trim();
-    if reason.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "issuer approval requires a non-empty reason",
-        ));
-    }
-    if reason.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "issuer approval reason is too long",
-        ));
-    }
-    Ok(sha256_prefixed(reason))
+    Ok(sha256_prefixed(&validate_free_text_field(
+        reason,
+        "issuer approval",
+        "reason",
+    )?))
 }
 
 fn trace_credit_settlement_issuer_approval_audit_reason(
@@ -30223,20 +30202,11 @@ async fn ranking_calibration_dataset_conflict_quarantine_handler(
 fn validate_ranking_calibration_dataset_conflict_quarantine_reason(
     reason: &str,
 ) -> ApiResult<String> {
-    let reason = reason.trim().to_string();
-    if reason.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "ranking calibration dataset conflict quarantine requires a non-empty reason",
-        ));
-    }
-    if reason.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "ranking calibration dataset conflict quarantine reason is too long",
-        ));
-    }
-    Ok(reason)
+    validate_free_text_field(
+        reason,
+        "ranking calibration dataset conflict quarantine",
+        "reason",
+    )
 }
 
 fn ranking_calibration_dataset_quarantine_decision_hash(
@@ -30690,37 +30660,11 @@ fn update_process_evaluation_worker_run_from_response(
 }
 
 fn validate_ranking_calibration_run_reason(reason: &str) -> ApiResult<String> {
-    let reason = reason.trim().to_string();
-    if reason.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "ranking calibration run requires a non-empty reason",
-        ));
-    }
-    if reason.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "ranking calibration run reason is too long",
-        ));
-    }
-    Ok(reason)
+    validate_free_text_field(reason, "ranking calibration run", "reason")
 }
 
 fn validate_ranking_model_promotion_reason(reason: &str) -> ApiResult<String> {
-    let reason = reason.trim().to_string();
-    if reason.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "ranking model promotion requires a non-empty reason",
-        ));
-    }
-    if reason.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "ranking model promotion reason is too long",
-        ));
-    }
-    Ok(reason)
+    validate_free_text_field(reason, "ranking model promotion", "reason")
 }
 
 async fn count_pending_ranking_model_promotions(
@@ -31291,20 +31235,11 @@ async fn ranking_feature_run_handler(
 }
 
 fn validate_ranking_feature_run_reason(reason: &str) -> ApiResult<String> {
-    let reason = reason.trim().to_string();
-    if reason.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "ranking feature runs require a non-empty reason",
-        ));
-    }
-    if reason.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "ranking feature run reason is too long",
-        ));
-    }
-    Ok(reason)
+    validate_free_text_field_messages(
+        reason,
+        "ranking feature runs require a non-empty reason",
+        "ranking feature run reason is too long",
+    )
 }
 
 fn ranking_feature_external_ref(ranking_feature_id: Uuid) -> String {
@@ -31961,20 +31896,11 @@ async fn ranking_prediction_credit_run_handler(
 }
 
 fn validate_ranking_prediction_credit_reason(reason: &str) -> ApiResult<String> {
-    let reason = reason.trim().to_string();
-    if reason.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "ranking prediction credit jobs require a non-empty reason",
-        ));
-    }
-    if reason.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "ranking prediction credit reason is too long",
-        ));
-    }
-    Ok(reason)
+    validate_free_text_field_messages(
+        reason,
+        "ranking prediction credit jobs require a non-empty reason",
+        "ranking prediction credit reason is too long",
+    )
 }
 
 fn optional_ranking_identifier(value: Option<String>, label: &str) -> ApiResult<Option<String>> {
@@ -33452,139 +33378,35 @@ async fn recover_stale_ranking_worker_run_handler(
 }
 
 fn validate_ranking_worker_run_recovery_reason(reason: &str) -> ApiResult<String> {
-    let reason = reason.trim().to_string();
-    if reason.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "ranking worker run recovery requires a non-empty reason",
-        ));
-    }
-    if reason.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "ranking worker run recovery reason is too long",
-        ));
-    }
-    Ok(reason)
+    validate_free_text_field(reason, "ranking worker run recovery", "reason")
 }
 
 fn validate_export_job_recovery_reason(reason: &str) -> ApiResult<String> {
-    let reason = reason.trim().to_string();
-    if reason.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "export job recovery requires a non-empty reason",
-        ));
-    }
-    if reason.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "export job recovery reason is too long",
-        ));
-    }
-    Ok(reason)
+    validate_free_text_field(reason, "export job recovery", "reason")
 }
 
 fn validate_export_job_retry_reason(reason: &str) -> ApiResult<String> {
-    let reason = reason.trim().to_string();
-    if reason.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "export job retry requires a non-empty reason",
-        ));
-    }
-    if reason.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "export job retry reason is too long",
-        ));
-    }
-    Ok(reason)
+    validate_free_text_field(reason, "export job retry", "reason")
 }
 
 fn validate_near_credit_outbox_scheduler_purpose(purpose: &str) -> ApiResult<String> {
-    let purpose = purpose.trim().to_string();
-    if purpose.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "NEAR credit outbox scheduler requires a non-empty purpose",
-        ));
-    }
-    if purpose.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "NEAR credit outbox scheduler purpose is too long",
-        ));
-    }
-    Ok(purpose)
+    validate_free_text_field(purpose, "NEAR credit outbox scheduler", "purpose")
 }
 
 fn validate_vector_index_scheduler_purpose(purpose: &str) -> ApiResult<String> {
-    let purpose = purpose.trim().to_string();
-    if purpose.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "vector index scheduler requires a non-empty purpose",
-        ));
-    }
-    if purpose.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "vector index scheduler purpose is too long",
-        ));
-    }
-    Ok(purpose)
+    validate_free_text_field(purpose, "vector index scheduler", "purpose")
 }
 
 fn validate_retention_maintenance_scheduler_purpose(purpose: &str) -> ApiResult<String> {
-    let purpose = purpose.trim().to_string();
-    if purpose.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "retention maintenance scheduler requires a non-empty purpose",
-        ));
-    }
-    if purpose.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "retention maintenance scheduler purpose is too long",
-        ));
-    }
-    Ok(purpose)
+    validate_free_text_field(purpose, "retention maintenance scheduler", "purpose")
 }
 
 fn validate_benchmark_registry_scheduler_purpose(purpose: &str) -> ApiResult<String> {
-    let purpose = purpose.trim().to_string();
-    if purpose.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "benchmark registry scheduler requires a non-empty purpose",
-        ));
-    }
-    if purpose.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "benchmark registry scheduler purpose is too long",
-        ));
-    }
-    Ok(purpose)
+    validate_free_text_field(purpose, "benchmark registry scheduler", "purpose")
 }
 
 fn validate_benchmark_pipeline_scheduler_reason(reason: &str) -> ApiResult<String> {
-    let reason = reason.trim().to_string();
-    if reason.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "benchmark pipeline scheduler requires a non-empty reason",
-        ));
-    }
-    if reason.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "benchmark pipeline scheduler reason is too long",
-        ));
-    }
-    Ok(reason)
+    validate_free_text_field(reason, "benchmark pipeline scheduler", "reason")
 }
 
 fn parse_benchmark_pipeline_scheduler_min_score(configured: &str) -> anyhow::Result<f32> {
@@ -33597,20 +33419,7 @@ fn parse_benchmark_pipeline_scheduler_min_score(configured: &str) -> anyhow::Res
 }
 
 fn validate_revocation_propagation_scheduler_purpose(purpose: &str) -> ApiResult<String> {
-    let purpose = purpose.trim().to_string();
-    if purpose.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "revocation propagation scheduler requires a non-empty purpose",
-        ));
-    }
-    if purpose.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "revocation propagation scheduler purpose is too long",
-        ));
-    }
-    Ok(purpose)
+    validate_free_text_field(purpose, "revocation propagation scheduler", "purpose")
 }
 
 async fn append_ranking_model_version_with_db_mirror(
@@ -38178,20 +37987,7 @@ struct ProcessEvaluationRankingLabelPlan {
 }
 
 fn validate_process_evaluation_ranking_label_external_ref(value: &str) -> ApiResult<String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "process evaluation ranking label requires a non-empty external_ref",
-        ));
-    }
-    if value.len() > 1024 {
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            "process evaluation ranking label external_ref is too long",
-        ));
-    }
-    Ok(value.to_string())
+    validate_free_text_field(value, "process evaluation ranking label", "external_ref")
 }
 
 async fn prepare_process_evaluation_ranking_label(

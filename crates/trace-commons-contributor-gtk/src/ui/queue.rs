@@ -109,12 +109,7 @@ impl QueueView {
         undo_let_it_send.add_css_class("tc-quiet");
         let undo_bar = build_undo_bar(&undo_headline, &undo_held, &undo_undo, &undo_let_it_send);
 
-        let disclaimer = gtk::Label::builder()
-            .label(copy::STANDING_DISCLAIMER)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        disclaimer.add_css_class("tc-caveat");
+        let disclaimer = style::caveat(copy::STANDING_DISCLAIMER);
 
         let disclosure = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let week = gtk::Box::new(gtk::Orientation::Vertical, space::S);
@@ -278,13 +273,7 @@ fn build_undo_bar(
     top.append(held);
     bar.append(&top);
 
-    let body = gtk::Label::builder()
-        .label(copy::UNDO_BODY)
-        .xalign(0.0)
-        .wrap(true)
-        .build();
-    body.add_css_class("tc-caveat");
-    bar.append(&body);
+    style::append_caveat(&bar, copy::UNDO_BODY);
 
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, space::S);
     actions.append(undo);
@@ -478,24 +467,12 @@ pub fn render(app: &Rc<App>) {
         for (label, count) in counts.iter() {
             let line = gtk::Box::new(gtk::Orientation::Horizontal, space::S);
             line.append(&style::tag("Not sent", Tone::Refused));
-            let text = gtk::Label::builder()
-                .label(format!("{count} - {}", copy::reason_sentence(label)))
-                .xalign(0.0)
-                .wrap(true)
-                .build();
-            text.add_css_class("tc-meta");
-            line.append(&text);
+            style::append_meta(&line, format!("{count} - {}", copy::reason_sentence(label)));
             inner.append(&line);
         }
         // What this list does not cover, said rather than left to be
         // assumed. See `copy::NOT_OFFERED_BOUND`.
-        let bound = gtk::Label::builder()
-            .label(copy::NOT_OFFERED_BOUND)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        bound.add_css_class("tc-caveat");
-        inner.append(&bound);
+        style::append_caveat(&inner, copy::NOT_OFFERED_BOUND);
         expander.set_child(Some(&inner));
         view.disclosure.append(&expander);
     }
@@ -590,16 +567,10 @@ pub fn render_arming_offer(app: &Rc<App>, offer: Option<crate::model::ArmingOffe
 
     // Evidence first, question second: someone who reads only the first line
     // still learns why they are being asked.
-    let evidence = gtk::Label::builder()
-        .label(copy::arming_offer_evidence(
-            &offer.project_label,
-            offer.contributed_count,
-        ))
-        .xalign(0.0)
-        .wrap(true)
-        .build();
-    evidence.add_css_class("tc-meta");
-    view.arming_offer.append(&evidence);
+    style::append_meta(
+        &view.arming_offer,
+        copy::arming_offer_evidence(&offer.project_label, offer.contributed_count),
+    );
 
     let question = gtk::Label::builder()
         .label(copy::arming_offer_question(&offer.project_label))
@@ -956,12 +927,7 @@ fn manifest_block(
     // preview: both counts are load-time facts on the entry itself, so this
     // is as true while the card still reads "checking" as it is after.
     if let Some(text) = copy::subagent_line(entry.subagent_count, entry.subagents_dropped) {
-        let extent = gtk::Label::builder()
-            .label(text)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        extent.add_css_class("tc-caveat");
+        let extent = style::caveat(text);
         if entry.subagents_dropped > 0 {
             extent.add_css_class("tc-attention");
         }

@@ -159,9 +159,7 @@ impl HealthState {
 mod tests {
     use super::*;
 
-    fn at(s: &str) -> DateTime<Utc> {
-        s.parse().unwrap()
-    }
+    use crate::daemon::test_support::at;
 
     #[test]
     fn a_fresh_state_is_healthy() {

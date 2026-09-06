@@ -51,11 +51,21 @@ pub(crate) const ERR_API_FAILED: &str = "antigravity-api-failed";
 /// counterpart under the abandoned `GetUserTrajectoryDescriptions` listing.
 pub(crate) struct TrajectoryDescription {
     pub cascade_id: String,
+    // Read only by this module's tests, which assert the listing parse
+    // against a recorded response. They describe the conversation rather
+    // than address it, so the import path needs none of them -- but a
+    // parse that quietly stopped populating them would be a real
+    // regression in what the fixtures pin.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub trajectory_id: String,
     pub workspace_uri: Option<String>,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub git_root: Option<String>,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub git_branch: Option<String>,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub summary: Option<String>,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub step_count: Option<u32>,
 }
 

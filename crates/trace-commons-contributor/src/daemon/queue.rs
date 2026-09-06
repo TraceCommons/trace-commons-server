@@ -24,10 +24,17 @@ use uuid::Uuid;
 
 use crate::config::{ConfigStore, DAEMON_QUEUE_FILE};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QueueState {
     /// Waiting on the contributor.
+    ///
+    /// The `Default`, which exists for [`QueueEntry`]'s own derive and is
+    /// the only state a freshly-built entry could honestly be in. Nothing
+    /// in the serde contract changes: the enum has no `#[serde(default)]`,
+    /// so a queue line missing `state` is still refused rather than read as
+    /// `Pending`.
+    #[default]
     Pending,
     /// The contributor said yes; not yet uploaded.
     Approved,
@@ -47,7 +54,18 @@ pub enum QueueState {
     Superseded,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One session offered to the contributor.
+///
+/// `Default` supports focused test fixtures, which spell
+/// the fields under test and finish with `..Default::default()`. Production
+/// construction sites deliberately do not use it -- an entry the daemon
+/// builds sets every field on purpose, and a `..Default::default()` there
+/// would let a newly added field default in silently.
+///
+/// The derive changes nothing about the wire or on-disk contract: no
+/// `#[serde(default)]` is added by it, so every field that was required in
+/// `daemon-queue.jsonl` is still required.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueueEntry {
     pub entry_id: Uuid,
     pub session_hash: String,
@@ -1167,37 +1185,19 @@ mod tests {
     use super::*;
     use crate::config::tests_support::temp_store;
 
-    fn at(s: &str) -> DateTime<Utc> {
-        s.parse().unwrap()
-    }
+    use crate::daemon::test_support::at;
 
     fn entry(hash: &str, discovered: &str) -> QueueEntry {
         QueueEntry {
             entry_id: entry_id_for(hash),
             session_hash: hash.into(),
             source: "claude-code".into(),
-            declared_source: None,
             project_key: "/Users/z/code/proj".into(),
-            project_path: None,
-            session_cwd: None,
             project_label: "proj".into(),
             path: PathBuf::from("/Users/z/.claude/projects/x/s.jsonl"),
             size_bytes: 100,
             discovered_at: at(discovered),
-            state: QueueState::Pending,
-            reason_label: None,
-            attempts: 0,
-            retry_after: None,
-            submission_id: None,
-            approved_scopes: None,
-            approved_verdict: None,
-            approved_correction: None,
-            approved_inputs: None,
-            previewed_envelope_digest: None,
-            approved_at: None,
-            subagent_count: 0,
-            subagents_dropped: 0,
-            observed_modified_at: None,
+            ..Default::default()
         }
     }
 
@@ -1602,6 +1602,19 @@ mod tests {
             .unwrap();
         q.save(&store).unwrap();
         assert_eq!(Queue::load(&store).unwrap(), q);
+    }
+
+    #[test]
+    fn fixture_defaults_do_not_fill_missing_persisted_identity_or_state() {
+        let original = serde_json::to_value(entry("sha256:aa", "2026-08-08T12:00:00Z")).unwrap();
+        for field in ["entry_id", "session_hash", "state", "discovered_at"] {
+            let mut incomplete = original.clone();
+            incomplete.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<QueueEntry>(incomplete).is_err(),
+                "persisted entries must still require {field}"
+            );
+        }
     }
 
     #[test]
