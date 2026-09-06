@@ -5,10 +5,11 @@ macOS, from a release-candidate build of `main`
 (`trace-commons-contributor 0.10.0-rc`, commit 47697e76) with a device
 enrolled in `tenant-zaki-pilot`.
 
-**Outcome: PARTIAL. The attested-inference receipt leg could not complete,
-for a reason outside trace-commons — IronWire's router substitutes the
-requested model. Everything up to and including body capture and session
-correlation works. No trace was submitted on the attested path.**
+**Outcome: the run reached the receipt and stopped there, on a defect in
+our own design. A hosted exchange, its receipt, and every leg up to
+verification all work. The receipt is signed by a per-model provider TEE
+key that our client and witness do not and cannot pin. Attested inference
+cannot currently succeed. No trace was submitted on the attested path.**
 
 ## What was verified working
 
@@ -38,9 +39,9 @@ correlation works. No trace was submitted on the attested path.**
   measurement `mrconfigid:01454992a4...` verified live and pinned on the
   pilot. (See the witness deploy PR and `deploy/witness/README.md`.)
 
-## The blocker
+## First obstacle (solved): model substitution
 
-Through the daemon-hosted proxy, **every request was routed to
+Through the daemon-hosted proxy, **every request was initially routed to
 `claude-fable-5`** — a brokered model (`msg_`-prefixed id), for which NEAR AI
 serves no receipt (`GET /signature/{chat_id}` 404s for brokered ids). This
 happened for `Qwen/Qwen3.6-35B-A3B-FP8` requests specifically, and did not
@@ -53,12 +54,49 @@ change after:
 - rewriting `~/.ironwire/config.toml` to disable every backend except
   `nearai` and pin its `models` list to only `Qwen/Qwen3.6-35B-A3B-FP8`.
 
-IronWire's router (`ironwire_core::policy`, the `Rung` ladder) treats the
-client's requested model as a hint and selects the backend/model by its own
-fidelity policy; the backend `models` field sets tier/ordering, not an
-allowlist. So a hosted model cannot currently be forced through the proxy
-from configuration alone, and without a hosted exchange there is no receipt
-to fetch, verify, or carry to the witness.
+The cause, established from IronWire's control API rather than guessed: the
+backend disables DID take effect (only `nearai` was registered), but the
+backend's `models` field is not an allowlist — the backend still advertised
+the full 49-model upstream catalogue, leaving `claude-fable-5` available to
+the router's fidelity ladder.
+
+**The fix is a first-class IronWire feature, not a code change:**
+`POST /_ironwire/pin {"backend":"nearai","model":"<hosted model>"}` with the
+home's `control.token` forces both. With the pin set, the same request
+served `Qwen/Qwen3.6-35B-A3B-FP8` with a bare-hex chat id
+(`4eaaa9d8bc3d...`), correlated to its session, with the body captured. A
+receipt for it fetched successfully (HTTP 200, ed25519).
+
+## The real blocker: we verify receipts against the wrong key
+
+The receipt for that hosted exchange is signed by
+`aba45f0b8f90869baab26db02e8b01354bb8f8730769c60650cb7a635da602d4`, with
+`signature_kind: provider_tee`. A second hosted model
+(`Qwen/Qwen3.8-27B`) produced a receipt signed by a **different** key,
+`73cf225ab4f09154ad8b299d4ac89425c7f25468a42ba9a87d09fcd4e87b8bf5`.
+
+Neither is the gateway ed25519 key
+(`cb6fc58f6bd685919fa42fb54d3fcfe03222e324bdda91f0bac6d5c73dc4f1c6`), and
+neither appears anywhere in the attestation report — not in
+`gateway_attestation`, and not in `model_attestations`, whose only entry for
+the model carries an unrelated ECDSA address.
+
+Both our verification paths pin the gateway key:
+
+- the client, via `routing/attestation_report.rs::gateway_ed25519_key`,
+  which reads `gateway_attestation.signing_address`;
+- the witness, via `TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN` (#650), deployed
+  to production on 2026-09-06 with that same value.
+
+So **every real hosted-model receipt is refused by our own verification**,
+client-side and at the witness. And because the signer varies per model, a
+single pinned key cannot be made correct by changing its value.
+
+This was never caught because the tests prove the report *parses* and that a
+signature verifies under a key supplied by the same fixture. Nothing ever
+checked a real receipt's signer against a real report's gateway key. It is
+the fixture-matches-the-bug pattern, and it is exactly what this task
+existed to find.
 
 ## Consequence and recommendation
 
@@ -72,11 +110,19 @@ to fetch, verify, or carry to the witness.
   (non-attested) submissions — the witness bypass is per-submission and
   invite-gated — but it means enforcement is live before the client path it
   guards has been exercised.
-- **Next step is an IronWire change, not a trace-commons one:** a routing
-  mode (or a per-request pin) that sends a named NEAR-AI-hosted model
-  through unsubstituted. Once that exists, the rest of the leg (dry-run
-  submit, receipt fetch, witness call, and the Step 9 stored-envelope
-  body-absence check) is ready to run and was not reached here.
+- **The deployed witness pin should be reconsidered immediately.** As set,
+  it refuses every real hosted receipt. It ships behind the per-submission,
+  invite-gated bypass so ordinary traffic is unaffected, but the control is
+  not doing what it was deployed to do.
+- **The design question is open:** the receipt signer has no attested
+  binding available from the report endpoint today. Verifying the signature
+  proves a receipt came from *someone*; nothing ties that someone to an
+  attested enclave. This is the same gap already recorded for the ECDSA
+  signer, now confirmed for ed25519 and shown to be per-model. Resolving it
+  needs NEAR AI to publish a per-model attestation for the `provider_tee`
+  signing key, or a different binding entirely.
+- The remaining legs (dry-run submit, witness call, and the Step 9
+  stored-envelope body-absence check) were not reached.
 
 ## A reusable harness, for when the routing is fixed
 
