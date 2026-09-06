@@ -125,13 +125,18 @@ pub struct SessionRef {
     pub group_member_count: u32,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum SessionEventKind {
     User,
     Assistant,
     Reasoning,
     ToolCall,
     ToolResult,
+    /// The default for the same reason `SessionTranscript`'s is an empty
+    /// one: a step nobody has described yet is a step this crate makes no
+    /// claim about, and `Opaque` is exactly that claim. Every other variant
+    /// asserts something about what happened.
+    #[default]
     Opaque,
 }
 
@@ -152,7 +157,7 @@ pub struct ServedBy {
     pub cache_write_1h_tokens: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SessionEvent {
     pub kind: SessionEventKind,
     pub timestamp: Option<DateTime<Utc>>,
@@ -183,6 +188,52 @@ pub struct SessionEvent {
     /// `None` means the harness did not record an outcome, which is not the
     /// same as failure.
     pub success: Option<bool>,
+}
+
+/// Common event shapes without inferred provenance, usage, or outcomes.
+///
+/// Fields not supplied by the adapter remain absent. Adapters that record
+/// additional structure, `served_by`, or `token_counts` construct those
+/// events explicitly so the observed claims stay visible at the call site.
+impl SessionEvent {
+    /// A user turn: what they said, and when, if the transcript dated it.
+    pub fn user(content: impl Into<String>, timestamp: Option<DateTime<Utc>>) -> Self {
+        Self {
+            kind: SessionEventKind::User,
+            timestamp,
+            content: Some(content.into()),
+            ..Default::default()
+        }
+    }
+
+    /// A record the adapter recognised but does not model. The record's own
+    /// type name is kept as structure; its body deliberately is not.
+    pub fn opaque(record_type: &str, timestamp: Option<DateTime<Utc>>) -> Self {
+        Self {
+            kind: SessionEventKind::Opaque,
+            timestamp,
+            structured: serde_json::json!({ "record_type": record_type }),
+            ..Default::default()
+        }
+    }
+
+    /// The answering half of a tool call. `success` is the harness's own
+    /// verdict where it recorded one; `None` is not failure.
+    pub fn tool_result(
+        timestamp: Option<DateTime<Utc>>,
+        content: Option<String>,
+        tool_call_id: Option<String>,
+        success: Option<bool>,
+    ) -> Self {
+        Self {
+            kind: SessionEventKind::ToolResult,
+            timestamp,
+            content,
+            tool_call_id,
+            success,
+            ..Default::default()
+        }
+    }
 }
 
 /// `Default` exists for tests that only care about one or two fields and
