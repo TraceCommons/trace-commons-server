@@ -15,3 +15,9 @@ tests/fixtures/update-conformance/**/*.pem  -text
 tests/fixtures/update-conformance/**/*.hex  -text
 tests/fixtures/update-conformance/**/*.bin  -text
 tests/fixtures/update-conformance/**/*.exe  -text
+
+# The Orchard-generated worker IPC compatibility fixture is pinned by a SHA-256
+# over its exact committed bytes (worker_protocol.rs, and the digest published
+# in docs/compute-local-adapter.md). Same hazard as above: an autocrlf checkout
+# on Windows would rewrite its line endings and break a digest that is correct.
+crates/trace-commons-contributor/tests/fixtures/orchard_worker_ipc_v0.json -text

@@ -883,7 +883,8 @@ impl App {
         self.health_banner.set_visible(true);
     }
 
-    /// The 4-hour digest, and its actions can only ever open the window or
+    /// The digest, rate-limited to the daemon's configured interval rather
+    /// than a fixed one. Its actions can only ever open the window or
     /// dismiss.
     ///
     /// Posted when either half has something to say. It used to return early
@@ -1167,13 +1168,7 @@ fn view_switcher(stack: &adw::ViewStack, queue_badge: &gtk::Label) -> gtk::Box {
 pub fn titled_paragraph(title: &str, body: &str) -> gtk::Box {
     let container = gtk::Box::new(gtk::Orientation::Vertical, style::space::XXS);
     container.append(&style::eyebrow(title));
-    let paragraph = gtk::Label::builder()
-        .label(body)
-        .xalign(0.0)
-        .wrap(true)
-        .build();
-    paragraph.add_css_class("tc-body");
-    container.append(&paragraph);
+    style::append_body(&container, body);
     container
 }
 

@@ -8,7 +8,7 @@ namespace TraceCommons.App;
 
 /// <summary>
 /// The notification-area presence: the mark in the tray, a tooltip that says
-/// what is owed, the shared steady-state menu, and the 4-hour digest balloon.
+/// what is owed, the shared steady-state menu, and the digest balloon.
 /// </summary>
 /// <remarks>
 /// <para>

@@ -947,7 +947,11 @@ public sealed class ContributorSettingsViewModel : INotifyPropertyChanged
             return;
         }
 
-        string next = project.Mode == "ignore" ? "ask" : "ignore";
+        string? next = ProjectManualMode.Next(project.Mode);
+        if (next is null)
+        {
+            return;
+        }
         string payload = JsonSerializer.Serialize(
             new Dictionary<string, string>
             {
@@ -963,7 +967,7 @@ public sealed class ContributorSettingsViewModel : INotifyPropertyChanged
                 .ConfigureAwait(true);
 
             Notice = response.IsError
-                ? "That project setting couldn't be changed."
+                ? WatchCopy.WriteFailed
                 : string.Empty;
             if (!response.IsError)
             {
@@ -1865,13 +1869,18 @@ public sealed class ProjectSettingViewModel : INotifyPropertyChanged
         // make.
         "auto_upload" when !UnresolvedBucketCopy.MayOfferAutoUpload(IsUnresolvedBucket)
             => "Asks you first",
-        "auto_upload" => "Contributed without asking",
+        "auto_upload" => WatchCopy.Armed,
         _ => "Asks you first",
     };
 
-    public string ActionText => _mode == "ignore" ? "Ask again" : "Ignore";
+    /// <summary>
+    /// The button's words, from the shared table so onboarding's list and this
+    /// one do not name a single transition two ways. Empty only for a mode with
+    /// no transition, where <see cref="CanToggle"/> is already false.
+    /// </summary>
+    public string ActionText => WatchCopy.ActionFor(_mode) ?? WatchCopy.IgnoreAction;
 
-    public bool CanToggle => _mode is "ask" or "ignore";
+    public bool CanToggle => ProjectManualMode.Next(_mode) is not null;
 
     public void SetMode(string mode)
     {

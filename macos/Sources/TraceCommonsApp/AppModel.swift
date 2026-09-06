@@ -410,6 +410,11 @@ final class AppModel: ObservableObject {
     /// it.
     private(set) var configDirectory: String = ""
 
+    var traceNavigationReady: Bool {
+        guard case .running = startup else { return false }
+        return status.loggedIn && isOnboardingComplete
+    }
+
     func start() {
         guard case .starting = startup else { return }
         let resolved: DaemonHost.Resolution
@@ -419,8 +424,15 @@ final class AppModel: ObservableObject {
             startup = .refused("\(error)")
             return
         }
-        configDirectory = resolved.path
-        startDaemon(at: resolved.path, settingsJSON: nil)
+        start(configDirectory: resolved.path)
+    }
+
+    /// Explicit directory seam also exercises first-install startup without
+    /// touching the developer's state or altering process-global environment.
+    func start(configDirectory path: String) {
+        guard case .starting = startup else { return }
+        configDirectory = path
+        startDaemon(at: path, settingsJSON: nil)
     }
 
     /// Start (or restart) the in-process daemon against an already-resolved
@@ -768,6 +780,32 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Changes one source's declaration on the running daemon -- Settings'
+    /// "Watched folders", the after-first-run counterpart of the roots
+    /// screen's start-with-settings.
+    ///
+    /// Nothing is applied optimistically: the rows read the daemon's
+    /// answer, which `set_settings` returns in full, and an undecided
+    /// choice is never sent. A failed confirmation requests fresh settings.
+    func setSourceRoot(_ kind: SourceKind, _ choice: SourceChoice) async -> Bool {
+        guard let params = choice.settingsParams(for: kind), let client else { return false }
+        let result = await Task.detached(priority: .userInitiated) {
+            Result { try client.setSettings(params) }
+        }.value
+        switch result {
+        case .success(let settings):
+            daemonSettings = settings
+            return true
+        case .failure:
+            // A lost response does not prove the write failed. Read back the
+            // authoritative modes, and never retain the requested path.
+            if let confirmed = await Task.detached(operation: { try? client.settings() }).value {
+                daemonSettings = confirmed
+            }
+            return false
+        }
+    }
+
     /// Write the declaration, then -- when it is on -- ask what was found.
     ///
     /// The evidence is dropped before the write, not after the answer: the
@@ -929,9 +967,12 @@ final class AppModel: ObservableObject {
                 return .failed
             }
         }.value
-        if case .succeeded = outcome {
+        if case .succeeded(let confirmed) = outcome {
+            status.consentScopes = confirmed
             refreshStatus()
             refreshAudit()
+        } else if let confirmed = await Task.detached(operation: { try? client.status() }).value {
+            publishIfChanged(\.status, confirmed)
         }
         return outcome
     }
@@ -957,7 +998,9 @@ final class AppModel: ObservableObject {
             daemonSettings = settings
             refreshAudit()
         case .failure:
-            daemonSettings = await Task.detached { try? client.settings() }.value
+            if let confirmed = await Task.detached(operation: { try? client.settings() }).value {
+                daemonSettings = confirmed
+            }
             inferenceEvidenceSaveFailed = true
         }
     }
@@ -974,6 +1017,10 @@ final class AppModel: ObservableObject {
     /// onboarding, not straight to the main window with whatever scopes
     /// `enroll`'s floor-only default happened to leave in place -- see the
     /// coordinator's atomicity note.
+    var requiresOnboarding: Bool {
+        startup == .needsRoots || !status.loggedIn || !isOnboardingComplete
+    }
+
     var isOnboardingComplete: Bool {
         guard let tenantID = status.tenantID else { return false }
         return UserDefaults.standard.bool(forKey: Self.onboardingCompleteKey(tenantID))
@@ -1004,6 +1051,11 @@ final class AppModel: ObservableObject {
     /// tenant-keyed onboarding marker without a running daemon and a real
     /// enrolment. Debug-only, and deliberately routed through
     /// `publishIfChanged` so a test observes exactly what the app does.
+    func setClientForTesting(_ client: DaemonClient) {
+        self.client = client
+    }
+    func setStartupForTesting(_ startup: Startup) { self.startup = startup }
+
     func setStatusForTesting(_ status: DaemonStatus) {
         publishIfChanged(\.status, status)
     }

@@ -1,4 +1,6 @@
 import SwiftUI
+import TCBridge
+import UserNotifications
 
 /// Onboarding screen 6, "Done" -- the last onboarding screen and, by design,
 /// the first thing the app ever confirms about itself. Copy is verbatim from
@@ -33,6 +35,14 @@ struct OnboardingDoneContent: View {
     @State private var offerDismissed = false
     @State private var registerOutcome: LoginItemManager.RegisterOutcome?
 
+    /// The notification offer's state. `nil` until the system has been
+    /// asked where it stands, which happens on appear; the card shows only
+    /// when the answer is "not yet asked". `ImageRenderer` runs no `.task`,
+    /// so a screenshot of this screen never shows the card and never asks.
+    @State private var notificationStatus: UNAuthorizationStatus?
+    @State private var notificationOfferDismissed = false
+    @State private var notificationRequestPending = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: TC.Space.xl) {
             HStack(spacing: TC.Space.s) {
@@ -44,22 +54,71 @@ struct OnboardingDoneContent: View {
                     .font(TC.Font_.sectionTitle)
             }
 
-            Text("""
-            Trace Commons lives in your menu bar. When a session finishes and goes \
-            quiet for 30 minutes, it'll show up there. You'll get at most one \
-            notification every 4 hours, and none at all if there's nothing waiting.
-            """)
-            .font(.body)
+            Text(Notifier.copy?.doneBody ?? "")
+                .font(.body)
 
             loginItemOffer
+            notificationOffer
 
             Button("Done", action: onFinish)
+                .disabled(notificationRequestPending)
                 .tcPrimaryAction()
                 .keyboardShortcut(.defaultAction)
         }
         .padding(TC.Space.xxl)
         .tcColumn(TC.Measure.prose)
         .tcScreen()
+        .task { notificationStatus = await Notifier.shared.authorizationStatus() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { notificationStatus = await Notifier.shared.authorizationStatus() }
+        }
+    }
+
+    /// The permission prompt, where the spec puts it: at the end of
+    /// onboarding, under a sentence saying what the notifications are for.
+    /// It used to be fired from launch, before the app had said what it
+    /// was. Shown only while the system has never been asked; a yes or a
+    /// no already given is not re-asked here, and Settings shows the state
+    /// either way.
+    @ViewBuilder
+    private var notificationOffer: some View {
+        if notificationStatus == .denied {
+            Text(Notifier.copy?.notificationDenied ?? "")
+                .font(.callout).foregroundStyle(.secondary)
+            Link(Notifier.copy?.systemSettings ?? "", destination: Notifier.systemSettingsURL)
+        } else if Notifier.canPostDigest(notificationStatus) {
+            Text(Notifier.copy?.notificationAllowed ?? "")
+                .font(.callout).foregroundStyle(.secondary)
+        } else if !notificationOfferDismissed && notificationStatus == .notDetermined {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(Notifier.copy?.notificationOffer ?? "")
+                    .font(.callout.weight(.semibold))
+                Text(Notifier.purpose)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 12) {
+                    Button(Notifier.copy?.notNow ?? "") {
+                        notificationOfferDismissed = true
+                    }
+                    .tint(.primary)
+                    Button(Notifier.copy?.notificationAllow ?? "") {
+                        guard !notificationRequestPending else { return }
+                        notificationRequestPending = true
+                        Task {
+                            defer { notificationRequestPending = false }
+                            _ = await Notifier.shared.requestAuthorization()
+                            notificationStatus = await Notifier.shared.authorizationStatus()
+                        }
+                    }
+                    .tcPrimaryAction()
+                }
+                .disabled(notificationRequestPending)
+            }
+            .padding(TC.Space.l)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .tcCard()
+        }
     }
 
     /// Nothing is shown once the app is already an enabled login item --
