@@ -1582,14 +1582,14 @@ on `get_settings`, `set_settings` and `status`. It is an object,
 
 | `state` | meaning | `port` |
 |---|---|---|
-| `off` | this daemon owns no running proxy | `null` |
+| `off` | the switch is off, this daemon owns no proxy and nothing is bound | `null` |
+| `stopping` | retained shutdown is awaiting outstanding startup, calls or cleanup; the requested switch may already be off | last owned port, or `null` before binding |
 | `running` | this daemon's proxy is serving and has a backend registered | the bound port |
 | `running_no_backends` | this daemon's proxy is serving but no backend is configured, so nothing will route through it | the bound port |
 | `running_elsewhere` | a loopback discovery pointer responds, or the exclusive home lock is held; nothing was bound or stopped, and readiness is not established | the published port, or requested port when the lock owner has not published one |
 | `port_in_use` | something that is not this daemon's proxy holds the port | `null` |
 | `start_failed` | the proxy refused to start for any other reason | `null` |
 | `crashed` | startup, serving, or cleanup failed; release of owned resources may be unconfirmed | `null` |
-| `stopping` | retained shutdown is awaiting outstanding startup, calls or cleanup; the requested switch may already be off | last owned port, or `null` before binding |
 
 Turning hosting off persists the request before stopping the owned proxy. The
 reply may report `stopping` while requests drain; it does not mean the listener,
@@ -1649,26 +1649,6 @@ settings key) supplies these 21 fixed string fields:
 State sentences and tones are chosen by the shared Rust table rather than by
 shell-authored branching. Copy-field inventory parity is checked separately
 from successful decoding of required fields.
-
-`private_inference_offer_seen` takes a boolean, and it is **not a fourth
-answer**: it records that the question was put, never what the answer was.
-A client that offers the switch on first start writes `true` here on
-*either* button, so declining is remembered exactly as accepting is and the
-contributor is not asked again on the next launch. Nothing in the daemon
-reads it except a client deciding whether to ask; setting it starts nothing,
-stops nothing, and changes no other value.
-
-It lives here rather than in each application's own state file because the
-fact belongs to the machine and not to a window. On Linux the daemon
-outlives the GTK shell and a second shell would otherwise re-ask; on macOS
-and Windows the app is the daemon, and this file is the thing that survives
-a reinstall of neither more nor less than the settings do.
-
-Default `false`, and a settings file written before this key existed loads
-with it false. That default is what makes an offer appear on the first start
-after an upgrade as well as on a fresh install: an installed build's
-settings file has no such key, so the first build that knows the key reads
-it as unanswered and asks once.
 
 `private_inference_offer_seen` takes a boolean, and it is **not a fourth
 answer**: it records that the question was put, never what the answer was.
