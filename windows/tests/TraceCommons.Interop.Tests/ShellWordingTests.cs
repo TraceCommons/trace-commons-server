@@ -115,7 +115,7 @@ public class ShellWordingTests
             { "TraceCommons.App/Controls/PreviewSheet.xaml", 20 },
             { "TraceCommons.App/Controls/SettingsView.xaml", 16 },
             { "TraceCommons.App/MainWindow.xaml", 19 },
-            { "TraceCommons.App/OnboardingWindow.xaml", 18 },
+            { "TraceCommons.App/OnboardingWindow.xaml", 16 },
             { "TraceCommons.App/SessionRootsWindow.xaml", 3 },
         };
 
