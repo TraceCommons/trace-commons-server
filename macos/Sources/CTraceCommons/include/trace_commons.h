@@ -537,6 +537,121 @@ char*       tc_routing_discovery_line(int32_t port);
  */
 char*       tc_routing_last_checked(const char* when);
 
+/* --- The private-inference surface --------------------------------------
+ *
+ * private_inference makes this daemon answer the model calls a contributor's
+ * tools make, from this machine. get_settings, set_settings and status all
+ * report private_inference_state as {"state": <label>, "port": <n|null>}, and
+ * these calls turn that label into the sentence and the colour a shell shows.
+ */
+
+/* The tones this surface is painted in. DELIBERATELY DISJOINT FROM BOTH
+ * TC_ROUTING_TONE_* (0..3) and TC_WITNESS_TONE_* (10..14), for the reason the
+ * witness range states: a shell that cross-wired two mappers with overlapping
+ * ranges would render one surface's value as another surface's meaning, and a
+ * disjoint range makes that mistake wrong for every value instead of only for
+ * the dangerous one.
+ *
+ * This surface has a REFUSED value and the routing surface does not.
+ * port_in_use, start_failed and crashed are each "you asked for this, it is
+ * not happening, and here is the way out". ATTENTION means something else
+ * here: the listener started and has nowhere to pass a call on to, which is
+ * running_no_backends and is the state that must never be painted as working.
+ *
+ * A TONE THIS HEADER DOES NOT DEFINE MUST BE RENDERED AS
+ * TC_PRIVATE_INFERENCE_TONE_NEUTRAL, never as _CLEAR. Unlike the witness
+ * surface, whose unsafe direction is silence, the unsafe direction here is the
+ * working light: neutral claims nothing, and a state a shell has no words for
+ * must not be drawn as a thing that is running.
+ */
+#define TC_PRIVATE_INFERENCE_TONE_NEUTRAL   20
+#define TC_PRIVATE_INFERENCE_TONE_HELD      21
+#define TC_PRIVATE_INFERENCE_TONE_CLEAR     22
+#define TC_PRIVATE_INFERENCE_TONE_ATTENTION 23
+#define TC_PRIVATE_INFERENCE_TONE_REFUSED   24
+
+/* Every fixed word on the private-inference offer and settings surface, as an
+ * OWNED JSON object; free it with tc_string_free. Needs no handle: it
+ * describes the build, not a running daemon.
+ *
+ * ONE CALL, NOT ONE PER STRING, for the reason tc_routing_copy gives. The
+ * sentence a per-string export would invite a shell to hand-write is
+ * offer_exposure -- the one saying that while the switch is on, anything else
+ * running on the machine can send calls through it, charged to the accounts
+ * configured here. That sentence is why the offer is allowed to exist.
+ *
+ * Returns NULL only on a caught panic.
+ */
+char*       tc_private_inference_copy(void);
+
+/* Whether quitting may interrupt owned model-call work, including stopping.
+ * requested_on is boolean (0/nonzero). Off and foreign ownership return 0;
+ * owned running/stopping return 1. Unknown/invalid status or panic retains
+ * requested_on conservatively. state may be NULL, else a NUL-terminated string.
+ */
+int32_t     tc_private_inference_quit_needs_notice(int32_t requested_on, const char* state);
+
+/* The sentence for one private_inference_state label.
+ *
+ * state is "off", "running", "running_no_backends", "running_elsewhere",
+ * "stopping", "port_in_use", "start_failed" or "crashed".
+ *
+ * An empty, NULL or non-UTF-8 label reports that no usable status was provided.
+ * An unfamiliar nonempty label reads as unavailable. Neither implies off.
+ *
+ * Returns an owned string; free it with tc_string_free. NULL only on a caught
+ * panic.
+ */
+char*       tc_private_inference_state_line(const char* state);
+
+/* How firmly the sentence tc_private_inference_state_line returned reads: one
+ * of the TC_PRIVATE_INFERENCE_TONE_* values.
+ *
+ * Takes what the sentence takes, so the two stay in step by construction. A
+ * SHELL MUST NOT RECOVER THIS BY READING THE RENDERED SENTENCE: port_in_use and
+ * start_failed both begin "Not on." but have distinct recoveries.
+ *
+ * Answers TC_PRIVATE_INFERENCE_TONE_NEUTRAL for a label this build has never
+ * heard of, for a NULL or non-UTF-8 state, and on a caught panic. There is no
+ * failure value, for the reason on tc_routing_tool_tone.
+ */
+int32_t     tc_private_inference_state_tone(const char* state);
+
+/* The reported local port, assembled without a readiness claim.
+ *
+ * port is private_inference_state's port field. A value outside 1..65535 --
+ * including the 0 a caller passes for JSON null -- gives the EMPTY STRING
+ * rather than a sentence naming a number nobody bound. Render nothing for an
+ * empty string; the state line above it has already said what is true.
+ *
+ * Assembled on the Rust side, for the reason on tc_routing_token_line.
+ *
+ * Returns an owned string; free it with tc_string_free. NULL only on a caught
+ * panic.
+ */
+char*       tc_private_inference_serving_line(int32_t port);
+
+/* Whether to put the offer in front of the contributor.
+ *
+ * answered is get_settings's private_inference_offer_seen; on is its
+ * private_inference. Both are booleans as 0 or non-zero. Answers non-zero to
+ * ask.
+ *
+ * THE BRANCH TABLE CROSSES, NOT ONLY THE WORDS, and this branch decides
+ * whether to interrupt somebody. Three shells each deciding when to ask is
+ * three chances to re-ask a contributor who already said no, and nothing in
+ * this repository would notice one of them getting it wrong.
+ *
+ * A shell writes private_inference_offer_seen = true on EITHER answer, so
+ * "Not now" is remembered exactly as "Turn it on" is. The key defaults to
+ * false, which is what makes the offer appear on the first start after an
+ * upgrade as well as on a fresh install.
+ *
+ * Answers 0 -- do not ask -- on a caught panic. Silence is the safe direction
+ * for an interruption.
+ */
+int32_t     tc_private_inference_should_offer(int32_t answered, int32_t on);
+
 /* The settings screen's session-source row for one tool, assembled.
  *
  * tool is "claude", "codex", "gemini" or "cline". source_mode is get_settings's
@@ -569,6 +684,42 @@ char*       tc_routing_last_checked(const char* when);
  * for tc_last_error.
  */
 char*       tc_source_check_line(const char* tool, const char* source_mode);
+
+/* Every fixed sentence on the consent surface, as an owned JSON object; free
+ * it with tc_string_free. NULL only on a caught panic.
+ *
+ * Keys: gate_statement, ready_help, not_pinned_help.
+ *
+ * ONE CALL, NOT ONE PER SENTENCE. Three sentences is not three exports: a
+ * per-sentence export would let a shell take two of them and hand-write the
+ * third, and one of the three is the claim about what leaves this machine that
+ * a contributor reads immediately above an irreversible button.
+ *
+ * Refuse the WHOLE payload if any field is empty rather than rendering a blank
+ * label. A missing sentence here is a missing claim.
+ */
+char*       tc_consent_copy(void);
+
+/* The tooltip that explains why Contribute is armed or off, chosen here.
+ *
+ * pinned is 1 when a preview parsed and carries an enrollment, and 0
+ * otherwise.
+ *
+ * ONLY 1 IS PINNED. 0 and every other value answer the not-pinned sentence.
+ * This is the fail-closed direction on this surface and it is not routing's:
+ * routing answers Neutral for a value it does not know because Neutral claims
+ * nothing, and there is no sentence here that claims nothing. A shell built
+ * against a later header must not be told the button is armed.
+ *
+ * THE BRANCH CROSSES, NOT ONLY THE WORDS. Do not take both sentences from
+ * tc_consent_copy and choose between them natively: three copies of that
+ * choice drift apart in silence while every string stays identical.
+ *
+ * Returns an owned string; free it with tc_string_free. NULL only on a caught
+ * panic.
+ */
+char*       tc_consent_gate_help(int32_t pinned);
+
 /* Shared settings copy JSON; caller frees with tc_string_free. */
 char*       tc_source_settings_copy(void);
 

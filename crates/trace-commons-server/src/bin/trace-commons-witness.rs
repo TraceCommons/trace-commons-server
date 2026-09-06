@@ -35,6 +35,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use sha2::Digest as _;
 use tokio::net::TcpListener;
 use trace_commons_server::witness_service::enclave::{DSTACK_SOCKET_PATH, DstackSocketAgent};
 use trace_commons_server::witness_service::http::{WitnessLoadBound, witness_router};
@@ -216,6 +217,32 @@ struct Args {
         default_value_t = DEFAULT_MAX_BODY_BYTES
     )]
     max_inference_body_bytes: usize,
+
+    /// The inference gateway's ed25519 signing key: 64 hex characters, no
+    /// `0x`. A receipt signed by any other key is refused.
+    ///
+    /// Unset by default, and unset is exactly the behaviour that shipped
+    /// before this existed -- a receipt still has to verify, but against the
+    /// key it names rather than against one this deployment trusts. Setting
+    /// it is what makes the verification say *who* signed.
+    ///
+    /// The value is a public key, obtained once and out of band from NEAR
+    /// AI's attestation report (`GET /attestation/report`, whose
+    /// `gateway_attestation.report_data` is `signing_address || nonce` inside
+    /// a TDX quote). It is not fetched on the request path: a witness makes
+    /// no outbound calls while serving, and a report fetched at request time
+    /// would be trusted over a path an attacker able to substitute a signing
+    /// key is also positioned to influence.
+    ///
+    /// Independent of `--require-attested-inference`. A witness that requires
+    /// nothing still refuses a receipt from an unpinned key when one is
+    /// offered, because certifying it would be a silent downgrade.
+    ///
+    /// Malformed is a startup failure, never an ignored value -- including
+    /// the empty string, which is what an operator who exported the variable
+    /// without a value would otherwise get a pin-less witness from.
+    #[arg(long, env = "TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN")]
+    gateway_key_pin: Option<String>,
 }
 
 #[tokio::main]
@@ -332,6 +359,37 @@ async fn main() -> Result<()> {
         policy
     } else {
         InferenceAttestationPolicy::not_required()
+    };
+
+    // The gateway key pin, applied to whichever policy was just built: it
+    // constrains which key a receipt may be signed by, and says nothing about
+    // whether a receipt is required. Resolved here, before the listener binds,
+    // so a pin that is not a key is a startup failure rather than a control
+    // that silently matches nothing.
+    let inference_policy = match args.gateway_key_pin.as_deref() {
+        Some(pin) => {
+            let policy = inference_policy.pinning_gateway_key(pin).map_err(|_| {
+                // The value is not echoed. On a misconfiguration it is
+                // whatever the operator pasted, and that is not something to
+                // put in a log line.
+                anyhow::anyhow!(
+                    "TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN must be a 32-byte ed25519 \
+                     key: 64 hex characters, no `0x` prefix"
+                )
+            })?;
+            // Hash-only, like every other operational surface here. A short
+            // prefix is enough for an operator to confirm that the process
+            // holds the key they meant to pin, and carries no more of it than
+            // that comparison needs.
+            let pinned = policy.gateway_key_pin().expect("the pin was just accepted");
+            let digest = hex::encode(sha2::Sha256::digest(pinned.as_bytes()));
+            tracing::info!(
+                gateway_key_pin_sha256_prefix = %&digest[..8],
+                "witness inference gateway key pin"
+            );
+            policy
+        }
+        None => inference_policy,
     };
 
     let mut service = WitnessService::new(

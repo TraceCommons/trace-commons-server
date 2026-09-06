@@ -448,7 +448,7 @@ pins. No account token, device key or PKCE verifier is returned to native views.
 | `discover_routing` | — | `found`, plus `port` and optionally `token_path` when found | reads the pointer a running IronWire published, so the declaring flow can pre-fill instead of asking; no network I/O and **never returns the token**; see "`discover_routing`" below |
 | `quiesce` | `timeout_secs` (optional, default 60, max 300) | `quiesced: true`, `waited_ms` | parks uploads for an update swap; `busy` / `quiesce-timeout` if in-flight work does not finish in time |
 | `get_settings` | — | settings; credential and local paths reported as booleans only | |
-| `set_settings` | any of `quiescence_secs`, `digest_interval_secs`, `approval_hold_secs`, `local_notifications`, `claude_root`, `codex_root`, `claude_source`, `codex_source`, `gemini_source`, `cline_source`, `ironwire`, `ironwire_attested_bodies`, `private_inference`, `max_uploads_per_day`, `max_bytes_per_day` | updated settings | see "`set_settings`" below |
+| `set_settings` | any of `quiescence_secs`, `digest_interval_secs`, `approval_hold_secs`, `local_notifications`, `claude_root`, `codex_root`, `claude_source`, `codex_source`, `gemini_source`, `cline_source`, `ironwire`, `ironwire_attested_bodies`, `private_inference`, `private_inference_offer_seen`, `max_uploads_per_day`, `max_bytes_per_day` | updated settings | see "`set_settings`" below |
 | `consent_options` | — | `scopes[]` of `{name, description, always_on, grants_data_use}` | |
 | `set_consent_scopes` | `scopes[]` (wire-name strings; omitted means floor scope only) | `consent_scopes[]` | requires an existing enrollment |
 | `enroll` | `grant` xor `invite`, `scopes[]` (optional) | `enrolled: bool`, and on success `tenant_id`, `device_key_id`, `consent_scopes[]` | performs real network I/O |
@@ -1520,7 +1520,8 @@ Takes a JSON object of settings to change. Every top-level key must be one
 of `quiescence_secs`, `digest_interval_secs`, `approval_hold_secs`,
 `local_notifications`, `claude_root`, `codex_root`, `claude_source`,
 `codex_source`, `gemini_source`, `cline_source`, `ironwire`,
-`ironwire_attested_bodies`, `private_inference`, `max_uploads_per_day`,
+`ironwire_attested_bodies`, `private_inference`,
+`private_inference_offer_seen`, `max_uploads_per_day`,
 `max_bytes_per_day` --
 a key this method does
 not recognize is
@@ -1614,11 +1615,11 @@ on `get_settings`, `set_settings` and `status`. It is an object,
 
 | `state` | meaning | `port` |
 |---|---|---|
-| `off` | the switch is off and nothing is bound | `null` |
-| `stopping` | startup or an owned proxy is still draining and releasing resources | the previously bound port, or `null` while startup is unfinished |
+| `off` | the switch is off, this daemon owns no proxy and nothing is bound | `null` |
+| `stopping` | retained shutdown is awaiting outstanding startup, calls or cleanup; the requested switch may already be off | last owned port, or `null` before binding |
 | `running` | this daemon's proxy is serving and has a backend registered | the bound port |
 | `running_no_backends` | this daemon's proxy is serving but no backend is configured, so nothing will route through it | the bound port |
-| `running_elsewhere` | an IronWire this daemon did not start owns the home and is answering; nothing was bound and nothing was stopped | the existing instance's port |
+| `running_elsewhere` | a loopback discovery pointer responds, or the exclusive home lock is held; nothing was bound or stopped, and readiness is not established | the published port, or requested port when the lock owner has not published one |
 | `port_in_use` | something that is not this daemon's proxy holds the port | `null` |
 | `start_failed` | the proxy refused to start for any other reason | `null` |
 | `crashed` | startup, serving, or cleanup failed; release of owned resources may be unconfirmed | `null` |
@@ -1634,6 +1635,21 @@ dropping the embedded daemon requests cleanup without blocking synchronously.
 Drop-based cleanup requires unwinding; a `panic=abort` build terminates the
 process instead and cannot finish in-flight requests.
 
+Existing-instance discovery reads at most 64 KiB from an opened regular pointer
+file and probes only the fixed IPv4 loopback health path. Accepted hosts are
+`127.0.0.1` and `localhost`; an IPv6-only pointer is not discovered through an
+unrelated IPv4 port. URL-shape restrictions are defense in depth because the
+request URL is constructed from the validated port, not used verbatim. On supported Unix targets,
+the opened object must match the checked device/inode and effective-user owner,
+remain unwritable by others, and is opened with no-follow/nonblocking flags so a
+replacement symlink or FIFO cannot bypass the check or block the open. Windows
+checks regular-file/reparse shape on the opened handle; this is not a DACL or
+Unix ownership guarantee. Advisory discovery fails closed on Unix targets other
+than shipped macOS and Linux x86_64/aarch64. The probe sends no token,
+ignores environment proxies, and never follows redirects. A successful health
+response is advisory: it conservatively avoids takeover but does not authenticate
+the endpoint. The exclusive home lock remains authoritative when starting.
+
 `running_no_backends` is deliberately not `running`: the proxy answers its
 health endpoint and no inference can pass through it, so a client that
 rendered it as running would show a green light over a proxy that cannot
@@ -1644,6 +1660,48 @@ signal, Off does not claim cleanup succeeded. A newly accepted off/on cycle may
 retry through IronWire's exclusive home lock; only a successful start clears
 that uncertainty. If the prior owner still holds the lock, the failure remains
 visible and no second proxy is started.
+
+The shells distinguish an absent or empty status from a nonempty state label
+this build does not recognize. The former says the daemon does not report
+model-call status (including older daemons); the latter says the state is
+unavailable. Neither proves `off`. `stopping` uses the Held tone until the
+retained-shutdown producer confirms cleanup; a port alone is metadata, not
+proof that calls can be answered.
+
+The companion C ABI copy payload (`tc_private_inference_copy`, not a daemon
+settings key) supplies these 21 fixed string fields:
+
+- `offer_title`, `offer_what`, `offer_exposure`, `offer_no_repoint`,
+  `offer_accept`, `offer_decline`, `offer_asked_once`;
+- `settings_title`, `settings_toggle`, `settings_applies_at_once`;
+- `state_off`, `state_unreported`, `state_unknown`, `state_stopping`,
+  `state_running`, `state_running_no_backends`, `state_running_elsewhere`,
+  `state_port_in_use`, `state_start_failed`, `state_crashed`;
+- `quit_also_stops`.
+
+State sentences and tones are chosen by the shared Rust table rather than by
+shell-authored branching. Copy-field inventory parity is checked separately
+from successful decoding of required fields.
+
+`private_inference_offer_seen` takes a boolean, and it is **not a fourth
+answer**: it records that the question was put, never what the answer was.
+A client that offers the switch on first start writes `true` here on
+*either* button, so declining is remembered exactly as accepting is and the
+contributor is not asked again on the next launch. Nothing in the daemon
+reads it except a client deciding whether to ask; setting it starts nothing,
+stops nothing, and changes no other value.
+
+It lives here rather than in each application's own state file because the
+fact belongs to the machine and not to a window. On Linux the daemon
+outlives the GTK shell and a second shell would otherwise re-ask; on macOS
+and Windows the app is the daemon, and this file is the thing that survives
+a reinstall of neither more nor less than the settings do.
+
+Default `false`, and a settings file written before this key existed loads
+with it false. That default is what makes an offer appear on the first start
+after an upgrade as well as on a fresh install: an installed build's
+settings file has no such key, so the first build that knows the key reads
+it as unanswered and asks once.
 
 `max_uploads_per_day` and `max_bytes_per_day` each take a positive integer,
 validated against a fixed ceiling (1,000 uploads; 5 GiB) rather than

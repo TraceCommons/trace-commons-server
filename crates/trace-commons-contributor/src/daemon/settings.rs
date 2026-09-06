@@ -193,6 +193,27 @@ pub struct DaemonSettings {
     #[serde(default)]
     pub private_inference: bool,
 
+    /// Whether the contributor has been asked about the switch above.
+    ///
+    /// Written by *either* answer, so "Not now" is remembered exactly as
+    /// "Turn it on" is, and a shell that asked once does not ask again on
+    /// every launch. It records that a question was put, never what the
+    /// answer was: the answer is the boolean above, and reading this one as
+    /// consent to anything would be reading a receipt as a signature.
+    ///
+    /// It lives beside the switch, in the daemon, rather than in each
+    /// shell's own state file, because the fact belongs to the machine and
+    /// not to a window: on Linux the GTK shell attaches to a daemon that
+    /// outlives it, and a contributor who answered in one shell has answered.
+    ///
+    /// `#[serde(default)]` is load-bearing rather than incidental. A settings
+    /// file written before this key existed loads unanswered, which is what
+    /// makes the offer appear on the first start after an upgrade as well as
+    /// on a fresh install -- the two cases the design asks for, from one
+    /// default.
+    #[serde(default)]
+    pub private_inference_offer_seen: bool,
+
     /// Legacy spellings, read on load and never written.
     ///
     /// Settings files written before source declarations existed carry
@@ -560,6 +581,7 @@ impl Default for DaemonSettings {
             ironwire: None,
             ironwire_attested_bodies: false,
             private_inference: false,
+            private_inference_offer_seen: false,
             legacy_claude_root: None,
             legacy_codex_root: None,
         }
@@ -866,6 +888,14 @@ pub fn apply_settings_object(
             // either value.
             "private_inference" => {
                 settings.private_inference = value.as_bool().ok_or(ERR_SETTINGS_INVALID_VALUE)?;
+            }
+            // NOT a fourth answer -- a record that the question was asked.
+            // A shell writes it on either button, and nothing in the daemon
+            // reads it except a shell deciding whether to ask again. It
+            // starts nothing and stops nothing.
+            "private_inference_offer_seen" => {
+                settings.private_inference_offer_seen =
+                    value.as_bool().ok_or(ERR_SETTINGS_INVALID_VALUE)?;
             }
             _ => return Err(ERR_SETTINGS_UNKNOWN_FIELD),
         }
@@ -1249,6 +1279,55 @@ mod tests {
             !settings.ironwire_attested_bodies,
             "an absent switch is off, never on"
         );
+    }
+
+    /// The offer marker is written by *either* answer, and a settings file
+    /// written before it existed loads unanswered.
+    ///
+    /// That default is the whole mechanism behind "the offer appears on the
+    /// first start after an upgrade as well as on a fresh install": an
+    /// installed 0.9.0 has a settings file with no such key, so the first
+    /// build that knows the key reads it as false and asks.
+    #[test]
+    fn the_offer_marker_defaults_to_unanswered_and_takes_either_answer() {
+        let mut v = serde_json::to_value(DaemonSettings::default()).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .remove("private_inference_offer_seen");
+        let settings: DaemonSettings = serde_json::from_value(v).expect("settings load");
+        assert!(
+            !settings.private_inference_offer_seen,
+            "an absent marker means nobody has been asked yet"
+        );
+
+        let mut s = DaemonSettings::default();
+        assert_eq!(
+            apply_settings_object(
+                &mut s,
+                &serde_json::json!({"private_inference_offer_seen": true})
+            ),
+            Ok(true)
+        );
+        assert!(s.private_inference_offer_seen);
+        assert!(
+            !s.private_inference,
+            "recording that the offer was answered must never start anything"
+        );
+    }
+
+    /// The marker is a boolean and nothing else, refused by the same label
+    /// every other mistyped value gets.
+    #[test]
+    fn the_offer_marker_refuses_a_non_boolean() {
+        let mut s = DaemonSettings::default();
+        assert_eq!(
+            apply_settings_object(
+                &mut s,
+                &serde_json::json!({"private_inference_offer_seen": "yes"})
+            ),
+            Err(ERR_SETTINGS_INVALID_VALUE)
+        );
+        assert!(!s.private_inference_offer_seen);
     }
 
     // --- the discovery pointer -----------------------------------------

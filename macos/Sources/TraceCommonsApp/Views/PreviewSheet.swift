@@ -469,21 +469,48 @@ struct PreviewSheet: View {
 
     // MARK: - What arms Contribute
 
-    private var canContribute: Bool {
-        ReadGate.canContribute(hasPinnedPreview: summary != nil)
+    /// The consent surface's sentences, read once. Nil if the payload did
+    /// not arrive or would not parse, in which case the sheet shows no claim
+    /// rather than a blank one -- see `ConsentCopy.decode`.
+    private var consent: ConsentCopy? {
+        TCConsentCopy.copyJSON().flatMap(ConsentCopy.decode(fromJSON:))
     }
 
+    private var canContribute: Bool {
+        // `enrolled`, not `summary != nil`. An approval binds to the
+        // envelope a preview pinned, and a preview built without an
+        // enrollment pinned nothing -- which is the condition the shared
+        // sentence names and the one the other two shells already test.
+        //
+        // And no claim, no approval: the statement above the button is the
+        // whole of what a contributor is told before pressing it, so a
+        // build that cannot read it must not arm the button either.
+        consent != nil && ReadGate.canContribute(hasPinnedPreview: summary?.enrolled == true)
+    }
+
+    /// The tooltip that explains the current answer, chosen by the ABI.
+    ///
+    /// Empty when the sentences are unavailable -- the same condition that
+    /// disarms `canContribute`, so nothing is claimed and nothing is
+    /// pressable. Without the guard a build whose bundle would not decode
+    /// but whose `tc_consent_gate_help` still answered would paint a
+    /// disarmed button with the not-connected sentence, which is a claim
+    /// about the device rather than about the missing copy.
     private var gateHelp: String {
-        ReadGate.help(hasPinnedPreview: summary != nil)
+        guard consent != nil else { return "" }
+        return TCConsentCopy.gateHelp(pinned: canContribute) ?? ""
     }
 
     /// The sentence the acknowledgement checkbox used to carry, printed
     /// where the tick used to be asked for.
     ///
     /// Plain text and no control: it is a statement the app makes, not a
-    /// question it asks. The words are `TCShellCore.ReadGate.statement`
-    /// rather than a literal here, because the Linux and Windows sheets
-    /// print the same sentence and a copy in a view is a copy that drifts.
+    /// question it asks. The words come from `consent_copy.rs` across the
+    /// ABI rather than being a literal here, because the Linux and Windows
+    /// sheets print the same sentence and a copy in a view is a copy that
+    /// drifts. Empty when the payload would not decode: the button is
+    /// disarmed in that case, so nothing is claimed and nothing is
+    /// pressable.
     /// The outcome question, its three answers, and the disclosure under
     /// them.
     ///
@@ -641,7 +668,7 @@ struct PreviewSheet: View {
     }
 
     private var gateStatement: some View {
-        Text(ReadGate.statement)
+        Text(consent?.gateStatement ?? "")
             .font(TC.Font_.captionSmall)
             .foregroundStyle(TC.inkTertiary)
             .fixedSize(horizontal: false, vertical: true)

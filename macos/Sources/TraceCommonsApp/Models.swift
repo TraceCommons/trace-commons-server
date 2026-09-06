@@ -299,6 +299,15 @@ struct PreviewSummary: Decodable, Equatable, Sendable {
     let consentScopes: [String]
     let residualRisk: String
     var envelopeDigest: String? = nil
+    /// Whether the preview pinned a real identity.
+    ///
+    /// False when the preview was built from the placeholder identity a
+    /// device that has not enrolled carries, and false against a daemon
+    /// predating the field. A hard gate on approving rather than a cosmetic
+    /// flag: nothing was pinned, so there is no envelope for an approval to
+    /// bind to. `PreviewSheet` keeps `Contribute` off and says why, which is
+    /// what the Windows and Linux shells already do.
+    var enrolled: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case wouldSendBytes = "would_send_bytes"
@@ -311,6 +320,7 @@ struct PreviewSummary: Decodable, Equatable, Sendable {
         case consentScopes = "consent_scopes"
         case residualRisk = "residual_risk"
         case envelopeDigest = "envelope_digest"
+        case enrolled
     }
 
     /// "12 secrets, 4 tokens, 31 paths" -- category labels and counts only;
@@ -543,6 +553,18 @@ struct DaemonSettingsView: Decodable, Equatable {
     var admissionEvidenceRequired: Bool? = nil
     var ironwireAttestedBodies: Bool? = nil
     var inferenceEvidenceEnabled: Bool { ironwireAttestedBodies == true }
+    /// Whether this daemon was asked to answer model calls itself. What was
+    /// ASKED FOR; what happened is `privateInferenceState` beside it, and
+    /// the two differ exactly when the listener refused to start.
+    var privateInference: Bool? = nil
+    var privateInferenceOn: Bool { privateInference == true }
+    /// Whether the contributor has already been asked about that switch.
+    /// Absent on a daemon that predates the key, which reads as unanswered
+    /// -- and is what makes the offer appear once after an upgrade.
+    var privateInferenceOfferSeen: Bool? = nil
+    var privateInferenceAnswered: Bool { privateInferenceOfferSeen == true }
+    /// What the listener is actually doing.
+    var privateInferenceState: PrivateInferenceStateView? = nil
 
     /// The four source modes as the routing surface takes them. Absent
     /// means `unset`, which watches the conventional location and is
@@ -573,6 +595,26 @@ struct DaemonSettingsView: Decodable, Equatable {
         case ironwire
         case admissionEvidenceRequired = "admission_evidence_required"
         case ironwireAttestedBodies = "ironwire_attested_bodies"
+        case privateInference = "private_inference"
+        case privateInferenceOfferSeen = "private_inference_offer_seen"
+        case privateInferenceState = "private_inference_state"
+    }
+}
+
+/// `private_inference_state` as `get_settings`, `set_settings` and `status`
+/// all report it.
+///
+/// The label is carried as the daemon's own string and handed to the shared
+/// table, never parsed into a Swift enum: a state a later daemon grows would
+/// otherwise have to be spelled here before it could be shown, and the shared
+/// table already answers an unknown label with the sentence that claims
+/// nothing.
+struct PrivateInferenceStateView: Decodable, Equatable {
+    let state: String
+    let port: UInt16?
+
+    var surfaceState: PrivateInferenceState {
+        PrivateInferenceState(label: state, port: port)
     }
 }
 
@@ -717,7 +759,8 @@ extension PreviewSummary {
             piiLabelsPresent: try c.decode([String].self, forKey: .piiLabelsPresent),
             consentScopes: try c.decode([String].self, forKey: .consentScopes),
             residualRisk: try c.decode(String.self, forKey: .residualRisk),
-            envelopeDigest: try c.decodeIfPresent(String.self, forKey: .envelopeDigest)
+            envelopeDigest: try c.decodeIfPresent(String.self, forKey: .envelopeDigest),
+            enrolled: try c.decodeIfPresent(Bool.self, forKey: .enrolled) ?? false
         )
     }
 }

@@ -82,6 +82,26 @@
   </ItemGroup>
 
   <!--
+    The consent surface's implementation sources, copied next to the test
+    assembly and read by NoWordingIsAuthoredInTheConsentSurface.
+
+    All three, not just the two new ones: ReadGate.cs is where the four
+    sentences used to live, and the strict rule is the thing that stops one
+    of them coming back beside the rule that survived.
+  -->
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../src/TraceCommons.Interop/ConsentCopy.cs"
+          Link="ConsentCopy.cs.txt"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(MSBuildThisFileDirectory)../../src/TraceCommons.Interop/ConsentSurface.cs"
+          Link="ConsentSurface.cs.txt"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(MSBuildThisFileDirectory)../../src/TraceCommons.Interop/ReadGate.cs"
+          Link="ReadGate.cs.txt"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!--
     The app layer's routing surface and settings view model, copied next to
     the test assembly.
 
@@ -97,6 +117,28 @@
     and go on hand-writing the same sentence in another, which is the state
     this row was found in.
   -->
+  <!--
+    The private-inference surface's implementation source and the two app-layer
+    files that draw it, copied for the reason above and read by
+    NoWordingIsAuthoredInThePrivateInferenceSurface and
+    TheOfferIsDrawnFromTheSharedSentences.
+
+    The offer's exposure paragraph is the sentence most at risk of being
+    paraphrased into a shorter, friendlier one, and a paraphrase would pass
+    every behavioural test in this file.
+  -->
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../src/TraceCommons.Interop/PrivateInferenceSurface.cs"
+          Link="PrivateInferenceSurface.cs.txt"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(MSBuildThisFileDirectory)../../src/TraceCommons.App/MainWindow.xaml"
+          Link="MainWindow.xaml.txt"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(MSBuildThisFileDirectory)../../src/TraceCommons.App/ViewModels/MainViewModel.cs"
+          Link="MainViewModel.cs.txt"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <None Include="$(MSBuildThisFileDirectory)../../src/TraceCommons.App/ViewModels/ContributorSettingsViewModel.cs"
           Link="ContributorSettingsViewModel.cs.txt"

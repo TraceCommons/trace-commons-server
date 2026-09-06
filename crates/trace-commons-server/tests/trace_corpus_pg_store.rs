@@ -166,6 +166,16 @@ async fn cleanup_tenant(backend: &PgBackend, tenant_id: &str) {
     )
     .await
     .expect("set cleanup tenant context");
+    // `trace_audit_events` has no FK to `trace_tenants`, so deleting the tenant
+    // does NOT cascade-clear its mirrored audit chain. Left behind, the surviving
+    // chain head makes the next test's first append look like a stale-predecessor
+    // write and the store correctly refuses it. Clear the chain first.
+    let _ = tx
+        .execute(
+            "DELETE FROM trace_audit_events WHERE tenant_id = $1",
+            &[&tenant_id],
+        )
+        .await;
     let _ = tx
         .execute(
             "DELETE FROM trace_tenants WHERE tenant_id = $1",
@@ -2774,6 +2784,10 @@ async fn pg_store_list_recent_trace_audit_events_returns_limit_in_descending_ord
     // exactly 10 returned in audit_sequence DESC order (most recent first).
     let total = 12usize;
     let mut inserted_ids = Vec::with_capacity(total);
+    // The store enforces the audit hash chain: every append after the first has
+    // to name its predecessor. Passing None throughout reads as "genesis" and is
+    // correctly refused from the second row on.
+    let mut previous_event_hash: Option<String> = None;
     for idx in 0..total {
         let audit_event_id = Uuid::new_v4();
         inserted_ids.push(audit_event_id);
@@ -2792,7 +2806,7 @@ async fn pg_store_list_recent_trace_audit_events_returns_limit_in_descending_ord
                 object_ref_id: None,
                 export_manifest_id: None,
                 decision_inputs_hash: Some(format!("sha256:decision-{idx}")),
-                previous_event_hash: None,
+                previous_event_hash: previous_event_hash.clone(),
                 event_hash: Some(format!("sha256:event-{idx}")),
                 canonical_event_json: Some(format!("{{\"idx\":{idx}}}")),
                 metadata: TraceAuditSafeMetadata::Maintenance {
@@ -2804,6 +2818,7 @@ async fn pg_store_list_recent_trace_audit_events_returns_limit_in_descending_ord
             })
             .await
             .expect("append audit event");
+        previous_event_hash = Some(format!("sha256:event-{idx}"));
     }
 
     backend
