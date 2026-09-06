@@ -62,6 +62,8 @@ public sealed record RoutingCopy
     [JsonPropertyName("checking")] public string Checking { get; init; } = "";
     [JsonPropertyName("check_unavailable")] public string CheckUnavailable { get; init; } = "";
     [JsonPropertyName("probe_reachable")] public string ProbeReachable { get; init; } = "";
+    [JsonPropertyName("state_unknown")] public string StateUnknown { get; init; } = "";
+    [JsonPropertyName("derived_origin")] public string DerivedOrigin { get; init; } = "";
     [JsonPropertyName("state_off")] public string StateOff { get; init; } = "";
     [JsonPropertyName("state_waiting")] public string StateWaiting { get; init; } = "";
     [JsonPropertyName("state_reading")] public string StateReading { get; init; } = "";

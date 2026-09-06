@@ -1975,9 +1975,9 @@ pub unsafe extern "C" fn tc_routing_tool_tone(source_mode: *const c_char, wiring
 /// / anything-else onto them was written out again in each shell, and three
 /// copies of a branch can disagree while three copies of a string cannot.
 ///
-/// A state this build has never heard of -- and a NULL or non-UTF-8 `state`
-/// -- reads as the off line, which claims nothing. It never falls through
-/// to any of the three "on" sentences.
+/// An unfamiliar nonempty state reads as unavailable, not Off or a token
+/// failure. NULL, non-UTF-8 and empty input preserve the legacy empty-state
+/// behavior. None falls through to an "on" sentence.
 ///
 /// Returns an owned string; free it with [`tc_string_free`]. NULL only on a
 /// caught panic.
@@ -1987,8 +1987,8 @@ pub unsafe extern "C" fn tc_routing_tool_tone(source_mode: *const c_char, wiring
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tc_routing_state_line(state: *const c_char) -> *mut c_char {
     guarded_string_no_err(|| {
-        // An unreadable state is a state this build does not know, and the
-        // rule for those is already the safe one: say what off says.
+        // Preserve legacy empty input; unfamiliar nonempty labels are
+        // handled separately by the shared unavailable-state branch.
         let state = if state.is_null() {
             ""
         } else {

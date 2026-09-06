@@ -392,6 +392,9 @@
                             other three because neutral reads as off and held
                             reads as normal.
                         -->
+                        <TextBlock Text="{x:Bind Settings.RoutingOrigin, Mode=OneWay}"
+                                   Visibility="{x:Bind Settings.HasRoutingOrigin, Mode=OneWay}"
+                                   Style="{StaticResource TcCaptionTextStyle}" TextWrapping="Wrap" />
                         <TextBlock Text="{x:Bind Settings.RoutingStateText, Mode=OneWay}"
                                    Visibility="{x:Bind Settings.RoutingStateIsNeutral, Mode=OneWay}"
                                    Style="{StaticResource TcCaptionTextStyle}"

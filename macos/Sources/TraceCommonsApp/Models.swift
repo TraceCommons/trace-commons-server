@@ -247,21 +247,25 @@ struct DaemonStatus: Decodable, Equatable {
 /// every time that process comes back up, which is why the surface only
 /// shows it on a state that has actually had an answer.
 struct RoutingStatus: Decodable, Equatable {
+    let derived: Bool
     let state: String
     let lastRefreshAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case state
+        case derived
         case lastRefreshAt = "last_refresh_at"
     }
 
-    init(state: String, lastRefreshAt: Date?) {
+    init(state: String, lastRefreshAt: Date?, derived: Bool = false) {
+        self.derived = derived
         self.state = state
         self.lastRefreshAt = lastRefreshAt
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        derived = try c.decodeIfPresent(Bool.self, forKey: .derived) ?? false
         state = try c.decodeIfPresent(String.self, forKey: .state) ?? RoutingStatus.notDeclaredState
         lastRefreshAt = try c.decodeIfPresent(Date.self, forKey: .lastRefreshAt)
     }

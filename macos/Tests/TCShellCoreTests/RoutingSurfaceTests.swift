@@ -40,6 +40,8 @@ final class RoutingSurfaceTests: XCTestCase {
       "check_unavailable": "S-UNAVAILABLE",
       "probe_reachable": "S-REACHABLE",
       "state_off": "S-STATEOFF",
+      "state_unknown": "S-STATEUNKNOWN",
+      "derived_origin": "S-DERIVEDORIGIN",
       "state_waiting": "S-STATEWAITING",
       "state_reading": "S-STATEREADING",
       "state_token_unreadable": "S-STATETOKENUNREADABLE"
@@ -312,12 +314,12 @@ final class RoutingSurfaceTests: XCTestCase {
         }
     }
 
-    /// A line the ABI would not produce falls back to the off line, which
+    /// A line the ABI would not produce falls back to the unavailable line, which
     /// claims nothing -- never to a half-sentence and never to either "on"
     /// sentence.
     func testAStateLineTheAbiRefusedFallsBackToTheLineThatClaimsNothing() {
         let line = RoutingSurface.stateLine("rows_seen", copy: copy(), calls: silentCalls())
-        XCTAssertEqual(line, copy().stateOff)
+        XCTAssertEqual(line, copy().stateUnknown)
         XCTAssertNotEqual(line, copy().stateReading)
         XCTAssertNotEqual(line, copy().stateWaiting)
     }

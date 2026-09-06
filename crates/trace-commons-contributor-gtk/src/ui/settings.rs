@@ -1489,6 +1489,9 @@ fn render_routing_status(app: &Rc<App>, status: &Status) {
         view.remove(&child);
     }
     let state = status.routing.state.as_str();
+    if status.routing.derived {
+        style::append_body(view, copy::IRONWIRE_DERIVED_ORIGIN);
+    }
     view.append(&tone_row(
         copy::ironwire_state_line(state),
         routing_tone(state),

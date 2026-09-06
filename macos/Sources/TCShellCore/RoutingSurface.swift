@@ -497,16 +497,15 @@ public enum RoutingSurface {
 
     // MARK: The status line
 
-    /// The daemon's four states, in words. A state this build does not know
-    /// says what the off state says: it claims nothing.
+    /// The daemon's reported state, in shared words. Unknown nonempty labels
+    /// are unavailable, never an Off declaration.
     /// NOT A BRANCH TABLE HERE. Which sentence each state reaches is decided
     /// once, in `routing_copy.rs`, and crosses the ABI. A line the ABI would
-    /// not produce falls back to the off line -- which is what an unknown
-    /// state reads as anyway, because it claims nothing.
+    /// not produce falls back to unavailable rather than inventing a state.
     public static func stateLine(
         _ state: String, copy: RoutingCopy, calls: RoutingCalls
     ) -> String {
-        calls.stateLine(state) ?? copy.stateOff
+        calls.stateLine(state) ?? copy.stateUnknown
     }
 
     /// NOT A BRANCH TABLE HERE, for the reason on `stateLine`. This was the

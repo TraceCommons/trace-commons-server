@@ -802,3 +802,17 @@ final class RoutingBindingTests: XCTestCase {
         XCTAssertFalse(body.contains("else {"), "the card has a fallback for a missing payload")
     }
 }
+
+final class RoutingOriginDecodeTests: XCTestCase {
+    func testOriginComesOnlyFromReportedDerivedFlag() throws {
+        let decoder = JSONDecoder()
+        let derived = try decoder.decode(RoutingStatus.self, from: Data(#"{"state":"awaiting_rows","derived":true}"#.utf8))
+        XCTAssertTrue(derived.derived)
+        let legacy = try decoder.decode(RoutingStatus.self, from: Data(#"{"state":"awaiting_rows"}"#.utf8))
+        XCTAssertFalse(legacy.derived)
+        let unknown = try decoder.decode(RoutingStatus.self, from: Data(#"{"state":"unknown","derived":false}"#.utf8))
+        XCTAssertEqual(unknown.state, "unknown")
+        XCTAssertFalse(unknown.derived)
+        XCTAssertThrowsError(try decoder.decode(RoutingStatus.self, from: Data(#"{"derived":"true"}"#.utf8)))
+    }
+}

@@ -289,6 +289,30 @@ async fn existing_instance(home: &Path) -> Option<u16> {
     response.status().is_success().then_some(port)
 }
 
+/// Metadata routing may follow only a proxy owned by this daemon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OwnedEndpoint {
+    pub port: u16,
+    pub home: PathBuf,
+}
+
+pub(crate) fn effective_metadata_declaration(
+    declared: Option<&super::settings::IronWireDeclaration>,
+    enabled: bool,
+    owned: Option<&OwnedEndpoint>,
+) -> Option<super::settings::IronWireDeclaration> {
+    if let Some(declared) = declared {
+        return Some(declared.clone());
+    }
+    enabled
+        .then_some(owned)
+        .flatten()
+        .map(|owned| super::settings::IronWireDeclaration::Watch {
+            port: owned.port,
+            token_dir: Some(owned.home.clone()),
+        })
+}
+
 /// One daemon's private-inference instance: at most one proxy, and the state
 /// the daemon reports for it.
 pub struct PrivateInference {
@@ -297,6 +321,7 @@ pub struct PrivateInference {
     /// asks for an ephemeral one.
     port: Option<u16>,
     proxy: Option<EmbeddedProxy>,
+    owned_home: Option<PathBuf>,
     // Kept across canceled callers and deadlines. Dropping a wait must not
     // turn a still-owned listener into Off or permit another bind.
     starting: Option<tokio::task::JoinHandle<Result<EmbeddedProxy, EmbedError>>>,
@@ -347,6 +372,7 @@ impl PrivateInference {
             home,
             port: None,
             proxy: None,
+            owned_home: None,
             starting: None,
             stopping: None,
             cleanup_unconfirmed: false,
@@ -431,6 +457,27 @@ impl PrivateInference {
             || self.cleanup_unconfirmed
     }
 
+    #[cfg(test)]
+    pub(crate) async fn end_owned_for_test(&mut self) {
+        // Finish the real listener, then install the same local outcome as
+        // poll observing an unsolicited exit. Shared routing stays stale.
+        self.proxy
+            .take()
+            .expect("owned test proxy")
+            .shutdown()
+            .await;
+        self.crashed = true;
+        self.state = state_after_unrequested_exit(Ok(()));
+    }
+
+    pub(crate) fn owned_endpoint(&self) -> Option<OwnedEndpoint> {
+        let proxy = self.proxy.as_ref().filter(|proxy| !proxy.is_finished())?;
+        Some(OwnedEndpoint {
+            port: proxy.port(),
+            home: self.owned_home.clone()?,
+        })
+    }
+
     /// What the daemon reports right now.
     #[must_use]
     pub fn state(&self) -> PrivateInferenceState {
@@ -469,6 +516,7 @@ impl PrivateInference {
                 self.state = PrivateInferenceState::Stopping { port: None };
             }
             if let Some(proxy) = self.proxy.take() {
+                self.owned_home = None;
                 let port = proxy.port();
                 let runtime = self
                     .runtime
@@ -506,6 +554,16 @@ impl PrivateInference {
                 self.cleanup_unconfirmed = false;
                 let port = proxy.port();
                 self.state = state_after_start(port, proxy.startup_report().no_backends);
+                // Capture the resolved home once, while adopting this proxy;
+                // later changes to the spelling of a relative path cannot
+                // silently retarget its metadata reader.
+                self.owned_home = self.home.canonicalize().ok();
+                if self.owned_home.is_none() {
+                    tracing::warn!(
+                        reason = "private-inference-home-unresolved",
+                        "owned metadata routing unavailable"
+                    );
+                }
                 self.proxy = Some(proxy);
                 tracing::info!(
                     pass = "private_inference",
@@ -643,6 +701,7 @@ impl PrivateInference {
         }
         let exit = proxy.wait().await;
         self.proxy = None;
+        self.owned_home = None;
         self.crashed = true;
         self.state = state_after_unrequested_exit(exit);
         tracing::warn!(
@@ -656,6 +715,43 @@ impl PrivateInference {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effective_metadata_preserves_explicit_consent_and_requires_owned_opt_in() {
+        use super::super::settings::IronWireDeclaration;
+        let owned = OwnedEndpoint {
+            port: 3210,
+            home: PathBuf::from("/owned"),
+        };
+        for declaration in [
+            IronWireDeclaration::Off,
+            IronWireDeclaration::Watch {
+                port: 1234,
+                token_dir: Some(PathBuf::from("/custom")),
+            },
+        ] {
+            for enabled in [false, true] {
+                for endpoint in [None, Some(&owned)] {
+                    assert_eq!(
+                        effective_metadata_declaration(Some(&declaration), enabled, endpoint),
+                        Some(declaration.clone())
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            effective_metadata_declaration(None, false, Some(&owned)),
+            None
+        );
+        assert_eq!(effective_metadata_declaration(None, true, None), None);
+        assert_eq!(
+            effective_metadata_declaration(None, true, Some(&owned)),
+            Some(IronWireDeclaration::Watch {
+                port: 3210,
+                token_dir: Some(PathBuf::from("/owned"))
+            })
+        );
+    }
 
     #[tokio::test]
     async fn a_canceled_drain_wait_retains_ownership_and_blocks_rebinding() {
