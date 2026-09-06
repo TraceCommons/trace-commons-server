@@ -10,6 +10,7 @@ pub mod commands;
 pub mod compute;
 pub mod config;
 pub mod consent;
+pub mod consent_copy;
 pub mod daemon;
 pub mod envelope;
 pub mod identity;
