@@ -133,13 +133,10 @@ fn guard_with<T>(
     }
 }
 
-/// The exported-function tail shared by every `*mut c_char`-returning
-/// function with an `*err` out-param: run `f` under [`guard`], and on the
-/// only way that fails -- a genuine caught panic, since every caller's
-/// closure already converts its own business-logic errors to `Ok` -- report
-/// `"panic"` via [`set_last_error`] and, if `err` is non-null, `*err`, then
-/// return NULL. `set_last_error`/`to_owned_cstring` are audited not to panic
-/// themselves (see their doc comments), so this cannot recurse.
+/// Shared panic tail for string exports whose closures handle ordinary
+/// business errors themselves. Preserve their existing NULL/owned-error
+/// convention without forwarding panic payloads across the C boundary.
+/// Callers must uphold their exported function's writable `err` contract.
 fn guarded_string(
     err: *mut *mut c_char,
     f: impl FnOnce() -> anyhow::Result<*mut c_char> + UnwindSafe,
@@ -2829,4 +2826,66 @@ pub extern "C" fn tc_witness_last_result_tone() -> i32 {
         set_last_error("panic");
         TC_WITNESS_TONE_REFUSED
     })
+}
+
+#[cfg(test)]
+mod string_guard_tests {
+    use super::*;
+
+    fn borrowed_text(pointer: *const c_char) -> String {
+        assert!(!pointer.is_null());
+        unsafe { CStr::from_ptr(pointer) }
+            .to_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    fn owned_text(pointer: *mut c_char) -> String {
+        assert!(!pointer.is_null());
+        let text = unsafe { CStr::from_ptr(pointer) }
+            .to_str()
+            .unwrap()
+            .to_owned();
+        unsafe { tc_string_free(pointer) };
+        text
+    }
+
+    #[test]
+    fn caught_string_panics_return_only_the_fixed_owned_error_label() {
+        let mut error = std::ptr::null_mut();
+        let result = guarded_string(&mut error, || panic!("fixture-panic-payload"));
+        assert!(result.is_null());
+        assert_eq!(owned_text(error), "panic");
+        assert_eq!(borrowed_text(tc_last_error()), "panic");
+    }
+
+    #[test]
+    fn string_panic_reporting_does_not_require_an_error_output_pointer() {
+        assert!(guarded_string(std::ptr::null_mut(), || panic!("fixture-panic-payload")).is_null());
+        assert_eq!(borrowed_text(tc_last_error()), "panic");
+        assert!(guarded_string_no_err(|| panic!("fixture-panic-payload")).is_null());
+        assert_eq!(borrowed_text(tc_last_error()), "panic");
+    }
+
+    #[test]
+    fn ordinary_witness_refusals_keep_their_label_instead_of_becoming_panics() {
+        let mut error = std::ptr::null_mut();
+        let slot = &mut error as *mut *mut c_char;
+        let result = guarded_string(slot, || Ok(witness_fail("fixture-refusal", slot)));
+        assert!(result.is_null());
+        assert_eq!(owned_text(error), "fixture-refusal");
+        assert_eq!(borrowed_text(tc_last_error()), "fixture-refusal");
+    }
+
+    #[test]
+    fn successful_string_guards_transfer_the_original_owned_result() {
+        let mut error = std::ptr::null_mut();
+        let result = guarded_string(&mut error, || Ok(to_owned_cstring("result")));
+        assert!(error.is_null());
+        assert_eq!(owned_text(result), "result");
+        assert_eq!(
+            owned_text(guarded_string_no_err(|| Ok(to_owned_cstring("result")))),
+            "result"
+        );
+    }
 }
