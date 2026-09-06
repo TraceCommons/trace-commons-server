@@ -2168,6 +2168,167 @@ pub unsafe extern "C" fn tc_routing_last_checked(when: *const c_char) -> *mut c_
     })
 }
 
+/// The tones the private-inference surface is painted in.
+///
+/// DELIBERATELY DISJOINT FROM BOTH `TC_ROUTING_TONE_*` (0..=3) AND
+/// `TC_WITNESS_TONE_*` (10..=14), for the reason the witness range states:
+/// a shell that cross-wired two mappers with overlapping ranges would render
+/// one surface's value as another surface's meaning, and a disjoint range
+/// makes that mistake wrong for every value rather than only for the
+/// dangerous one.
+///
+/// This surface has a refused value and the routing surface does not.
+/// `port_in_use`, `start_failed` and `crashed` are each "you asked for this,
+/// it is not happening, and here is the way out", which is not what
+/// `ATTENTION` means here -- `ATTENTION` is the listener that started and has
+/// nowhere to pass a call on to.
+///
+/// A tone this header does not define must be rendered as
+/// `TC_PRIVATE_INFERENCE_TONE_NEUTRAL`, never as `_CLEAR`. Unlike the witness
+/// surface, whose unsafe direction is silence, the unsafe direction here is
+/// the working light: neutral claims nothing, and a state a shell has no
+/// words for must not be painted as a thing that is running.
+pub const TC_PRIVATE_INFERENCE_TONE_NEUTRAL: i32 = 20;
+pub const TC_PRIVATE_INFERENCE_TONE_HELD: i32 = 21;
+pub const TC_PRIVATE_INFERENCE_TONE_CLEAR: i32 = 22;
+pub const TC_PRIVATE_INFERENCE_TONE_ATTENTION: i32 = 23;
+pub const TC_PRIVATE_INFERENCE_TONE_REFUSED: i32 = 24;
+
+/// Every fixed word on the private-inference offer and settings surface, in
+/// one call.
+///
+/// Needs no handle: it describes the build, not a running daemon.
+///
+/// Returns an owned JSON object whose keys are `PrivateInferenceCopy`'s
+/// fields; free it with [`tc_string_free`].
+///
+/// ONE CALL, NOT ONE PER STRING, for the reason [`tc_routing_copy`] gives.
+/// The sentence a per-string export would invite a shell to hand-write is
+/// `offer_exposure`, which is the one saying that anything else on the
+/// machine can use the contributor's configured accounts while the switch is
+/// on. That sentence is the reason the offer is allowed to exist.
+///
+/// Returns NULL only on a caught panic.
+#[unsafe(no_mangle)]
+pub extern "C" fn tc_private_inference_copy() -> *mut c_char {
+    guarded_string_no_err(|| {
+        let copy = trace_commons_contributor::private_inference_copy::private_inference_copy();
+        let json = serde_json::to_string(&copy).unwrap_or_else(|_| "{}".to_string());
+        Ok(to_owned_cstring(&json))
+    })
+}
+
+/// The sentence for one `private_inference_state` label.
+///
+/// `state` is the `state` field of `get_settings`/`status`'s
+/// `private_inference_state` object: `off`, `running`, `running_no_backends`,
+/// `running_elsewhere`, `port_in_use`, `start_failed` or `crashed`.
+///
+/// A label this build has never heard of -- and a NULL or non-UTF-8 `state`
+/// -- reads as the off sentence, which claims nothing. It never falls through
+/// to one of the three "on" sentences.
+///
+/// Returns an owned string; free it with [`tc_string_free`]. NULL only on a
+/// caught panic.
+///
+/// # Safety
+/// `state`, if non-null, must point to a valid, NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tc_private_inference_state_line(state: *const c_char) -> *mut c_char {
+    guarded_string_no_err(|| {
+        let state = if state.is_null() {
+            ""
+        } else {
+            unsafe { borrow_str(state) }.unwrap_or("")
+        };
+        Ok(to_owned_cstring(
+            trace_commons_contributor::private_inference_copy::state_line(state),
+        ))
+    })
+}
+
+/// How firmly the sentence [`tc_private_inference_state_line`] returned
+/// reads: one of the `TC_PRIVATE_INFERENCE_TONE_*` values.
+///
+/// Exported for the reason [`tc_routing_state_tone`] is: the mapping from a
+/// label onto a colour is one decision, and three native copies of it agree
+/// today and drift in silence tomorrow.
+///
+/// Takes what the sentence takes, so the two stay in step by construction. A
+/// shell must not recover this by reading the rendered sentence -- three of
+/// the seven sentences begin with the same two words.
+///
+/// Answers `TC_PRIVATE_INFERENCE_TONE_NEUTRAL` for a label this build has
+/// never heard of, for a NULL or non-UTF-8 `state`, and on a caught panic.
+/// There is no failure value, for the reason on [`tc_routing_tool_tone`].
+///
+/// # Safety
+/// `state`, if non-null, must point to a valid, NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tc_private_inference_state_tone(state: *const c_char) -> i32 {
+    use trace_commons_contributor::private_inference_copy::PrivateInferenceTone;
+    guard(|| {
+        let state = if state.is_null() {
+            ""
+        } else {
+            unsafe { borrow_str(state) }.unwrap_or("")
+        };
+        Ok(
+            match trace_commons_contributor::private_inference_copy::state_tone(state) {
+                PrivateInferenceTone::Neutral => TC_PRIVATE_INFERENCE_TONE_NEUTRAL,
+                PrivateInferenceTone::Held => TC_PRIVATE_INFERENCE_TONE_HELD,
+                PrivateInferenceTone::Clear => TC_PRIVATE_INFERENCE_TONE_CLEAR,
+                PrivateInferenceTone::Attention => TC_PRIVATE_INFERENCE_TONE_ATTENTION,
+                PrivateInferenceTone::Refused => TC_PRIVATE_INFERENCE_TONE_REFUSED,
+            },
+        )
+    })
+    .unwrap_or(TC_PRIVATE_INFERENCE_TONE_NEUTRAL)
+}
+
+/// The "where it is answering" sentence, assembled.
+///
+/// `port` is the `port` field of `private_inference_state`. A value outside
+/// 1..=65535 -- including the `0` a caller passes for the JSON `null` -- gives
+/// the empty string rather than a sentence naming a number nobody bound. A
+/// shell renders nothing for an empty string.
+///
+/// Assembled here for the reason on [`tc_routing_token_line`].
+///
+/// Returns an owned string; free it with [`tc_string_free`]. NULL only on a
+/// caught panic.
+#[unsafe(no_mangle)]
+pub extern "C" fn tc_private_inference_serving_line(port: i32) -> *mut c_char {
+    guarded_string_no_err(|| {
+        let port = u16::try_from(port).ok().filter(|p| *p != 0);
+        Ok(to_owned_cstring(
+            &trace_commons_contributor::private_inference_copy::serving_line(port),
+        ))
+    })
+}
+
+/// Whether to put the offer in front of the contributor.
+///
+/// `answered` is `get_settings`'s `private_inference_offer_seen`; `on` is its
+/// `private_inference`. Both are booleans as `0` or non-zero.
+///
+/// THE BRANCH TABLE CROSSES, NOT ONLY THE WORDS, and here the branch is the
+/// one that decides whether to interrupt somebody. Three shells each deciding
+/// when to ask is three chances to re-ask a contributor who already said no,
+/// and nothing in this repository would notice one of them getting it wrong.
+///
+/// Answers `0` -- do not ask -- on a caught panic. Silence is the safe
+/// direction for an interruption.
+#[unsafe(no_mangle)]
+pub extern "C" fn tc_private_inference_should_offer(answered: i32, on: i32) -> i32 {
+    guard(|| {
+        Ok(i32::from(
+            trace_commons_contributor::private_inference_copy::should_offer(answered != 0, on != 0),
+        ))
+    })
+    .unwrap_or(0)
+}
+
 /// The settings screen's session-source row for one tool, assembled.
 ///
 /// `tool` is `claude`, `codex`, `gemini` or `cline`. `source_mode` is

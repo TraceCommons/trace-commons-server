@@ -126,6 +126,7 @@ struct SettingsContent: View {
             watching
             watchedFolders
             routing
+            privateInference
             witness
             projects
             audit
@@ -1462,6 +1463,84 @@ struct SettingsContent: View {
         case .clear: return .clear
         case .attention: return .attention
         case .refused: return .refused
+        }
+    }
+
+    /// The private-inference tone onto this shell's palette.
+    ///
+    /// A third bridge, not a reuse of either above, for the reason spelled
+    /// out on `witnessTone`: the three ABI tone ranges are disjoint so that
+    /// a cross-wired mapper is wrong for every value, and three functions
+    /// here is what keeps them from being cross-wired at all.
+    private func privateInferenceTone(_ tone: PrivateInferenceTone) -> TC.Tone {
+        switch tone {
+        case .neutral: return .neutral
+        case .held: return .held
+        case .clear: return .clear
+        case .attention: return .attention
+        case .refused: return .refused
+        }
+    }
+
+    /// Answering model calls on this computer.
+    ///
+    /// Its own section rather than a row on the routing card above: that
+    /// card is about READING a record another process keeps, and this is
+    /// about this app being the thing that answers. Renders nothing at all
+    /// if the words did not arrive.
+    @ViewBuilder
+    private var privateInference: some View {
+        if let copy = model.privateInferenceCopy {
+            let state = model.privateInferenceState
+            VStack(alignment: .leading, spacing: TC.Space.sm) {
+                TCSectionHeader(title: copy.settingsTitle)
+                Text(copy.offerWhat)
+                    .font(TC.Font_.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                // The exposure sentence lives on the settings card too, not
+                // only in the offer. A contributor who declined and came
+                // back months later is making the same decision and is owed
+                // the same sentence.
+                Text(copy.offerExposure)
+                    .font(TC.Font_.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                Toggle(
+                    copy.settingsToggle,
+                    isOn: Binding(
+                        get: { model.daemonSettings?.privateInferenceOn ?? false },
+                        set: { model.applyPrivateInference($0) }
+                    )
+                )
+                .toggleStyle(.switch)
+                .tint(TC.green)
+                .font(TC.Font_.body)
+                // The switch says what was ASKED FOR; this says what
+                // happened. They differ exactly when it matters -- a
+                // listener that refused to start leaves the switch on.
+                Label(
+                    PrivateInferenceSurface.stateLine(
+                        state, copy: copy, calls: model.privateInferenceCalls),
+                    systemImage: privateInferenceTone(
+                        PrivateInferenceSurface.tone(state, calls: model.privateInferenceCalls)
+                    ).symbol
+                )
+                .font(TC.Font_.body)
+                .foregroundStyle(
+                    privateInferenceTone(
+                        PrivateInferenceSurface.tone(state, calls: model.privateInferenceCalls)
+                    ).textColor
+                )
+                .fixedSize(horizontal: false, vertical: true)
+                if let serving = PrivateInferenceSurface.servingLine(
+                    state, calls: model.privateInferenceCalls)
+                {
+                    Text(serving).font(TC.Font_.meta).foregroundStyle(.secondary)
+                }
+                Text(copy.settingsAppliesAtOnce)
+                    .font(TC.Font_.meta)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

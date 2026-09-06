@@ -99,6 +99,18 @@ struct QueueContent: View {
                     .foregroundStyle(.secondary)
             }
 
+            // The offer to answer model calls on this computer, on the
+            // screen this app opens on. Settings is where the switch LIVES;
+            // Settings alone is the failure this offer exists to fix,
+            // because nobody who did not already know about it went there.
+            if model.showsPrivateInferenceOffer, let copy = model.privateInferenceCopy {
+                PrivateInferenceOfferCard(
+                    copy: copy,
+                    onAccept: { model.answerPrivateInferenceOffer(accepted: true) },
+                    onDecline: { model.answerPrivateInferenceOffer(accepted: false) }
+                )
+            }
+
             if let offer = model.armingOffer {
                 ArmingOfferCard(
                     offer: offer,
@@ -1003,6 +1015,63 @@ enum QueueGlyphs {
         path.closeSubpath()
     }
 }
+
+/// The offer to answer model calls on this computer.
+///
+/// Shown once. Both answers go to the daemon, so "Not now" is remembered
+/// across relaunches and across shells rather than being a dismissal this
+/// view forgets -- and whether there is anything to ask is the shared
+/// table's decision, not this view's.
+///
+/// EVERY SENTENCE COMES FROM `copy`. Unlike `ArmingOfferCard` above, which
+/// still holds Swift-authored wording, nothing on this card is written here:
+/// the three shells print one offer, and the paragraph most at risk of being
+/// paraphrased is the one saying what turning the switch on exposes.
+///
+/// Nothing is emphasised as a primary action, for the reason the arming card
+/// gives, and more so: this question opens a listener anything on the
+/// machine can use.
+struct PrivateInferenceOfferCard: View {
+    let copy: PrivateInferenceCopy
+    var onAccept: () -> Void
+    var onDecline: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: TC.Space.s) {
+            Text(copy.offerTitle)
+                .font(.callout.weight(.semibold))
+
+            // What it does, what it exposes, then what it does NOT do.
+            Text(copy.offerWhat)
+                .font(TC.Font_.body)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(copy.offerExposure)
+                .font(TC.Font_.body)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(copy.offerNoRepoint)
+                .font(TC.Font_.body)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(copy.offerAskedOnce)
+                .font(TC.Font_.meta)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: TC.Space.m) {
+                // Untinted, and first: declining must not wear the accent
+                // that means "yes" everywhere else in this app.
+                Button(copy.offerDecline, action: onDecline)
+                    .tint(.primary)
+                Button(copy.offerAccept, action: onAccept)
+                    .tint(.primary)
+            }
+        }
+        .padding(TC.Space.l)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .tcCard()
+        .accessibilityElement(children: .contain)
+    }
+}
+
 
 
 /// The offer to stop being asked about one project.
