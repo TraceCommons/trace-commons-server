@@ -121,8 +121,9 @@ jobs:
           key: ${{ runner.os }}-cargo-check-default-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-check-default-
-      - run: cargo check -p trace-commons-server --bins
-      - run: cargo check -p trace-commons-contributor
+      # A manifest change must not silently re-resolve reviewed Git dependencies.
+      - run: cargo check --locked -p trace-commons-server --bins
+      - run: cargo check --locked -p trace-commons-contributor
 
   cargo-check-permissive-standalone:
     name: cargo check (permissive crates, standalone)
@@ -841,7 +842,7 @@ jobs:
         run: cargo build -p trace-commons-contributor --bin trace-commons-contributor
       # The GTK crate is its own workspace, excluded from the root one.
       - name: Build the shell
-        run: cargo build --manifest-path crates/trace-commons-contributor-gtk/Cargo.toml --bin trace-commons-shell
+        run: cargo build --locked --manifest-path crates/trace-commons-contributor-gtk/Cargo.toml --bin trace-commons-shell
       # The GTK crate is its own workspace, so the root workspace's test job
       # never touches it. Its update, portal-parsing and copy logic is all
       # pure and needs no display -- but without this step nothing runs it.
