@@ -88,6 +88,12 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private readonly DispatcherQueueTimer _visibilityDebounceTimer;
 
+    private OnboardingWindow? _onboarding;
+    private readonly PendingInviteActivation _redirectedInvite = new();
+    private bool _activationDaemonAvailable;
+    private bool _activationReady;
+    private bool _closed;
+
     private bool _quitConfirmed;
 
     /// <summary>
@@ -163,30 +169,31 @@ public sealed partial class MainWindow : Window
         "Quitting stops Trace Commons watching for finished sessions. Nothing is queued or "
         + "sent until you open it again. Anything already waiting stays waiting.";
 
-    /// <summary>
-    /// Intercepts the close so the consequence can be stated first.
-    /// </summary>
-    /// <remarks>
-    /// On the window's own close button as well as on the tray's Quit. Once
-    /// the app has a tray icon, "I closed the window" and "I stopped
-    /// contributing" become different acts on every other platform -- and on
-    /// this one they are still the same act, because the watcher is this
-    /// process. A contributor must not have to guess which it was.
-    /// </remarks>
+    /// <summary>Hide to a reachable tray; otherwise confirm before stopping the daemon.</summary>
     private async void OnAppWindowClosing(
         Microsoft.UI.Windowing.AppWindow sender,
         Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
     {
-        if (_quitConfirmed)
+        var outcome = CloseBehavior.OnWindowClose(_quitConfirmed, _tray.IsPresent, _quitDialogOpen);
+        if (outcome == CloseRequestOutcome.Quit)
         {
             return;
         }
 
-        // Cancelled first and re-closed after: AppWindow.Closing cannot be
-        // awaited, so the only way to ask a question is to refuse this close
-        // and start another one from the answer.
+        // Cancel synchronously before awaiting any confirmation.
         args.Cancel = true;
+        if (outcome == CloseRequestOutcome.HideToTray)
+        {
+            AppWindow.Hide();
+        }
+        else if (outcome == CloseRequestOutcome.AskToQuit)
+        {
+            await ConfirmQuitAsync();
+        }
+    }
 
+    private async Task ConfirmQuitAsync()
+    {
         if (_quitDialogOpen)
         {
             return;
@@ -227,11 +234,8 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception)
         {
-            // `args.Cancel = true` ran synchronously above, before the first
-            // await, so WinUI has already honoured the cancellation by the
-            // time any throw here is possible. The close is refused whatever
-            // happens next; the only question was whether the process
-            // survived to be closed again.
+            // The window-close path canceled synchronously; the tray path
+            // has not attempted to close. Any failure refuses the quit.
             //
             // The window then refuses to close without saying so, and that
             // is right rather than merely tolerable. This runs precisely
@@ -283,6 +287,8 @@ public sealed partial class MainWindow : Window
     {
         Activated -= OnFirstActivated;
         await ViewModel.InitializeAsync();
+        _activationReady = ViewModel.NeedsSessionRoots;
+        OfferNextRedirectedInvite();
 
         // Everything below this point talks to a daemon. A start refused for
         // undeclared session sources has none, so the roots screen goes first
@@ -311,6 +317,7 @@ public sealed partial class MainWindow : Window
 
         await RefreshTrayAsync();
         await ShowOnboardingIfNeededAsync();
+        OfferNextRedirectedInvite();
     }
 
     /// <summary>
@@ -344,6 +351,8 @@ public sealed partial class MainWindow : Window
     {
         // The daemon is up now, so the queue window needs the first snapshot
         // it could not load, and then the startup it did not finish.
+        _activationReady = false;
+        ViewModel.SessionRootsDeclared();
         await ViewModel.RefreshAsync();
         await ContinueStartupAsync();
     }
@@ -416,7 +425,7 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// The 4-hour digest.
+    /// The configured digest.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -424,9 +433,7 @@ public sealed partial class MainWindow : Window
     /// and both must pass: the daemon's, which is the shared policy every
     /// shell obeys, and <see cref="DigestCadence"/>, which is this process's
     /// own backstop. Neither can cause a notification; each can only suppress
-    /// one. That is what keeps the onboarding screen's promise -- at most one
-    /// notification every 4 hours, and none at all when nothing is waiting --
-    /// literally true rather than approximately.
+    /// one. Empty events and duplicate deliveries do not create extra digests.
     /// </para>
     /// <para>
     /// Project labels come from the queue the window already holds, which the
@@ -524,18 +531,63 @@ public sealed partial class MainWindow : Window
         _host.Dispatcher.TryEnqueue(async () => await ViewModel.ResumeAsync());
     }
 
-    private void BringForward()
+    internal void BringForward()
     {
         AppWindow.Show();
         Activate();
     }
 
+    internal void ReceiveActivation(string? invite)
+    {
+        if (_closed) return;
+        BringForward();
+        _redirectedInvite.Receive(invite);
+        OfferNextRedirectedInvite();
+    }
+
+    private void OfferNextRedirectedInvite()
+    {
+        if (_closed)
+        {
+            return;
+        }
+        var decision = _redirectedInvite.Take(_activationReady, ViewModel.NeedsSessionRoots,
+            _activationDaemonAvailable, _onboarding is not null);
+        if (decision.Notice is string notice)
+        {
+            // Notices live on the queue pane, including a link opened from Settings.
+            ViewModel.ShowQueue();
+            ViewModel.ShowNotice(notice);
+        }
+        if (decision.Invite is not string invite)
+        {
+            return;
+        }
+        var onboarding = OpenOnboarding(OnboardingState.Default());
+        onboarding.OfferInvite(invite);
+        onboarding.Activate();
+    }
+
+    private OnboardingWindow OpenOnboarding(OnboardingState state)
+    {
+        if (_onboarding is not null) return _onboarding;
+        var onboarding = new OnboardingWindow(_host, state);
+        _onboarding = onboarding;
+        onboarding.Closed += async (_, _) =>
+        {
+            await onboarding.CloseCompletion;
+            if (ReferenceEquals(_onboarding, onboarding)) _onboarding = null;
+            DispatcherQueue.TryEnqueue(OfferNextRedirectedInvite);
+        };
+        return onboarding;
+    }
+
     private void OnTrayQuitRequested()
     {
-        _host.Dispatcher.TryEnqueue(() =>
+        _host.Dispatcher.TryEnqueue(async () =>
         {
-            Activate();
-            Close();
+            BringForward();
+            await ConfirmQuitAsync();
         });
     }
 
@@ -575,10 +627,15 @@ public sealed partial class MainWindow : Window
         // worse than saying nothing, so this says the true thing instead.
         if (status.IsError)
         {
+            _activationDaemonAvailable = false;
+            _activationReady = true;
             ViewModel.ReportAlreadyRunning(App.PendingInvite is not null);
+            OfferNextRedirectedInvite();
             return;
         }
 
+        _activationReady = true;
+        _activationDaemonAvailable = true;
         string? tenantId = null;
         bool loggedIn = false;
         if (status.Result is JsonElement element)
@@ -598,7 +655,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var onboarding = new OnboardingWindow(_host, state);
+        var onboarding = OpenOnboarding(state);
         if (App.PendingInvite is string invite)
         {
             onboarding.OfferInvite(invite);
@@ -730,7 +787,24 @@ public sealed partial class MainWindow : Window
 
     private void OnHealthAction(object sender, RoutedEventArgs e)
     {
-        var onboarding = new OnboardingWindow(_host, OnboardingState.Default());
+        var target = ViewModel.HealthDestination;
+        if (target == HealthNavigationTarget.Waiting)
+        {
+            ViewModel.ShowQueue();
+            return;
+        }
+        if (target == HealthNavigationTarget.None)
+        {
+            return;
+        }
+        // Raising a live flow must not reset an invite or consent decision.
+        bool alreadyOpen = _onboarding is not null;
+        var onboarding = OpenOnboarding(OnboardingState.Default());
+        if (!alreadyOpen && target == HealthNavigationTarget.Connect)
+        {
+            onboarding.ViewModel.GetStarted();
+        }
+
         onboarding.Activate();
     }
 
@@ -778,10 +852,11 @@ public sealed partial class MainWindow : Window
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A second route to "Look inside", never a replacement for it. The button
-    /// keeps its emphasis: one-click submit added AVAILABILITY, and accent
-    /// styling is a RECOMMENDATION. What this adds is that the obvious gesture
-    /// on a card does the obvious thing.
+    /// A second route to "Look inside", never a replacement for it. That
+    /// button is the card's one accented control and "Submit" is secondary:
+    /// one-click submit added AVAILABILITY, and accent styling is a
+    /// RECOMMENDATION, which is to read first. What this adds is that the
+    /// obvious gesture on a card does the obvious thing.
     /// </para>
     /// <para>
     /// The three footer buttons handle their own pointer input, so a WinUI
@@ -1209,6 +1284,9 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private async void OnClosed(object sender, WindowEventArgs args)
     {
+        _closed = true;
+        _activationReady = false;
+        _redirectedInvite.Clear();
         // Before the daemon teardown, and synchronously: an icon left in the
         // notification area after the process exits is a ghost the shell only
         // reaps when someone hovers over it, and it would claim a watcher

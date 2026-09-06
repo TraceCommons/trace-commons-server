@@ -1562,8 +1562,7 @@ pub const ONBOARD_WELCOME_BODY_1: &str = concat!(
 /// is the promise the whole product is judged against.
 pub const ONBOARD_WELCOME_DECIDES: &str =
     "You decide what gets contributed. Nothing is sent unless you say so.";
-pub const ONBOARD_WELCOME_BODY_2: &str = "This app watches for finished Claude Code and Codex sessions on this machine and shows them \
-     to you.";
+pub const ONBOARD_WELCOME_BODY_2: &str = trace_commons_contributor::onboarding_copy::WELCOME_BODY;
 /// "Good and it is not perfect" is load-bearing: a developer knows automatic
 /// redaction is imperfect, and conceding it first is what makes the rest
 /// credible. Do not soften it into "thorough" or drop the second clause.
@@ -1731,16 +1730,7 @@ pub const PROJECT_MODE_FAILED: &str =
 pub const ONBOARD_CONTINUE: &str = "Continue";
 
 pub const ONBOARD_DONE_TITLE: &str = "You're set up. Nothing has been sent.";
-/// The macOS wording says "menu bar"; this is the Linux shell, so it says
-/// where the app actually lives here. Everything after that first clause is
-/// the spec's, unchanged -- the 30-minute quiet period and the at-most-one
-/// -every-4-hours promise are commitments the daemon actually keeps.
-pub const ONBOARD_DONE_BODY: &str = concat!(
-    app_name!(),
-    " lives in your system tray. When a session finishes and goes quiet for 30 minutes, it'll \
-     show up there. You'll get at most one notification every 4 hours, and none at all if \
-     there's nothing waiting."
-);
+pub const ONBOARD_DONE_BODY: &str = trace_commons_contributor::onboarding_copy::DONE_BODY;
 pub const ONBOARD_DONE_BUTTON: &str = "Finish";
 
 // The roots screen. It runs BEFORE the daemon starts, so it is not one of

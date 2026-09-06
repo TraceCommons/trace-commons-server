@@ -1,4 +1,5 @@
 import SwiftUI
+import TCBridge
 
 /// Onboarding screen 1, "What this is" -- the first thing a contributor ever
 /// sees. Copy is verbatim from the shared design spec
@@ -297,12 +298,12 @@ struct OnboardingWelcomeContent: View {
     /// type. Section 5.8 does not draw them -- it draws the hero and stops --
     /// but the scrubbing concession is not droppable, so they stay, set at
     /// `body.brand` under the hero rather than competing with it.
+    ///
+    /// The shared sentence follows source settings instead of keeping a
+    /// separate tool list that can drift from the adapters and other shells.
     private var supporting: some View {
         HStack(alignment: .top, spacing: CommunityBrand.Metric.heroGap) {
-            Text("""
-            This app watches for finished Claude Code and Codex sessions on this \
-            machine and shows them to you.
-            """)
+            Text(TCOnboardingCopy.load()?.welcomeBody ?? "")
             .frame(maxWidth: .infinity, alignment: .leading)
 
             // The link sits directly under the sentence that raises the
@@ -331,19 +332,19 @@ struct OnboardingWelcomeContent: View {
         .padding(.horizontal, TC.Space.s)
     }
 
-    /// The promise, restated small, and the step counter. Both in the mono
-    /// micro-label; a 1px ink rule above, not the header's 2px.
+    /// The promise, restated small, in the mono micro-label; a 1px ink rule
+    /// above, not the header's 2px.
+    ///
+    /// There used to be a step counter here, stated as "01 — 06". It was
+    /// wrong on the one path where a counter matters: a fresh install has a
+    /// roots screen after this one, and the privacy-scan screen exists only
+    /// when the operator configured it, so the real count is not knowable
+    /// on this screen and is not six. A counter that miscounts is worse
+    /// than none.
     private var footer: some View {
         VStack(alignment: .leading, spacing: TC.Space.m) {
             Rectangle().fill(CommunityBrand.ink).frame(height: TC.Space.hairline)
-            HStack(alignment: .firstTextBaseline) {
-                Text("Scrubbed locally · shown to you · sent only on your word")
-                Spacer(minLength: TC.Space.m)
-                // Screen 1 of the six-step flow owned by
-                // `OnboardingCoordinatorView`. This screen is only ever
-                // step 1, so the counter is stated rather than plumbed.
-                Text("01 — 06")
-            }
+            Text("Scrubbed locally · shown to you · sent only on your word")
             .font(CommunityBrand.Font_.labelMono)
             .tracking(CommunityBrand.Font_.monoTracking)
             .foregroundStyle(CommunityBrand.muted)
