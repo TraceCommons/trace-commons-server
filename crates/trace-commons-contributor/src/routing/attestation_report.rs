@@ -15,7 +15,7 @@
 //! Nothing here logs. The report holds keys and identifiers; none of them
 //! belong on an operational surface.
 
-use trace_commons_attestation::receipt::ReceiptAlgo;
+use trace_commons_attestation::receipt::{ReceiptAlgo, normalize_ed25519_key};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AttestationReportError {
@@ -87,14 +87,14 @@ pub fn gateway_ed25519_key(
     if ReceiptAlgo::from_wire(algo) != Some(ReceiptAlgo::Ed25519) {
         return Err(AttestationReportError::NotEd25519);
     }
-    let key = field("signing_address")?.to_ascii_lowercase();
     // A key this short (or empty) could `strip_prefix` trivially against any
     // `report_data`, making the check below vacuous. Refused here so
     // `gateway_ed25519_key` can never return a string that is not actually a
-    // 32-byte hex key -- callers should not have to re-check that.
-    if key.len() != 64 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(AttestationReportError::KeyMalformed);
-    }
+    // 32-byte hex key -- callers should not have to re-check that. The
+    // normalisation is the attestation crate's, so a key read from a report
+    // and a key pinned in a witness's configuration are the same spelling.
+    let key = normalize_ed25519_key(field("signing_address")?)
+        .ok_or(AttestationReportError::KeyMalformed)?;
     // `request_nonce` is the provider's own label for the value; required for
     // shape, but the binding this function trusts is `report_data` itself,
     // checked below against the key it names and the nonce we asked for.
@@ -117,13 +117,11 @@ pub fn gateway_ed25519_key(
 
 /// Whether a verified receipt's signer is the gateway key a report attested.
 ///
-/// Case-insensitive, because the report renders the key lowercase and a
-/// receipt might not. Exact otherwise: a prefix, a suffix, or a different
-/// scheme's address does not match.
-#[must_use]
-pub fn signer_is_attested(receipt_signer: &str, attested_key: &str) -> bool {
-    !attested_key.is_empty() && receipt_signer.eq_ignore_ascii_case(attested_key)
-}
+/// Re-exported from `trace_commons_attestation::receipt`, where it moved so
+/// that the hosted witness -- which compares a receipt's signer against a key
+/// an operator pinned rather than one read from a live report -- makes the
+/// same comparison this client does, from the same code.
+pub use trace_commons_attestation::receipt::signer_is_attested;
 
 #[cfg(test)]
 mod tests {
