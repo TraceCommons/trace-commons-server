@@ -34,7 +34,9 @@ A direct Holonear desktop-core dependency would pull protocol/crypto/store,
 account, and AWS components, and couple the contributor to Holonear's newer
 compiler. The native adapter instead uses existing ring, serde, sha2, hex and
 Tokio. It enables Tokio's existing `process` feature; no package or lockfile
-dependency is added. This preserves the contributor's Rust 1.92 boundary.
+dependency is added. This preserves the contributor's Rust MSRV boundary
+(1.92 when this was written; 1.96 since 2026-09-06, raised by the
+unconditional `ironwire_proxy` dependency).
 
 Frames are four-byte big-endian lengths plus JSON, capped at 65,536 bytes before
 allocation. Every request uses a new random nonce. Status has a two-second

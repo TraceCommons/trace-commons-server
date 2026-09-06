@@ -384,7 +384,7 @@ fn release_notes_only_describe_platforms_that_actually_succeeded() {
 }
 
 /// dtolnay/rust-toolchain is pinned to a commit SHA of its master branch
-/// (not a `@stable`/`@1.92`-style ref), so it cannot infer the toolchain
+/// (not a `@stable`/`@1.96`-style ref), so it cannot infer the toolchain
 /// from the ref name and `toolchain:` becomes a required input. Plain
 /// string counting, not a YAML parser: every `dtolnay/rust-toolchain`
 /// usage must be matched by a `toolchain: "` input somewhere in the file.
@@ -1331,18 +1331,18 @@ fn flatpak_manifest_bundles_a_pinned_rust_toolchain_per_arch() {
     for (arch, url, sha256) in [
         (
             "x86_64",
-            "https://static.rust-lang.org/dist/rust-1.92.0-x86_64-unknown-linux-gnu.tar.xz",
-            "d2ccef59dd9f7439f2c694948069f789a044dc1addcc0803613232af8f88ee0c",
+            "https://static.rust-lang.org/dist/rust-1.96.0-x86_64-unknown-linux-gnu.tar.xz",
+            "c295047583a56238ea06b43f849f4b877fa12bfd4c7103f8d9a74c94c9c4e108",
         ),
         (
             "aarch64",
-            "https://static.rust-lang.org/dist/rust-1.92.0-aarch64-unknown-linux-gnu.tar.xz",
-            "3e383f8b4fca710d0600d0c1de97b78281672be2cda6575ecbe1c183a12e3822",
+            "https://static.rust-lang.org/dist/rust-1.96.0-aarch64-unknown-linux-gnu.tar.xz",
+            "371eadcca97062219cbd8593628eb5d2802bc370515d085fedce1b56b2baed57",
         ),
     ] {
         assert!(
             manifest.contains(url),
-            "manifest must pin a rust 1.92.0 tarball for {arch}: {url}"
+            "manifest must pin a rust 1.96.0 tarball for {arch}: {url}"
         );
         assert!(
             manifest.contains(sha256),

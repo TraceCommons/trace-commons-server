@@ -11,7 +11,14 @@
 name = "trace-commons-contributor-gtk"
 version = "0.10.0"
 edition = "2024"
-rust-version = "1.92"
+# Tracks the root workspace's floor by hand -- this crate is deliberately not
+# a member of it, so `rust-version.workspace = true` is unavailable. Raised
+# from 1.92 on 2026-09-06 with the root: this crate links
+# trace-commons-contributor directly, so the ironwire_*/ironclaw_* crates and
+# their rust-version = 1.96 are in this lockfile too. The flatpak manifest's
+# pinned toolchain tarball must move with this value; release-apps.yml's
+# linux-flatpak job fails the release if it does not.
+rust-version = "1.96"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/TraceCommons/trace-commons"
 description = "GTK 4 contributor shell for Trace Commons (Linux)"
