@@ -99,10 +99,14 @@ fn exercise_child(root: &Path) {
         if cycle == 0 {
             call(&handle, "set_settings", r#"{"private_inference":false}"#);
             let deadline = Instant::now() + Duration::from_secs(5);
-            while call(&handle, "get_settings", "{}")["private_inference_state"]["state"] != "off" {
+            loop {
+                let state = call(&handle, "get_settings", "{}")["private_inference_state"].clone();
+                if state["state"] == "off" {
+                    break;
+                }
                 assert!(
                     Instant::now() < deadline,
-                    "owned proxy never finished stopping"
+                    "owned proxy never finished stopping: {state}"
                 );
                 std::thread::sleep(Duration::from_millis(10));
             }
