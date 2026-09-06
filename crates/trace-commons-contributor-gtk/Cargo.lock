@@ -4613,7 +4613,7 @@ version = "0.1.0"
 
 [[package]]
 name = "trace-commons-contributor"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4645,7 +4645,7 @@ dependencies = [
 
 [[package]]
 name = "trace-commons-contributor-gtk"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "async-channel",
