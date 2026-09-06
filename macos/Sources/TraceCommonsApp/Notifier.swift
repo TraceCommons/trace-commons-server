@@ -1,4 +1,5 @@
 import Foundation
+import TCBridge
 import TCShellCore
 import UserNotifications
 
@@ -85,11 +86,17 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     /// The one sentence that says what a notification from this app is.
     /// Shown above the permission button on the Done screen and in Settings.
-    static let purpose =
-        "Notifications tell you about sessions waiting for review and recent contributions. "
-        + "They never submit a session for you."
+    static let copy = TCOnboardingCopy.load()
+    static var purpose: String { copy?.notificationPurpose ?? "" }
 
-    /// The 4-hour digest. Passive, so Focus and Do Not Disturb hold it.
+    static func canPostDigest(_ status: UNAuthorizationStatus?) -> Bool {
+        switch status {
+        case .authorized?, .provisional?, .ephemeral?: return true
+        default: return false
+        }
+    }
+
+    /// The configured digest. Passive, so Focus and Do Not Disturb hold it.
     ///
     /// Fires for either half: sessions waiting for review, or sessions that
     /// were contributed without being asked about since the last one. It used
@@ -133,7 +140,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             content: content,
             trigger: nil
         )
-        UNUserNotificationCenter.current().add(request)
+        Task {
+            guard Self.canPostDigest(await authorizationStatus()), !Task.isCancelled else { return }
+            try? await UNUserNotificationCenter.current().add(request)
+        }
     }
 
     private static func joined(_ labels: [String]) -> String {

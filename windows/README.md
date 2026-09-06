@@ -155,11 +155,10 @@ Deliberately absent, and each is its own piece of work:
 
 ## The tray and the interruption budget
 
-The onboarding "Done" screen tells a contributor they "will get at most one
-notification every 4 hours, and none at all if there's nothing waiting". Until
-this slice that was a promise about a notification path that did not exist.
-Now it exists, and the promise is enforced in two places, neither of which can
-cause a notification:
+The daemon controls digest timing through `digest_interval_secs`. Digests cover
+waiting sessions and recent contributions; empty digests are suppressed. The
+Windows shell adds a conservative four-hour backstop, so shorter configured
+intervals may be suppressed. Neither gate creates notifications:
 
 1. **The daemon.** `daemon/notify.rs::digest_due` refuses on an empty queue and
    otherwise fires once per `digest_interval_secs`, persisting `last_digest_at`

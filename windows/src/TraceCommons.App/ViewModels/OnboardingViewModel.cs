@@ -32,6 +32,9 @@ namespace TraceCommons.App.ViewModels;
 /// </remarks>
 public sealed class OnboardingViewModel : INotifyPropertyChanged
 {
+    private static readonly OnboardingCopy? SharedOnboardingCopy = OnboardingCopy.Load();
+    public string WelcomeBody => SharedOnboardingCopy?.WelcomeBody ?? "";
+    public string DoneBody => SharedOnboardingCopy?.DoneBody ?? "";
     /// <summary>
     /// The single sentence shown for every invite failure.
     /// </summary>

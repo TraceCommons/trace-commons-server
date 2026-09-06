@@ -257,21 +257,21 @@ struct SettingsContent: View {
     private var notifications: some View {
         if let status = notificationStatus {
             VStack(alignment: .leading, spacing: TC.Space.sm) {
-                TCSectionHeader(title: "Notifications")
+                TCSectionHeader(title: Notifier.copy?.notificationHeading ?? "")
                 Text(Notifier.purpose)
                     .font(TC.Font_.meta)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 switch status {
                 case .authorized, .provisional, .ephemeral:
-                    checkRow("Notifications allowed", true)
+                    checkRow(Notifier.copy?.notificationAllowed ?? "", true)
                 case .denied:
-                    checkRow("Notifications turned off in System Settings", false)
-                    Link("Open System Settings", destination: Notifier.systemSettingsURL)
+                    checkRow(Notifier.copy?.notificationDenied ?? "", false)
+                    Link(Notifier.copy?.systemSettings ?? "", destination: Notifier.systemSettingsURL)
                         .font(TC.Font_.body)
                 case .notDetermined:
-                    checkRow("Not asked yet", false)
-                    Button("Allow notifications") {
+                    checkRow(Notifier.copy?.notificationNotAsked ?? "", false)
+                    Button(Notifier.copy?.notificationAllow ?? "") {
                         guard !notificationRequestPending else { return }
                         notificationRequestPending = true
                         Task {
@@ -283,7 +283,8 @@ struct SettingsContent: View {
                     .buttonStyle(.bordered)
                     .disabled(notificationRequestPending)
                 @unknown default:
-                    checkRow("Notifications allowed", false)
+                    Text(Notifier.copy?.notificationUnknown ?? "")
+                    Link(Notifier.copy?.systemSettings ?? "", destination: Notifier.systemSettingsURL)
                 }
             }
         }

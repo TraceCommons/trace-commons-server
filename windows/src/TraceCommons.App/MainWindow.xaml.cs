@@ -416,7 +416,7 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// The 4-hour digest.
+    /// The configured digest.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -424,9 +424,7 @@ public sealed partial class MainWindow : Window
     /// and both must pass: the daemon's, which is the shared policy every
     /// shell obeys, and <see cref="DigestCadence"/>, which is this process's
     /// own backstop. Neither can cause a notification; each can only suppress
-    /// one. That is what keeps the onboarding screen's promise -- at most one
-    /// notification every 4 hours, and none at all when nothing is waiting --
-    /// literally true rather than approximately.
+    /// one. Empty events and duplicate deliveries do not create extra digests.
     /// </para>
     /// <para>
     /// Project labels come from the queue the window already holds, which the

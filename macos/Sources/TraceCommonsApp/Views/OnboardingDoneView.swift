@@ -1,4 +1,5 @@
 import SwiftUI
+import TCBridge
 import UserNotifications
 
 /// Onboarding screen 6, "Done" -- the last onboarding screen and, by design,
@@ -40,7 +41,6 @@ struct OnboardingDoneContent: View {
     /// so a screenshot of this screen never shows the card and never asks.
     @State private var notificationStatus: UNAuthorizationStatus?
     @State private var notificationOfferDismissed = false
-    @State private var notificationsAllowed: Bool?
     @State private var notificationRequestPending = false
 
     var body: some View {
@@ -54,16 +54,8 @@ struct OnboardingDoneContent: View {
                     .font(TC.Font_.sectionTitle)
             }
 
-            // "and in the Dock" is this shell's addition to the spec's
-            // sentence: the app is a regular one with a Dock icon
-            // (`AppDelegate` sets `.regular`), and a contributor told it
-            // lives in the menu bar would not think to look there.
-            Text("""
-            Trace Commons lives in your menu bar, and it has a Dock icon too. When a \
-            session finishes and goes quiet, it will appear for review. Notification \
-            timing follows your reminder settings.
-            """)
-            .font(.body)
+            Text(Notifier.copy?.doneBody ?? "")
+                .font(.body)
 
             loginItemOffer
             notificationOffer
@@ -77,6 +69,9 @@ struct OnboardingDoneContent: View {
         .tcColumn(TC.Measure.prose)
         .tcScreen()
         .task { notificationStatus = await Notifier.shared.authorizationStatus() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { notificationStatus = await Notifier.shared.authorizationStatus() }
+        }
     }
 
     /// The permission prompt, where the spec puts it: at the end of
@@ -87,33 +82,33 @@ struct OnboardingDoneContent: View {
     /// either way.
     @ViewBuilder
     private var notificationOffer: some View {
-        if let notificationsAllowed {
-            Text(
-                notificationsAllowed
-                    ? "You'll be told when sessions are waiting."
-                    : "No notifications. You can turn them on later in Settings."
-            )
-            .font(.callout)
-            .foregroundStyle(.secondary)
+        if notificationStatus == .denied {
+            Text(Notifier.copy?.notificationDenied ?? "")
+                .font(.callout).foregroundStyle(.secondary)
+            Link(Notifier.copy?.systemSettings ?? "", destination: Notifier.systemSettingsURL)
+        } else if Notifier.canPostDigest(notificationStatus) {
+            Text(Notifier.copy?.notificationAllowed ?? "")
+                .font(.callout).foregroundStyle(.secondary)
         } else if !notificationOfferDismissed && notificationStatus == .notDetermined {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Let Trace Commons notify you?")
+                Text(Notifier.copy?.notificationOffer ?? "")
                     .font(.callout.weight(.semibold))
                 Text(Notifier.purpose)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 12) {
-                    Button("Not now") {
+                    Button(Notifier.copy?.notNow ?? "") {
                         notificationOfferDismissed = true
                     }
                     .tint(.primary)
-                    Button("Allow notifications") {
+                    Button(Notifier.copy?.notificationAllow ?? "") {
                         guard !notificationRequestPending else { return }
                         notificationRequestPending = true
                         Task {
-                            notificationsAllowed = await Notifier.shared.requestAuthorization()
-                            notificationRequestPending = false
+                            defer { notificationRequestPending = false }
+                            _ = await Notifier.shared.requestAuthorization()
+                            notificationStatus = await Notifier.shared.authorizationStatus()
                         }
                     }
                     .tcPrimaryAction()
