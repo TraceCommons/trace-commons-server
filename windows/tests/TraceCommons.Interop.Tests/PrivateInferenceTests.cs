@@ -395,9 +395,15 @@ public class PrivateInferenceTests
 
         // And whether to ask is the shared table's decision, not this
         // window's: three shells each deciding when to interrupt somebody is
-        // three chances to re-ask a contributor who already said no.
+        // three chances to re-ask a contributor who already said no. The
+        // exact call shape, including the has-the-daemon-answered guard, is
+        // pinned by TheOfferIsGatedOnHavingHeardFromTheDaemon.
         Assert.Contains(
-            "PrivateInferenceSurface.ShouldOffer(_privateInferenceAnswered, _privateInferenceOn)",
+            "PrivateInferenceSurface.ShouldOffer(",
+            viewModel,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "!_privateInferenceAnswered && !_privateInferenceOn",
             viewModel,
             StringComparison.Ordinal);
     }
@@ -444,6 +450,157 @@ public class PrivateInferenceTests
         foreach (Match match in Regex.Matches(card, "(Text|Content|Header)=\"([^\"]*)\""))
         {
             Assert.StartsWith("{x:Bind", match.Groups[2].Value, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The offer is never put to somebody before the daemon has answered.
+    ///
+    /// A window holds "answered" and "on" as booleans, and both default to
+    /// false -- which is exactly the shape that means "ask". So an unguarded
+    /// shell renders the offer from construction, before get_settings lands,
+    /// and indefinitely against a daemon it cannot reach: shown to a
+    /// contributor who already declined, by a window that has not yet learned
+    /// they did.
+    ///
+    /// The guard is a third input to the shared table rather than a flag each
+    /// shell ANDs for itself, for the reason the table exists at all.
+    /// </summary>
+    [Fact]
+    public void NothingIsOfferedBeforeTheDaemonHasAnswered()
+    {
+        Assert.False(
+            PrivateInferenceSurface.ShouldOffer(known: false, answered: false, on: false),
+            "an unanswered get_settings must not read as an unanswered question");
+        Assert.False(PrivateInferenceSurface.ShouldOffer(known: false, answered: true, on: false));
+        Assert.False(PrivateInferenceSurface.ShouldOffer(known: false, answered: false, on: true));
+
+        // Once it has answered, the two-input rule applies unchanged.
+        Assert.True(PrivateInferenceSurface.ShouldOffer(known: true, answered: false, on: false));
+        Assert.False(PrivateInferenceSurface.ShouldOffer(known: true, answered: true, on: false));
+        Assert.False(PrivateInferenceSurface.ShouldOffer(known: true, answered: false, on: true));
+    }
+
+    /// <summary>
+    /// The main window asks the guarded overload, and learns it has an answer
+    /// BEFORE the early return that skips a settings read whose values happen
+    /// to match the defaults -- which is every first read against a daemon
+    /// with the switch off and the question unasked.
+    /// </summary>
+    [Fact]
+    public void TheOfferIsGatedOnHavingHeardFromTheDaemon()
+    {
+        string viewModel = File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "MainViewModel.cs.txt"));
+
+        Assert.Contains(
+            "PrivateInferenceSurface.ShouldOffer(\n            _privateInferenceKnown,",
+            viewModel.Replace("\r\n", "\n"),
+            StringComparison.Ordinal);
+
+        string setter = MethodBody(viewModel, "public void SetPrivateInference(");
+        int flag = setter.IndexOf("_privateInferenceKnown = true;", StringComparison.Ordinal);
+        int earlyReturn = setter.IndexOf("== _privateInferenceAnswered", StringComparison.Ordinal);
+        Assert.True(flag >= 0, "the window never records that the daemon answered");
+        Assert.True(
+            flag < earlyReturn,
+            "the known flag is set after the values-coincide early return, so the first "
+            + "answer that matches the defaults never lands");
+    }
+
+    /// <summary>
+    /// A refused or failed write snaps the switch back to what the daemon
+    /// holds, rather than leaving it wherever the contributor dragged it.
+    ///
+    /// The toggle is bound one-way to <c>PrivateInferenceEnabled</c>, so the
+    /// only thing that returns it to the daemon's value is a change
+    /// notification. Every path out of the write must raise one: the two
+    /// early returns, which fire when a second press arrives while one is in
+    /// flight, and the catch, which is where a daemon that refused lands.
+    /// Without it the card says "on" over a listener that was never started,
+    /// which is the shape this card's own comments argue against.
+    /// </summary>
+    [Fact]
+    public void AFailedSwitchWriteSnapsTheToggleBack()
+    {
+        string viewModel = File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "ContributorSettingsViewModel.cs.txt"));
+        string body = MethodBody(viewModel, "public async Task SetPrivateInferenceAsync(");
+
+        const string raise = "Raise(nameof(PrivateInferenceEnabled));";
+        int guardReturn = body.IndexOf("return;", StringComparison.Ordinal);
+        Assert.True(guardReturn >= 0, "the busy/unloaded guard is gone");
+        Assert.Contains(
+            raise,
+            body[..guardReturn],
+            StringComparison.Ordinal);
+
+        int catchAt = body.IndexOf("catch", StringComparison.Ordinal);
+        Assert.True(catchAt >= 0, "the write no longer catches");
+        Assert.Contains(raise, body[catchAt..], StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The body of one method, from its signature to the line that closes it
+    /// at method indentation. Crude on purpose: it is reading C# this suite
+    /// cannot compile, and a parser here would be a second thing to get
+    /// wrong.
+    /// </summary>
+    private static string MethodBody(string source, string signature)
+    {
+        int start = source.IndexOf(signature, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"{signature} is gone from the view model");
+        int end = source.IndexOf("\n    }\n", start, StringComparison.Ordinal);
+        Assert.True(end > start, $"{signature} does not close");
+        return source[start..end];
+    }
+
+    /// <summary>
+    /// Not one string literal lives in either view model's private-inference
+    /// region.
+    ///
+    /// The surface scan above covers PrivateInferenceSurface.cs, and a
+    /// paraphrase would never go there -- it would go where the sentence is
+    /// handed to a control, as a fallback on the payload read:
+    /// <c>_privateInferenceCopy?.OfferExposure ?? "we handle your model calls
+    /// here"</c>. That renders, it is friendlier, it is wrong, and it passes
+    /// every other test in this file.
+    ///
+    /// Both regions legitimately contain NO literals at all -- they are
+    /// nameof, payload reads and shared-surface calls -- so the allowed set is
+    /// empty rather than curated. Comments are stripped first: the prose in
+    /// them quotes words on purpose.
+    /// </summary>
+    [Theory]
+    [InlineData(
+        "MainViewModel.cs.txt",
+        "// --- The offer to answer model calls on this computer",
+        "// --- The daily-budget banner")]
+    [InlineData(
+        "ContributorSettingsViewModel.cs.txt",
+        "// Answering model calls on this computer. Its own block rather than a row",
+        "<summary>Whether the witness actions may be pressed.</summary>")]
+    public void NoWordingIsAuthoredInThePrivateInferenceViewModels(
+        string file, string opens, string closes)
+    {
+        string source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, file));
+        int start = source.IndexOf(opens, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"{file} no longer has a private-inference region");
+        int end = source.IndexOf(closes, start, StringComparison.Ordinal);
+        Assert.True(end > start, $"{file}'s private-inference region does not close");
+        string region = source[start..end];
+
+        string uncommented = string.Join(
+            "\n",
+            region.Split('\n')
+                .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
+
+        foreach (Match match in Regex.Matches(uncommented, "\"([^\"\\\\]|\\\\.)*\""))
+        {
+            Assert.Fail(
+                $"{match.Value} is a string literal in {file}'s private-inference region. "
+                + "Every sentence on this surface comes from private_inference_copy.rs across "
+                + "the ABI; a fallback beside a payload read is a paraphrase that renders.");
         }
     }
 }

@@ -152,6 +152,22 @@ public static class PrivateInferenceSurface
         NativeMethods.tc_private_inference_should_offer(answered ? 1 : 0, on ? 1 : 0) != 0;
 
     /// <summary>
+    /// The same question, for a shell that may not have heard from the daemon
+    /// yet.
+    ///
+    /// <paramref name="known"/> is whether a <c>get_settings</c> answer has
+    /// landed. It is a separate input rather than a flag each shell ANDs for
+    /// itself because the failure it prevents is invisible: a window holds
+    /// "answered" and "on" as booleans that both default to false, and false
+    /// plus false is exactly the shape that means "ask". An unguarded shell
+    /// therefore offers from construction, before the first read lands, and
+    /// goes on offering against a daemon it cannot reach -- to a contributor
+    /// who may have declined months ago.
+    /// </summary>
+    public static bool ShouldOffer(bool known, bool answered, bool on) =>
+        known && ShouldOffer(answered, on);
+
+    /// <summary>
     /// The <c>set_settings</c> body for one answer to the offer.
     ///
     /// Declining writes the marker ALONE. It must never write the switch, not

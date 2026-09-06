@@ -248,6 +248,26 @@ pub fn state_tone(label: &str) -> PrivateInferenceTone {
 /// - `on` is the `private_inference` switch. Somebody who already turned it on
 ///   -- by editing the settings file, or from another shell -- is not offered
 ///   something they have.
+///
+/// # The switch enabled out of band, and why the marker is not set for it
+///
+/// A contributor who turns this on by hand -- editing `daemon-settings.json`,
+/// or calling `set_settings` from the CLI -- is never offered it, and so never
+/// meets [`OFFER_EXPOSURE`] *on the offer*. Turning it off again by hand then
+/// surfaces the offer, because the question genuinely has not been put.
+///
+/// That is the intended behaviour, and the alternative was considered and
+/// rejected: having the daemon write `private_inference_offer_seen = true`
+/// whenever it observes the switch on would record that a question was asked
+/// when none was. The key's entire contract is that it marks an *asking*, and
+/// a shell reading back a marker it could not distinguish from an inference
+/// would stop being able to tell an answered contributor from an unasked one.
+/// It would also be the daemon writing a settings key nobody asked it to
+/// write.
+///
+/// What closes the gap instead is that every shell puts [`OFFER_EXPOSURE`] on
+/// the settings card as well as in the offer. Somebody who enabled this out of
+/// band did so from a settings surface, and that sentence is on it.
 #[must_use]
 pub fn should_offer(answered: bool, on: bool) -> bool {
     !answered && !on

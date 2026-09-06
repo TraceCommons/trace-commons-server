@@ -798,6 +798,12 @@ public sealed class ContributorSettingsViewModel : INotifyPropertyChanged
     {
         if (!IsLoaded || IsBusy || _privateInferenceCopy is null)
         {
+            // The toggle is bound one-way and has ALREADY moved to wherever
+            // the contributor dragged it. Nothing below is going to write it,
+            // so push the daemon's value back at it: a card left showing "on"
+            // over a listener nobody started is the switch-lies shape this
+            // whole surface is built to avoid.
+            Raise(nameof(PrivateInferenceEnabled));
             return;
         }
 
@@ -813,12 +819,21 @@ public sealed class ContributorSettingsViewModel : INotifyPropertyChanged
             {
                 FillPrivateInference(settings);
             }
+            else
+            {
+                // An error frame: the daemon refused the write and holds
+                // whatever it held before. Same correction as the guard above.
+                Raise(nameof(PrivateInferenceEnabled));
+            }
         }
         catch
         {
-            // Left to the next refresh. Nothing here invents a sentence: the
-            // state line is the daemon's to report and this shell has none of
-            // its own to substitute.
+            // The state LINE is left to the next refresh -- nothing here
+            // invents a sentence, because the daemon owns that one and this
+            // shell has none of its own to substitute. The SWITCH is not
+            // left: it is snapped back to what the daemon last reported,
+            // because a switch is not a sentence and a stuck one is a claim.
+            Raise(nameof(PrivateInferenceEnabled));
         }
         finally
         {

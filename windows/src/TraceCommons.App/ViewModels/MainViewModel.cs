@@ -415,13 +415,27 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _privateInferenceOn;
 
     /// <summary>
+    /// Whether a get_settings answer has landed at all.
+    ///
+    /// Both booleans above default to false, and false plus false is exactly
+    /// the shape that means "ask" -- so without this the offer renders from
+    /// window construction, before the first read, and goes on rendering
+    /// against a daemon this window cannot reach, to a contributor who may
+    /// have declined months ago.
+    /// </summary>
+    private bool _privateInferenceKnown;
+
+    /// <summary>
     /// Whether the offer belongs in front of the contributor right now. False
     /// while the words are missing: an offer without its exposure paragraph
     /// is worse than no offer.
     /// </summary>
     public bool HasPrivateInferenceOffer =>
         _privateInferenceCopy is not null
-        && PrivateInferenceSurface.ShouldOffer(_privateInferenceAnswered, _privateInferenceOn);
+        && PrivateInferenceSurface.ShouldOffer(
+            _privateInferenceKnown,
+            _privateInferenceAnswered,
+            _privateInferenceOn);
 
     public string PrivateInferenceOfferTitle => _privateInferenceCopy?.OfferTitle ?? string.Empty;
 
@@ -461,8 +475,25 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         bool answered = settings?.PrivateInferenceAnswered ?? _privateInferenceAnswered;
         bool on = settings?.PrivateInferenceOn ?? _privateInferenceOn;
+
+        // Recorded BEFORE the values-coincide return below, and deliberately
+        // so. The first answer from an ordinary daemon -- switch off,
+        // question never put -- carries exactly the values these fields
+        // already hold, so a return that ran first would throw away the one
+        // fact that lets the offer render at all.
+        bool learned = settings is not null && !_privateInferenceKnown;
+        if (settings is not null)
+        {
+            _privateInferenceKnown = true;
+        }
+
         if (answered == _privateInferenceAnswered && on == _privateInferenceOn)
         {
+            if (learned)
+            {
+                Raise(nameof(HasPrivateInferenceOffer));
+            }
+
             return;
         }
 

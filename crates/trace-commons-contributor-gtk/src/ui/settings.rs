@@ -4496,10 +4496,6 @@ mod tests {
         }
     }
 
-    /// "Declared, nothing seen yet" is not a fault. A rebuilt ledger
-    /// starts cold, so a contributor who just changed a setting sees this
-    /// state -- and a window that painted it as a fault would accuse a
-    /// working proxy of being broken at the moment they touched it.
     /// The tone this shell paints a state in comes from the shared table,
     /// not from a second copy written out here.
     ///
@@ -4592,6 +4588,10 @@ mod tests {
         );
     }
 
+    /// "Declared, nothing seen yet" is not a fault. A rebuilt ledger
+    /// starts cold, so a contributor who just changed a setting sees this
+    /// state -- and a window that painted it as a fault would accuse a
+    /// working proxy of being broken at the moment they touched it.
     #[test]
     fn nothing_seen_yet_is_not_toned_as_a_fault() {
         use trace_commons_contributor::daemon::ipc::{
