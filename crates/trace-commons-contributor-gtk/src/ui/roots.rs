@@ -34,7 +34,7 @@ use adw::prelude::*;
 use trace_commons_contributor::daemon::settings::SourceDeclaration;
 use trace_commons_contributor::source::discovery::{self, SourceCandidate};
 
-use super::style::space;
+use super::style::{self, space};
 use crate::copy;
 
 /// One agent's row: the discovered evidence, and the two answers.
@@ -283,13 +283,7 @@ fn build_choice(
     path_label.add_css_class("tc-ledger");
     group.append(&path_label);
 
-    let evidence = gtk::Label::builder()
-        .label(evidence_line(candidate))
-        .xalign(0.0)
-        .wrap(true)
-        .build();
-    evidence.add_css_class("tc-meta");
-    group.append(&evidence);
+    style::append_meta(&group, evidence_line(candidate));
 
     // Neither is active. GTK gives a grouped CheckButton radio behaviour,
     // and a group with nothing active is exactly the unanswered state this

@@ -133,6 +133,34 @@ fn guard_with<T>(
     }
 }
 
+/// Shared panic tail for string exports whose closures handle ordinary
+/// business errors themselves. Preserve their existing NULL/owned-error
+/// convention without forwarding panic payloads across the C boundary.
+/// Callers must uphold their exported function's writable `err` contract.
+fn guarded_string(
+    err: *mut *mut c_char,
+    f: impl FnOnce() -> anyhow::Result<*mut c_char> + UnwindSafe,
+) -> *mut c_char {
+    guard(f).unwrap_or_else(|_| {
+        set_last_error("panic");
+        if !err.is_null() {
+            unsafe { *err = to_owned_cstring("panic") };
+        }
+        std::ptr::null_mut()
+    })
+}
+
+/// Like [`guarded_string`], for the exported functions with no `*err`
+/// out-param.
+fn guarded_string_no_err(
+    f: impl FnOnce() -> anyhow::Result<*mut c_char> + UnwindSafe,
+) -> *mut c_char {
+    guard(f).unwrap_or_else(|_| {
+        set_last_error("panic");
+        std::ptr::null_mut()
+    })
+}
+
 thread_local! {
     static LAST_ERROR: std::cell::RefCell<Option<CString>> = const { std::cell::RefCell::new(None) };
 }
@@ -208,7 +236,11 @@ enum AllocKind {
     String,
     Handle,
     Preview,
+    Compute,
 }
+
+mod compute;
+pub use compute::*;
 
 static REGISTRY: LazyLock<Mutex<HashMap<usize, AllocKind>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -1767,14 +1799,10 @@ unsafe fn borrow_str<'a>(ptr: *const c_char) -> anyhow::Result<&'a str> {
 /// Returns NULL only on a caught panic.
 #[unsafe(no_mangle)]
 pub extern "C" fn tc_discover_sources() -> *mut c_char {
-    guard(|| {
+    guarded_string_no_err(|| {
         let found = trace_commons_contributor::source::discovery::probe_this_machine();
         let json = serde_json::to_string(&found).unwrap_or_else(|_| "[]".to_string());
         Ok(to_owned_cstring(&json))
-    })
-    .unwrap_or_else(|_| {
-        set_last_error("panic");
-        std::ptr::null_mut()
     })
 }
 
@@ -1795,14 +1823,10 @@ pub extern "C" fn tc_discover_sources() -> *mut c_char {
 /// Returns NULL only on a caught panic.
 #[unsafe(no_mangle)]
 pub extern "C" fn tc_routing_copy() -> *mut c_char {
-    guard(|| {
+    guarded_string_no_err(|| {
         let copy = trace_commons_contributor::routing_copy::routing_copy();
         let json = serde_json::to_string(&copy).unwrap_or_else(|_| "{}".to_string());
         Ok(to_owned_cstring(&json))
-    })
-    .unwrap_or_else(|_| {
-        set_last_error("panic");
-        std::ptr::null_mut()
     })
 }
 
@@ -1942,7 +1966,7 @@ pub unsafe extern "C" fn tc_routing_tool_tone(source_mode: *const c_char, wiring
 /// `state`, if non-null, must point to a valid, NUL-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tc_routing_state_line(state: *const c_char) -> *mut c_char {
-    guard(|| {
+    guarded_string_no_err(|| {
         // An unreadable state is a state this build does not know, and the
         // rule for those is already the safe one: say what off says.
         let state = if state.is_null() {
@@ -1953,10 +1977,6 @@ pub unsafe extern "C" fn tc_routing_state_line(state: *const c_char) -> *mut c_c
         Ok(to_owned_cstring(
             trace_commons_contributor::routing_copy::ironwire_state_line(state),
         ))
-    })
-    .unwrap_or_else(|_| {
-        set_last_error("panic");
-        std::ptr::null_mut()
     })
 }
 
@@ -2030,7 +2050,7 @@ pub unsafe extern "C" fn tc_routing_state_tone(state: *const c_char) -> i32 {
 /// string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tc_routing_token_line(token_path: *const c_char) -> *mut c_char {
-    guard(|| {
+    guarded_string_no_err(|| {
         // A NULL path is the "nothing resolved" case and not an error. Bytes
         // that are not UTF-8 are treated the same way: this sentence exists
         // to tell somebody what to do next, and refusing to produce it
@@ -2043,10 +2063,6 @@ pub unsafe extern "C" fn tc_routing_token_line(token_path: *const c_char) -> *mu
         Ok(to_owned_cstring(
             &trace_commons_contributor::routing_copy::ironwire_token_line(path),
         ))
-    })
-    .unwrap_or_else(|_| {
-        set_last_error("panic");
-        std::ptr::null_mut()
     })
 }
 
@@ -2062,15 +2078,11 @@ pub unsafe extern "C" fn tc_routing_token_line(token_path: *const c_char) -> *mu
 /// caught panic.
 #[unsafe(no_mangle)]
 pub extern "C" fn tc_routing_unreachable_line(port: i32) -> *mut c_char {
-    guard(|| {
+    guarded_string_no_err(|| {
         let port = u16::try_from(port).ok().filter(|p| *p != 0);
         Ok(to_owned_cstring(
             &trace_commons_contributor::routing_copy::ironwire_unreachable_line(port),
         ))
-    })
-    .unwrap_or_else(|_| {
-        set_last_error("panic");
-        std::ptr::null_mut()
     })
 }
 
@@ -2092,15 +2104,11 @@ pub extern "C" fn tc_routing_unreachable_line(port: i32) -> *mut c_char {
 /// caught panic.
 #[unsafe(no_mangle)]
 pub extern "C" fn tc_routing_discovery_line(port: i32) -> *mut c_char {
-    guard(|| {
+    guarded_string_no_err(|| {
         let port = u16::try_from(port).ok().filter(|p| *p != 0);
         Ok(to_owned_cstring(
             &trace_commons_contributor::routing_copy::ironwire_discovery_line(port),
         ))
-    })
-    .unwrap_or_else(|_| {
-        set_last_error("panic");
-        std::ptr::null_mut()
     })
 }
 
@@ -2216,14 +2224,10 @@ pub unsafe extern "C" fn tc_source_check_line(
 /// Returns NULL only on a caught panic.
 #[unsafe(no_mangle)]
 pub extern "C" fn tc_scrub_detector_names() -> *mut c_char {
-    guard(|| {
+    guarded_string_no_err(|| {
         let names = trace_commons_protocol::trace_contribution::secret_leak_pattern_names();
         let json = serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_string());
         Ok(to_owned_cstring(&json))
-    })
-    .unwrap_or_else(|_| {
-        set_last_error("panic");
-        std::ptr::null_mut()
     })
 }
 
@@ -2415,7 +2419,7 @@ pub unsafe extern "C" fn tc_witness_status_json(
     config_dir: *const c_char,
     err: *mut *mut c_char,
 ) -> *mut c_char {
-    guard(|| {
+    guarded_string(err, || {
         let loaded = match unsafe { witness_config_at(config_dir) } {
             Ok(Some(loaded)) => loaded,
             Ok(None) => return Ok(witness_fail(ERR_WITNESS_NOT_ENROLLED, err)),
@@ -2433,13 +2437,6 @@ pub unsafe extern "C" fn tc_witness_status_json(
             "pinned_measurements": status.pinned_measurements,
         });
         Ok(to_owned_cstring(&json.to_string()))
-    })
-    .unwrap_or_else(|_| {
-        set_last_error("panic");
-        if !err.is_null() {
-            unsafe { *err = to_owned_cstring("panic") };
-        }
-        std::ptr::null_mut()
     })
 }
 
@@ -2665,13 +2662,9 @@ pub unsafe extern "C" fn tc_witness_clear(config_dir: *const c_char, err: *mut *
 /// Needs no handle. Returns NULL only on a caught panic.
 #[unsafe(no_mangle)]
 pub extern "C" fn tc_witness_last_result_json() -> *mut c_char {
-    guard(|| {
+    guarded_string_no_err(|| {
         let json = trace_commons_contributor::witness::status::last_result().to_json();
         Ok(to_owned_cstring(&json.to_string()))
-    })
-    .unwrap_or_else(|_| {
-        set_last_error("panic");
-        std::ptr::null_mut()
     })
 }
 
@@ -2727,14 +2720,10 @@ const ERR_WITNESS_STATE_UNKNOWN: &str = "witness-state-unknown";
 /// Returns NULL only on a caught panic.
 #[unsafe(no_mangle)]
 pub extern "C" fn tc_witness_copy() -> *mut c_char {
-    guard(|| {
+    guarded_string_no_err(|| {
         let copy = trace_commons_contributor::witness_copy::witness_copy();
         let json = serde_json::to_string(&copy).unwrap_or_else(|_| "{}".to_string());
         Ok(to_owned_cstring(&json))
-    })
-    .unwrap_or_else(|_| {
-        set_last_error("panic");
-        std::ptr::null_mut()
     })
 }
 
@@ -2754,7 +2743,7 @@ pub extern "C" fn tc_witness_copy() -> *mut c_char {
 /// This function is safe; it is `extern "C"` only.
 #[unsafe(no_mangle)]
 pub extern "C" fn tc_witness_state_line(state_code: i32) -> *mut c_char {
-    guard(|| {
+    guarded_string_no_err(|| {
         let Some(state) =
             trace_commons_contributor::witness::status::WitnessTrustState::from_abi_code(
                 state_code,
@@ -2766,10 +2755,6 @@ pub extern "C" fn tc_witness_state_line(state_code: i32) -> *mut c_char {
         Ok(to_owned_cstring(
             trace_commons_contributor::witness_copy::witness_state_line(state),
         ))
-    })
-    .unwrap_or_else(|_| {
-        set_last_error("panic");
-        std::ptr::null_mut()
     })
 }
 
@@ -2820,15 +2805,11 @@ pub extern "C" fn tc_witness_state_tone(state_code: i32) -> i32 {
 /// Returns NULL only on a caught panic.
 #[unsafe(no_mangle)]
 pub extern "C" fn tc_witness_last_result_line() -> *mut c_char {
-    guard(|| {
+    guarded_string_no_err(|| {
         let result = trace_commons_contributor::witness::status::last_result();
         Ok(to_owned_cstring(
             &trace_commons_contributor::witness_copy::witness_last_result_line(&result),
         ))
-    })
-    .unwrap_or_else(|_| {
-        set_last_error("panic");
-        std::ptr::null_mut()
     })
 }
 
@@ -2862,4 +2843,66 @@ pub extern "C" fn tc_onboarding_copy() -> *mut c_char {
         set_last_error("panic");
         std::ptr::null_mut()
     })
+}
+
+#[cfg(test)]
+mod string_guard_tests {
+    use super::*;
+
+    fn borrowed_text(pointer: *const c_char) -> String {
+        assert!(!pointer.is_null());
+        unsafe { CStr::from_ptr(pointer) }
+            .to_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    fn owned_text(pointer: *mut c_char) -> String {
+        assert!(!pointer.is_null());
+        let text = unsafe { CStr::from_ptr(pointer) }
+            .to_str()
+            .unwrap()
+            .to_owned();
+        unsafe { tc_string_free(pointer) };
+        text
+    }
+
+    #[test]
+    fn caught_string_panics_return_only_the_fixed_owned_error_label() {
+        let mut error = std::ptr::null_mut();
+        let result = guarded_string(&mut error, || panic!("fixture-panic-payload"));
+        assert!(result.is_null());
+        assert_eq!(owned_text(error), "panic");
+        assert_eq!(borrowed_text(tc_last_error()), "panic");
+    }
+
+    #[test]
+    fn string_panic_reporting_does_not_require_an_error_output_pointer() {
+        assert!(guarded_string(std::ptr::null_mut(), || panic!("fixture-panic-payload")).is_null());
+        assert_eq!(borrowed_text(tc_last_error()), "panic");
+        assert!(guarded_string_no_err(|| panic!("fixture-panic-payload")).is_null());
+        assert_eq!(borrowed_text(tc_last_error()), "panic");
+    }
+
+    #[test]
+    fn ordinary_witness_refusals_keep_their_label_instead_of_becoming_panics() {
+        let mut error = std::ptr::null_mut();
+        let slot = &mut error as *mut *mut c_char;
+        let result = guarded_string(slot, || Ok(witness_fail("fixture-refusal", slot)));
+        assert!(result.is_null());
+        assert_eq!(owned_text(error), "fixture-refusal");
+        assert_eq!(borrowed_text(tc_last_error()), "fixture-refusal");
+    }
+
+    #[test]
+    fn successful_string_guards_transfer_the_original_owned_result() {
+        let mut error = std::ptr::null_mut();
+        let result = guarded_string(&mut error, || Ok(to_owned_cstring("result")));
+        assert!(error.is_null());
+        assert_eq!(owned_text(result), "result");
+        assert_eq!(
+            owned_text(guarded_string_no_err(|| Ok(to_owned_cstring("result")))),
+            "result"
+        );
+    }
 }

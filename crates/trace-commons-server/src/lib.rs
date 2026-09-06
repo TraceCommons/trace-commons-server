@@ -12,6 +12,8 @@ pub mod admission_evidence;
 pub mod admission_ledger;
 pub mod audit_chain;
 pub mod celestine_sloth_claim;
+/// Plumbing shared by the two self-serve claim surfaces.
+pub(crate) mod claim_common;
 pub mod config;
 pub mod contributor_cap;
 pub mod correction_value;

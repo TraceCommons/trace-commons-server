@@ -3,12 +3,15 @@ import TCShellCore
 
 struct MainWindowView: View {
     @EnvironmentObject private var model: AppModel
-    @State private var section: Section? = .queue
+    @Environment(ComputeModel.self) private var compute
+    let navigation: MainWindowNavigation
+    private var section: Section { navigation.section }
 
     enum Section: String, CaseIterable, Identifiable {
         case queue = "Waiting"
         case history = "History"
         case settings = "Settings"
+        case compute = "compute"
         var id: String { rawValue }
 
         /// The nav glyph, drawn from the design's own path data rather than
@@ -19,6 +22,7 @@ struct MainWindowView: View {
             case .queue: return .monitor
             case .history: return .clock
             case .settings: return .gear
+            case .compute: return .monitor
             }
         }
 
@@ -30,11 +34,19 @@ struct MainWindowView: View {
             case .queue: return "Nothing is sent unless you say so."
             case .history: return "What you have contributed, and what is still being reviewed."
             case .settings: return "What this machine watches, and what your traces are allowed to do."
+            case .compute: return ""
             }
         }
     }
 
     var body: some View {
+        shell
+    }
+
+    /// Only trace destinations pass through enrollment and session-root gates.
+    /// The sidebar and Compute remain reachable in every watcher startup state.
+    @ViewBuilder
+    private var traceContent: some View {
         switch model.startup {
         case .starting:
             CenteredNotice(
@@ -47,12 +59,15 @@ struct MainWindowView: View {
             // resolves.
             CenteredNotice(title: "The watcher isn't running.", detail: reason)
                 .onAppear { model.refreshAll() }
-        case .needsRoots:
-            // The one refusal with somewhere to go. Rendering it as a notice
-            // is what made a fresh install a dead end: every screen that
-            // could clear it was behind the daemon it was blocking.
-            OnboardingRootsView(configDirectory: model.configDirectory)
-        case .running:
+        case .needsRoots, .running:
+            // One branch for BOTH states, deliberately: `.needsRoots` is the
+            // start of a fresh install's onboarding, not a notice, and the
+            // roots screen it leads to flips `startup` to `.running` when
+            // the daemon starts. Two `case` arms would be two view
+            // identities, and the coordinator's `@State step` would be
+            // thrown away at exactly that flip -- the same reason the two
+            // enrolment states below share one `if` branch.
+            //
             // First-run detection: `status.logged_in` from the daemon's own
             // `status`, never a local file probe -- see `AppModel.start()`
             // for why the app treats the daemon as the source of truth.
@@ -78,7 +93,7 @@ struct MainWindowView: View {
             // `startAt: .consent`, throwing away whatever step the
             // contributor had just reached. One branch keeps one identity
             // (and therefore one `@State step`) for the entire flow.
-            if !model.status.loggedIn || !model.isOnboardingComplete {
+            if model.requiresOnboarding {
                 OnboardingCoordinatorView(
                     startAt: model.status.loggedIn ? .consent : .welcome,
                     onComplete: { model.markOnboardingComplete() }
@@ -86,7 +101,7 @@ struct MainWindowView: View {
                 .tcScreen()
                 .onAppear { model.refreshAll() }
             } else {
-                shell
+                traceDestination
                     .onAppear { model.refreshAll() }
             }
         }
@@ -106,13 +121,12 @@ struct MainWindowView: View {
                 .navigationSplitViewColumnWidth(184)
         } detail: {
             VStack(spacing: 0) {
-                contentHeader
-                Group {
-                    switch section ?? .queue {
-                    case .queue: QueueView()
-                    case .history: HistoryView()
-                    case .settings: SettingsView()
-                    }
+                if navigation.displaysCompute {
+                    contentHeader
+                    ComputeView(model: compute)
+                } else {
+                    if model.traceNavigationReady { contentHeader }
+                    traceContent
                 }
             }
             // The brand ground stops here. The sidebar and the title bar
@@ -120,6 +134,20 @@ struct MainWindowView: View {
             // looking like a Mac window rather than a web page in one.
             .tcScreen()
         }
+    }
+
+    @ViewBuilder
+    private var traceDestination: some View {
+        switch section {
+        case .queue: QueueView()
+        case .history: HistoryView()
+        case .settings: SettingsView()
+        case .compute: EmptyView()
+        }
+    }
+
+    private func title(_ item: Section) -> String {
+        item == .compute ? (compute.copy?.destination ?? "") : item.rawValue
     }
 
     // MARK: - Sidebar
@@ -158,7 +186,7 @@ struct MainWindowView: View {
     }
 
     private func navRow(_ item: Section) -> some View {
-        let selected = (section ?? .queue) == item
+        let selected = section == item
         let count = item == .queue ? model.decisionsOwed : 0
         // Beside the count, never instead of it: an icon meaning "some" is a
         // downgrade at exactly the scale that prompted the request. See
@@ -171,7 +199,7 @@ struct MainWindowView: View {
             )
             : .clear
         return Button {
-            section = item
+            navigation.section = item
         } label: {
             HStack(spacing: TC.Space.s) {
                 MacGlyph(
@@ -179,7 +207,7 @@ struct MainWindowView: View {
                     size: 13,
                     color: Self.navGlyphColor(shield: shield, selected: selected)
                 )
-                Text(item.rawValue)
+                Text(title(item))
                     .font(.system(size: 13, weight: selected ? .medium : .regular))
                     .foregroundStyle(TC.inkPrimary)
                 Spacer(minLength: TC.Space.s)
@@ -201,7 +229,7 @@ struct MainWindowView: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-        .accessibilityLabel(Self.navLabel(item.rawValue, count: count, shield: shield))
+        .accessibilityLabel(Self.navLabel(title(item), count: count, shield: shield))
     }
 
     /// The nav glyph's colour, with the shield's state taking precedence
@@ -228,16 +256,18 @@ struct MainWindowView: View {
     private var contentHeader: some View {
         HStack(alignment: .center, spacing: TC.Space.m) {
             VStack(alignment: .leading, spacing: 1) {
-                Text((section ?? .queue).rawValue)
+                Text(title(section))
                     .font(TC.Font_.screenTitle)
                     .foregroundStyle(TC.inkPrimary)
-                Text((section ?? .queue).subtitle)
+                Text(section == .compute ? (compute.copy?.subtitle ?? "") : section.subtitle)
                     .font(TC.Font_.caption)
                     .foregroundStyle(TC.inkSecondary)
             }
             Spacer(minLength: TC.Space.m)
-            watchChip
-            watchControl
+            if section != .compute {
+                watchChip
+                watchControl
+            }
         }
         .padding(.horizontal, TC.Space.Header.horizontal)
         .padding(.vertical, TC.Space.Header.vertical)

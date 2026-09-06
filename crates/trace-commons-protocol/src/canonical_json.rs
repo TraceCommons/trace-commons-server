@@ -36,6 +36,7 @@
 //! rather than pin them. Do not.
 
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 /// Rewrite every object in `value` so its keys are in sorted order,
 /// recursing through nested objects and arrays.
@@ -102,6 +103,12 @@ pub fn to_canonical_vec(value: &Value) -> Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec(&canonical_value(value))
 }
 
+/// Format a SHA-256 digest of the exact supplied bytes as `sha256:<lowercase hex>`.
+/// This does not parse or canonicalize JSON; callers retain their byte contract.
+pub(crate) fn sha256_prefixed(bytes: &[u8]) -> String {
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+}
+
 /// An object's keys in sorted order.
 ///
 /// For the summarising paths that render key *names* into text: there the
@@ -130,6 +137,26 @@ pub fn sorted_entries(map: &Map<String, Value>) -> Vec<(&str, &Value)> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn prefixed_sha256_matches_frozen_byte_vectors() {
+        for (bytes, expected) in [
+            (
+                &b""[..],
+                "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            ),
+            (
+                &b"abc"[..],
+                "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            ),
+        ] {
+            assert_eq!(super::sha256_prefixed(bytes), expected);
+        }
+        assert_ne!(
+            super::sha256_prefixed(b"{}"),
+            super::sha256_prefixed(b"{ }")
+        );
+    }
 
     /// The alarm, retargeted.
     ///

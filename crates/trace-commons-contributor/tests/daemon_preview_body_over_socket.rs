@@ -29,7 +29,7 @@ use trace_commons_contributor::daemon::ipc::{
     DaemonShared, ERR_BAD_PARAMS, ERR_BODY_DIGEST_REQUIRED, ERR_UNAVAILABLE, ERR_UNKNOWN_ENTRY_ID,
     MAX_PREVIEW_BODY_CHUNK_BYTES, bind, open_preview, serve,
 };
-use trace_commons_contributor::daemon::queue::{Queue, QueueEntry, QueueState, entry_id_for};
+use trace_commons_contributor::daemon::queue::{Queue, QueueEntry, entry_id_for};
 use trace_commons_contributor::daemon::settings::DaemonSettings;
 use trace_commons_contributor::identity::DeviceIdentity;
 use trace_commons_contributor::source::TraceSource;
@@ -118,28 +118,12 @@ impl Harness {
                     entry_id,
                     session_hash: "preview-body-test-hash".into(),
                     source: "claude-code".into(),
-                    declared_source: None,
                     project_key: "/Users/testuser/code/myproj".into(),
-                    project_path: None,
-                    session_cwd: None,
                     project_label: "myproj".into(),
                     path: session_ref.path.clone(),
                     size_bytes: session_ref.size_bytes,
                     discovered_at: chrono::Utc::now(),
-                    state: QueueState::Pending,
-                    reason_label: None,
-                    attempts: 0,
-                    retry_after: None,
-                    submission_id: None,
-                    approved_scopes: None,
-                    approved_verdict: None,
-                    approved_correction: None,
-                    approved_inputs: None,
-                    previewed_envelope_digest: None,
-                    approved_at: None,
-                    subagent_count: 0,
-                    subagents_dropped: 0,
-                    observed_modified_at: None,
+                    ..Default::default()
                 },
                 100,
             )

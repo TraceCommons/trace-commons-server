@@ -12,8 +12,10 @@
 //! purpose. The chains differ, the signature schemes differ, the address formats
 //! differ, and the ownership queries differ; a shared abstraction would have been
 //! a slug plus a chain-shaped enum, which is a switch statement with extra
-//! indirection rather than reuse. [`InviteGrantSink`] is the one genuinely shared
-//! piece — it is already generic over `policy_label`, so it is imported.
+//! indirection rather than reuse. What genuinely is shared is imported:
+//! [`InviteGrantSink`], already generic over `policy_label`, and the
+//! chain-agnostic plumbing in [`crate::claim_common`] -- environment reading,
+//! the refusal encoding, and the CORS layer.
 //!
 //! Two properties are load-bearing and deliberately not application logic:
 //!
@@ -45,6 +47,10 @@ use axum::http::StatusCode;
 use axum::{Json, Router};
 use serde::Deserialize;
 
+use crate::claim_common::{
+    DEFAULT_CLAIM_CORS_ORIGINS, claim_cors_layer, claim_refusal, non_blank_env, parse_denylist,
+    truthy_env,
+};
 use crate::near_legion_claim::InviteGrantSink;
 use crate::trace_invite_registry::InviteRegistry as _;
 
@@ -147,6 +153,18 @@ impl ClaimError {
     }
 }
 
+/// The generic refusal encoder needs the label and status as a trait; the
+/// inherent methods stay, so nothing else has to change to reach them.
+impl crate::claim_common::ClaimRefusal for ClaimError {
+    fn public_label(self) -> &'static str {
+        ClaimError::public_label(self)
+    }
+
+    fn status(self) -> u16 {
+        ClaimError::status(self)
+    }
+}
+
 impl CelestineSlothConfig {
     /// Load from the environment. Returns `None` unless
     /// `TRACE_COMMONS_CELESTINE_SLOTHS_ENABLED` is truthy and non-blank
@@ -154,14 +172,7 @@ impl CelestineSlothConfig {
     /// numeric values fall back to the defaults rather than failing the process;
     /// an unparseable cap must not open the surface wider than intended.
     pub fn from_env() -> Option<Self> {
-        let enabled = std::env::var("TRACE_COMMONS_CELESTINE_SLOTHS_ENABLED")
-            .ok()
-            .map(|v| {
-                let v = v.trim().to_ascii_lowercase();
-                v == "1" || v == "true" || v == "yes"
-            })
-            .unwrap_or(false);
-        if !enabled {
+        if !truthy_env("TRACE_COMMONS_CELESTINE_SLOTHS_ENABLED") {
             return None;
         }
 
@@ -214,20 +225,6 @@ impl CelestineSlothConfig {
             .iter()
             .any(|d| d.trim().eq_ignore_ascii_case(candidate))
     }
-}
-
-fn non_blank_env(key: &str) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
-
-fn parse_denylist(raw: &str) -> Vec<String> {
-    raw.split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
 }
 
 /// Hash a Cosmos address for storage as `credential_binding_hash`.
@@ -526,49 +523,13 @@ pub struct ClaimRequest {
     pub signature: String,
 }
 
-fn claim_refusal(error: ClaimError) -> (StatusCode, Json<serde_json::Value>) {
-    let status = StatusCode::from_u16(error.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    (
-        status,
-        Json(serde_json::json!({ "error": error.public_label() })),
-    )
-}
-
-/// Allowed browser origins for the claim surface.
-///
-/// The `/sloths` page is served from the community site, a different origin from
-/// this issuer, so these routes need CORS of their own rather than relying on a
-/// reverse proxy to add it. Defaults match the community surface's own default
-/// origin list.
+/// Allowed browser origins for the claim surface. The `/sloths` page is served
+/// from the community site, a different origin from this issuer.
 fn celestine_sloth_cors_layer() -> tower_http::cors::CorsLayer {
-    use axum::http::HeaderValue;
-    use axum::http::header::{ACCEPT, CONTENT_TYPE};
-
-    let configured =
-        std::env::var("TRACE_COMMONS_CELESTINE_SLOTHS_CORS_ORIGINS").unwrap_or_else(|_| {
-            "https://tracecommons.ai,http://localhost:4321,http://localhost:8788".to_string()
-        });
-    let origins: Vec<HeaderValue> = configured
-        .split(',')
-        .map(str::trim)
-        .filter(|o| !o.is_empty())
-        .filter_map(|o| HeaderValue::from_str(o).ok())
-        .collect();
-
-    // `AllowOrigin::list` panics on a wildcard entry, and `*` is the most
-    // natural thing an operator writes for "allow everything". Map it rather
-    // than crash router construction at startup.
-    let allow_origin = if configured.split(',').any(|o| o.trim() == "*") {
-        tower_http::cors::AllowOrigin::any()
-    } else {
-        tower_http::cors::AllowOrigin::list(origins)
-    };
-
-    tower_http::cors::CorsLayer::new()
-        .allow_origin(allow_origin)
-        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
-        .allow_headers([ACCEPT, CONTENT_TYPE])
-        .max_age(std::time::Duration::from_secs(600))
+    claim_cors_layer(
+        "TRACE_COMMONS_CELESTINE_SLOTHS_CORS_ORIGINS",
+        DEFAULT_CLAIM_CORS_ORIGINS,
+    )
 }
 
 /// Build the self-serve claim sub-router. Merged into the issuer's public
@@ -1209,12 +1170,9 @@ mod tests {
 #[cfg(test)]
 mod router_tests {
     use super::*;
-    use axum::body::Body;
-    use axum::http::Request;
+    use crate::claim_common::claim_test_support::{Answer, FakeSink, call_router, error_of};
     use k256::ecdsa::signature::Signer as _;
     use k256::ecdsa::{Signature, SigningKey};
-    use std::sync::Mutex;
-    use tower::ServiceExt as _;
 
     fn signing_key(seed: u8) -> SigningKey {
         // Deterministic, non-zero scalars well inside the curve order.
@@ -1244,75 +1202,6 @@ mod router_tests {
         let doc = adr036_sign_doc(address, message);
         let sig: Signature = sk.sign(doc.as_bytes());
         base64::engine::general_purpose::STANDARD.encode(sig.to_bytes())
-    }
-
-    /// In-memory stand-in for the grant table. Reproduces the one behaviour the
-    /// handler depends on: the V42 partial unique index refusing a second live
-    /// grant for the same credential in the same pool.
-    #[derive(Default)]
-    struct FakeSink {
-        grants: Mutex<Vec<crate::db::InviteGrantWrite>>,
-        fail_count: bool,
-        fail_insert: bool,
-    }
-
-    #[async_trait::async_trait]
-    impl InviteGrantSink for FakeSink {
-        async fn count_live(&self, policy_label: &str) -> Result<u32> {
-            if self.fail_count {
-                return Err(anyhow!("count unavailable"));
-            }
-            let g = self.grants.lock().unwrap();
-            Ok(g.iter().filter(|w| w.policy_label == policy_label).count() as u32)
-        }
-
-        async fn count_bound(&self, policy_label: &str) -> Result<u32> {
-            // No expiry semantics in the fake, so this matches count_live. The
-            // production difference lives in the SQL predicates.
-            self.count_live(policy_label).await
-        }
-
-        async fn credential_bound_in_any(
-            &self,
-            policy_labels: &[String],
-            credential_binding_hash: &str,
-        ) -> Result<bool> {
-            if self.fail_count {
-                return Err(anyhow!("count unavailable"));
-            }
-            let g = self.grants.lock().unwrap();
-            Ok(g.iter().any(|w| {
-                policy_labels.contains(&w.policy_label)
-                    && w.credential_binding_hash.as_deref() == Some(credential_binding_hash)
-            }))
-        }
-
-        async fn insert(
-            &self,
-            write: crate::db::InviteGrantWrite,
-        ) -> Result<crate::db::InviteGrantInsertOutcome> {
-            if self.fail_insert {
-                return Err(anyhow!("insert unavailable"));
-            }
-            let mut g = self.grants.lock().unwrap();
-            let bound = g.iter().any(|w| {
-                w.policy_label == write.policy_label
-                    && w.credential_binding_hash.is_some()
-                    && w.credential_binding_hash == write.credential_binding_hash
-            });
-            if bound {
-                return Ok(crate::db::InviteGrantInsertOutcome::CredentialAlreadyBound);
-            }
-            g.push(write);
-            Ok(crate::db::InviteGrantInsertOutcome::Inserted)
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    enum Answer {
-        Yes,
-        No,
-        Fails,
     }
 
     struct FakeTokenChecker(Answer);
@@ -1368,28 +1257,13 @@ mod router_tests {
         uri: &str,
         body: Option<serde_json::Value>,
     ) -> (StatusCode, serde_json::Value) {
-        let app = celestine_sloth_claim_router(state.clone());
-        let mut builder = Request::builder().method(method).uri(uri);
-        if body.is_some() {
-            builder = builder.header("content-type", "application/json");
-        }
-        let request = builder
-            .body(
-                body.map(|b| Body::from(b.to_string()))
-                    .unwrap_or_else(Body::empty),
-            )
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
-            .await
-            .unwrap();
-        let json = if bytes.is_empty() {
-            serde_json::Value::Null
-        } else {
-            serde_json::from_slice(&bytes).unwrap()
-        };
-        (status, json)
+        call_router(
+            celestine_sloth_claim_router(state.clone()),
+            method,
+            uri,
+            body,
+        )
+        .await
     }
 
     /// Issue a challenge and return `(challenge_id, message)`.
@@ -1411,10 +1285,6 @@ mod router_tests {
             adr036_sign_doc(address, &message)
         );
         (id, message)
-    }
-
-    fn error_of(body: &serde_json::Value) -> &str {
-        body["error"].as_str().unwrap_or("<no error field>")
     }
 
     #[tokio::test]

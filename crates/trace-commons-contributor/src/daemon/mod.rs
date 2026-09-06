@@ -45,6 +45,8 @@ pub mod settings;
 pub mod state;
 #[cfg(test)]
 pub(crate) mod test_paths;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod uploader;
 pub mod watcher;
 #[cfg(windows)]
@@ -1200,9 +1202,7 @@ fn signal_stream() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + S
 mod tests {
     use super::*;
 
-    fn at(s: &str) -> chrono::DateTime<Utc> {
-        s.parse().unwrap()
-    }
+    use crate::daemon::test_support::at;
 
     /// The default `history_poll_secs`: half an hour.
     fn interval() -> chrono::Duration {
