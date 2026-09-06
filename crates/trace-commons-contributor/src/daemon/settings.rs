@@ -176,6 +176,20 @@ pub struct DaemonSettings {
     #[serde(default)]
     pub ironwire_attested_bodies: bool,
 
+    /// Run IronWire inside this daemon, so tools can send inference through
+    /// it. Off by default and never turned on by discovery: finding
+    /// IronWire's pointer on disk means someone else is running it, which is
+    /// a different fact from the contributor asking us to.
+    ///
+    /// Turning this on does not repoint any agent. Which tools route through
+    /// IronWire stays a per-tool declaration.
+    ///
+    /// `#[serde(default)]` so a settings file written before this field
+    /// existed loads with it off. An upgrade must never start a proxy on a
+    /// contributor's machine because the key was absent.
+    #[serde(default)]
+    pub private_inference: bool,
+
     /// Legacy spellings, read on load and never written.
     ///
     /// Settings files written before source declarations existed carry
@@ -540,6 +554,7 @@ impl Default for DaemonSettings {
             cline_source: None,
             ironwire: None,
             ironwire_attested_bodies: false,
+            private_inference: false,
             legacy_claude_root: None,
             legacy_codex_root: None,
         }
@@ -837,6 +852,15 @@ pub fn apply_settings_object(
             "ironwire_attested_bodies" => {
                 settings.ironwire_attested_bodies =
                     value.as_bool().ok_or(ERR_SETTINGS_INVALID_VALUE)?;
+            }
+            // A THIRD question, and the only one that starts a process.
+            // `ironwire` says "read the proxy running over there"; this
+            // says "be the proxy". Setting it never repoints a tool, and
+            // clearing it stops only the instance this daemon started --
+            // an IronWire someone else is running is never touched by
+            // either value.
+            "private_inference" => {
+                settings.private_inference = value.as_bool().ok_or(ERR_SETTINGS_INVALID_VALUE)?;
             }
             _ => return Err(ERR_SETTINGS_UNKNOWN_FIELD),
         }

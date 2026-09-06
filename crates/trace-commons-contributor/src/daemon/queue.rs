@@ -60,7 +60,9 @@ pub enum QueueState {
 /// the fields under test and finish with `..Default::default()`. Production
 /// construction sites deliberately do not use it -- an entry the daemon
 /// builds sets every field on purpose, and a `..Default::default()` there
-/// would let a newly added field default in silently.
+/// would let a newly added field default in silently. The source guard in
+/// `tests/queue_fixture_default_guard.rs` checks explicit production uses;
+/// inferred/helper-generated defaults still require code review.
 ///
 /// The derive changes nothing about the wire or on-disk contract: no
 /// `#[serde(default)]` is added by it, so every field that was required in
