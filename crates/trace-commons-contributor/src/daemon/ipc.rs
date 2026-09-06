@@ -506,6 +506,8 @@ pub const ROUTING_ROWS_SEEN: &str = "rows_seen";
 /// reader exists, and it will stay that way until somebody changes
 /// something on this machine.
 pub const ROUTING_TOKEN_UNREADABLE: &str = "token_unreadable";
+/// Internal routing state could not be read; no token diagnosis is available.
+pub const ROUTING_UNKNOWN: &str = "unknown";
 
 impl DaemonShared {
     pub fn load(store: ConfigStore) -> Result<Self> {
@@ -985,6 +987,13 @@ impl DaemonShared {
     /// an error and carries its own short timeout, so awaiting it here
     /// cannot fail or stall the poll tick that calls this.
     pub(crate) async fn refresh_routing(&self) {
+        let derived = self.routing.read().is_ok_and(|held| held.derived);
+        if derived {
+            // The periodic pass previously refreshed before noticing proxy
+            // exit. Withdraw an observed-dead owner's reader before any new
+            // metadata request can present its token on the former port.
+            self.reconcile_private_inference().await;
+        }
         let Some(ledger) = self.routing_ledger() else {
             return;
         };
@@ -1152,22 +1161,25 @@ impl DaemonShared {
     /// health signal on its own: it says data exists, not that the proxy
     /// answers now. A proxy that died an hour ago still has rows.
     fn routing_value(&self) -> serde_json::Value {
-        let (declared, ledger) = self
-            .routing
-            .read()
-            .map(|held| {
-                (
-                    held.declaration
-                        .as_ref()
-                        .and_then(super::settings::IronWireDeclaration::port)
-                        .is_some(),
-                    held.ledger.as_ref().map(Arc::clone),
-                )
-            })
-            .unwrap_or((true, None));
+        let Ok(held) = self.routing.read() else {
+            return serde_json::json!({"state":ROUTING_UNKNOWN, "derived":false,
+                "last_refresh_at":null, "unreadable_rows":0});
+        };
+        let (declared, ledger, derived) = {
+            (
+                held.declaration
+                    .as_ref()
+                    .and_then(super::settings::IronWireDeclaration::port)
+                    .is_some(),
+                held.ledger.as_ref().map(Arc::clone),
+                held.derived,
+            )
+        };
+        drop(held);
         let Some(ledger) = ledger else {
             return serde_json::json!({
                 "state": if declared { ROUTING_TOKEN_UNREADABLE } else { ROUTING_NOT_DECLARED },
+                "derived": derived,
                 // No reader was built, so nothing has ever been checked.
                 "last_refresh_at": serde_json::Value::Null,
                 "unreadable_rows": 0,
@@ -1175,6 +1187,7 @@ impl DaemonShared {
         };
         serde_json::json!({
             "state": if ledger.has_rows() { ROUTING_ROWS_SEEN } else { ROUTING_AWAITING_ROWS },
+            "derived": derived,
             "last_refresh_at": ledger.last_refresh_at(),
             // Zero everywhere it is working. Non-zero is the only signal a
             // contributor gets that the proxy is serving rows this client
@@ -6939,6 +6952,7 @@ mod tests {
         };
         assert_eq!(s.routing.read().unwrap().declaration, Some(expected));
         assert!(s.routing.read().unwrap().derived);
+        assert_eq!(s.routing_value()["derived"], true);
         let persisted = DaemonSettings::load(&s.store).unwrap();
         assert!(persisted.private_inference);
         assert!(persisted.ironwire.is_none());
@@ -7047,6 +7061,7 @@ mod tests {
                 Some(declaration.clone())
             );
             assert!(!s.routing.read().unwrap().derived);
+            assert_eq!(s.routing_value()["derived"], false);
             s.stop_private_inference().await;
             assert_eq!(s.routing.read().unwrap().declaration, Some(declaration));
             if let Some(before) = before {
@@ -7057,8 +7072,58 @@ mod tests {
         }
     }
 
+    #[test]
+    fn poisoned_routing_reports_unknown_without_a_token_diagnosis() {
+        let s = shared();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = s.routing.write().unwrap();
+            panic!("controlled routing state panic");
+        }));
+        assert_eq!(
+            s.routing_value(),
+            serde_json::json!({"state":"unknown", "derived":false, "last_refresh_at":null, "unreadable_rows":0})
+        );
+    }
+
+    #[tokio::test]
+    async fn derived_routing_refresh_withdraws_an_observed_exited_proxy_first() {
+        let s = shared();
+        s.adopt_runtime();
+        let home = tempfile::tempdir().unwrap();
+        s.install_private_inference_for_test(home.path().to_path_buf(), 0);
+        assert!(
+            handle_set_settings_async(
+                &s,
+                &req(
+                    "set_settings",
+                    serde_json::json!({"private_inference":true})
+                )
+            )
+            .await
+            .error
+            .is_none()
+        );
+        assert!(s.routing_ledger().is_some());
+        s.private_inference
+            .lock()
+            .await
+            .as_mut()
+            .unwrap()
+            .end_owned_for_test()
+            .await;
+        // The shared status is deliberately stale, as it is between poll ticks.
+        assert_ne!(s.private_inference_value()["state"], "crashed");
+        s.refresh_routing().await;
+        assert_eq!(s.private_inference_value()["state"], "crashed");
+        assert!(s.routing_ledger().is_none());
+        assert_eq!(s.routing_value()["derived"], false);
+        s.stop_private_inference().await;
+    }
+
     #[tokio::test]
     async fn private_inference_foreign_owner_never_supplies_derived_metadata() {
+        // A future-loosening guard: before automatic derivation there was
+        // also no reader for a foreign owner.
         let home = tempfile::tempdir().unwrap();
         let owner = ironwire_proxy::embed::start(home.path(), Some(0))
             .await

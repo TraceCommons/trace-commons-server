@@ -372,6 +372,19 @@ impl PrivateInference {
             || self.cleanup_unconfirmed
     }
 
+    #[cfg(test)]
+    pub(crate) async fn end_owned_for_test(&mut self) {
+        // Finish the real listener, then install the same local outcome as
+        // poll observing an unsolicited exit. Shared routing stays stale.
+        self.proxy
+            .take()
+            .expect("owned test proxy")
+            .shutdown()
+            .await;
+        self.crashed = true;
+        self.state = state_after_unrequested_exit(Ok(()));
+    }
+
     pub(crate) fn owned_endpoint(&self) -> Option<OwnedEndpoint> {
         let proxy = self.proxy.as_ref().filter(|proxy| !proxy.is_finished())?;
         Some(OwnedEndpoint {
@@ -460,6 +473,12 @@ impl PrivateInference {
                 // later changes to the spelling of a relative path cannot
                 // silently retarget its metadata reader.
                 self.owned_home = self.home.canonicalize().ok();
+                if self.owned_home.is_none() {
+                    tracing::warn!(
+                        reason = "private-inference-home-unresolved",
+                        "owned metadata routing unavailable"
+                    );
+                }
                 self.proxy = Some(proxy);
                 tracing::info!(
                     pass = "private_inference",

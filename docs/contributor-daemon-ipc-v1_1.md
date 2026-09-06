@@ -540,7 +540,8 @@ newer daemon behaves exactly as it did before, which is the rule this
 document's "additive" status already states.
 
 Whether the effective IronWire metadata overlay is enabled and whether it is
-producing anything. **Four states, not two.**
+producing anything. Four ordinary states distinguish configuration from data;
+`unknown` reports unavailable internal state without blaming a credential.
 
 An explicit `ironwire: {"mode":"off"}` always disables this overlay. An
 explicit Watch declaration keeps its exact port and token directory, including
@@ -558,7 +559,9 @@ is enabled; use explicit Off to refuse it. Derivation never grants body
 collection: `ironwire_attested_bodies` still requires its separate opt-in and an
 explicit Watch declaration. No agent configuration or tool endpoint is changed.
 Unrelated settings writes retain a warm metadata reader when its effective
-endpoint is unchanged.
+endpoint is unchanged. Derived refresh first reconciles owned lifecycle state, so
+an already-observed proxy exit withdraws its reader before the next request.
+This does not authenticate a later listener or cancel an already in-flight request.
 
 | `state` | meaning |
 | --- | --- |
@@ -566,6 +569,13 @@ endpoint is unchanged.
 | `awaiting_rows` | declared, and the daemon holds a ledger, but no row has arrived yet |
 | `rows_seen` | declared, and the last refresh window had rows |
 | `token_unreadable` | declared, and no ledger could be built: `control.token` could not be read |
+| `unknown` | internal routing state is unavailable; no configuration or token diagnosis is implied |
+
+Every routing snapshot includes `derived: true|false`. True identifies automatic
+metadata routing from this daemon's owned proxy; false identifies an explicit or
+absent declaration. With `state: "unknown"`, false is only a conservative default,
+not evidence that metadata is disabled. Shells use the effective status and its
+origin alongside the independent explicit declaration controls.
 
 `token_unreadable` is what a declared proxy that is not running looks like,
 and it is the one state a contributor has to act on. It was reported as
@@ -1561,9 +1571,10 @@ body store and the ledger always belong to the same proxy. With no proxy
 declared, with the proxy declared off, or with no witness configured,
 setting this changes nothing that leaves the machine.
 
-`private_inference` takes a boolean, and it is a **third, separate answer**
-again. `ironwire` says "read the ledger of a proxy running over there";
-this says "be the proxy": the daemon starts IronWire in its own process,
+`private_inference` takes a boolean and asks this daemon to host the proxy.
+An explicit `ironwire` declaration still controls metadata precedence; without
+one, accepted hosting opt-in supplies metadata from the owned proxy, as described
+under `routing`. Body collection stays separate. With hosting enabled, the daemon starts IronWire in its own process,
 using `$IRONWIRE_HOME`, else `~/.ironwire`, as its home, so the `ironwire`
 CLI and the existing ledger reader see the same ledger, token and pointer
 they always did.
