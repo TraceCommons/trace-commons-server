@@ -27363,7 +27363,8 @@ async fn revocation_propagation_vector_entry_happy_path_invokes_gate_service() {
 
     let calls = recorder.calls();
     assert_eq!(calls.len(), 1, "gate service invalidation called once");
-    assert_eq!(calls[0].0, "tenant-a");
+    // The gate service sees the hashed tenant storage ref, never the raw id.
+    assert_eq!(calls[0].0, tenant_storage_ref("tenant-a"));
     assert_eq!(calls[0].1, vector_entry_id);
 
     let items = backend
@@ -27647,7 +27648,8 @@ async fn revocation_propagation_vector_entry_tenant_isolation() {
 
     let calls = recorder.calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].0, "tenant-a");
+    // The gate service sees the hashed tenant storage ref, never the raw id.
+    assert_eq!(calls[0].0, tenant_storage_ref("tenant-a"));
     assert_eq!(calls[0].1, tenant_a_vec);
 
     let tenant_a_items = backend

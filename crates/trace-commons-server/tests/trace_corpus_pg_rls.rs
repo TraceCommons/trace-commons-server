@@ -5866,7 +5866,11 @@ async fn list_submissions_needing_gate_decision_excludes_decided_and_capped_subm
 
     let now = Utc::now();
     let work_items = backend
-        .list_submissions_needing_gate_decision(now, max_attempts, 30, 10)
+        // The enumeration is deliberately cross-tenant, so a small limit turns
+        // this into a race against every other ungated submission left in the
+        // database by earlier tests. The claim under test is which rows are
+        // eligible, not which ten come back first.
+        .list_submissions_needing_gate_decision(now, max_attempts, 30, 10_000)
         .await
         .expect("enumerate submissions needing a gate decision");
 
