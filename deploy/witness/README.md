@@ -696,6 +696,64 @@ There is therefore no model policy and no allowlist variable. That is a
 made. Note what it costs: a policy model swap substitutes the model that served,
 and a bound model is exactly what would have caught it.
 
+### Pinning the gateway signing key
+
+`TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN` is **unset by default**, and unset is
+exactly the behaviour that shipped before it existed.
+
+Verifying a receipt establishes that a well-formed signature over these bytes
+checks out against the key **the receipt itself names**. Any key satisfies
+that, including one the submitter holds. What makes a receipt mean *an attested
+NEAR AI enclave signed this* is comparing that key against the one NEAR AI's
+attestation report binds into a TDX quote — `gateway_attestation.report_data`
+is `signing_address || nonce`, so a key read from a report issued against a
+nonce you chose was attested for you, now.
+
+The contributor client already makes that comparison, against a report it
+fetches itself. A check the submitter runs on its own submission is not a
+bound: a patched client does not run it. This variable is the same comparison
+made at the point the decision is enforced.
+
+Set it to the gateway's ed25519 public key: **64 hex characters, no `0x`**.
+Obtain it once, out of band, from `GET {base}/attestation/report?model=..&nonce=..`
+and check that `report_data` really is that key followed by your nonce before
+you pin it. The witness does not fetch the report on the request path — it
+makes no outbound calls while serving, and a report fetched at request time
+would be trusted over a path an attacker able to substitute a signing key is
+also positioned to influence.
+
+Three properties worth stating plainly:
+
+- **ed25519 only.** The ECDSA signer NEAR AI also issues appears in **no**
+  attestation report, so it cannot be pinned and an ECDSA receipt can never
+  satisfy a pin, however well it verifies. Pinning is therefore also a
+  decision to require the ed25519 form.
+- **Independent of the requirement.** The pin constrains *which key* is
+  trusted; `TRACE_COMMONS_WITNESS_REQUIRE_ATTESTED_INFERENCE` decides *whether
+  a receipt is needed*. A witness that requires nothing still refuses a
+  receipt from an unpinned key when one is offered — certifying it would be
+  the silent downgrade that accepting an invalid receipt already is not.
+- **Malformed is a startup failure.** A value that is not a 32-byte hex key —
+  the empty string included — refuses to start rather than becoming a pin that
+  matches nothing. The value is never echoed into a log; the process logs a
+  `gateway_key_pin_sha256_prefix` at startup so an operator can confirm which
+  key it holds.
+
+A pin failure is reported as `witness_inference_receipt_unverified`, the same
+label as every other receipt failure, and that is deliberate. A label of its
+own would make this route an oracle for the pinned key: a prober could learn
+from a refusal alone whether its receipt was signed by the key you trust.
+
+What it still does not establish: quote verification of the report is not part
+of this path. You pinned a key you decided to trust after reading a report, and
+the strength of the pin is the strength of that one-time procedure.
+
+Like `TRACE_COMMONS_WITNESS_REQUIRE_ATTESTED_INFERENCE`, this variable is not
+in the committed compose, so the deployment described here does not set it.
+Adding it to `docker-compose.yml` puts the pinned key inside the measurement —
+which is the right place for it, and means rotating the gateway key moves the
+measurement and needs re-allowlisting everywhere it is pinned.
+
 ### The bodies do not leave the enclave
 
 The witness **removes** the inference request and response bodies — and the
@@ -764,14 +822,16 @@ certificate at all.
 | `witness_inference_call_absent` | the contribution declares no inference call at all |
 | `witness_inference_call_unattestable` | the final call declares a restarted stream, for which no receipt exists or ever will |
 | `witness_inference_body_not_in_session` | the last call carries no bodies — in practice, the contribution withheld tool payloads |
-| `witness_inference_receipt_unverified` | the receipt did not verify against those bytes |
+| `witness_inference_receipt_unverified` | the receipt did not verify against those bytes, **or** it was signed by a key other than `TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN` |
 | `witness_inference_body_too_large` | a body exceeds `TRACE_COMMONS_WITNESS_MAX_INFERENCE_BODY_BYTES` |
 
 `witness_inference_receipt_unverified` is the one to read carefully. SHA-256
 answers one bit, so a capture that pretty-printed a body, reordered its keys or
 re-serialised it from a parsed form produces **exactly** the same failure as a
 receipt lifted from somewhere else. The witness cannot tell them apart and does
-not pretend to. On an honest deployment, suspect the capture first.
+not pretend to. On an honest deployment, suspect the capture first. Where a
+gateway key pin is configured, a receipt from an unpinned key folds into this
+same label too — so if you have just set the pin, suspect the pin first.
 
 ### The restarted-stream hole
 
