@@ -20,7 +20,7 @@ namespace TraceCommons.Interop;
 /// the careful path and stops nobody is not a safety property.
 /// </para>
 /// <para>
-/// <b>What did not go is the claim.</b> <see cref="Statement"/> carries both
+/// <b>What did not go is the claim.</b> The gate statement carries both
 /// halves of what the checkbox made a contributor assert -- scrubbing is
 /// pattern-based and may have missed something, and nothing here can tell
 /// whether anyone read anything -- and the sheet prints it above Contribute
@@ -34,37 +34,17 @@ namespace TraceCommons.Interop;
 /// "the bytes the contributor was shown" means this session's bytes.
 /// </para>
 /// <para>
-/// It lives in the interop assembly rather than in a WinUI view model on
-/// purpose: it is testable here on a machine that cannot build WinUI at
-/// all. The macOS shell holds the same rule and the same sentence in
-/// <c>TCShellCore/ReadGate.swift</c>, the Linux shell in
-/// <c>crates/trace-commons-contributor-gtk/src/copy.rs</c>, and a Rust test
-/// reads this file to prove the sentence has not drifted.
+/// The sentences moved. They are composed once in
+/// <c>crates/trace-commons-contributor/src/consent_copy.rs</c> and read here
+/// through <see cref="ConsentSurface"/>; what is left in this class is the
+/// rule, which is testable on a machine that cannot build WinUI and cannot
+/// load the cdylib. The Rust test that used to open this file and grep it
+/// for the claim is gone with them: three shells reading one constant is a
+/// stronger thing than three shells grepping each other.
 /// </para>
 /// </summary>
 public sealed class ReadGate
 {
-    /// <summary>
-    /// The sentence that replaced the acknowledgement checkbox.
-    ///
-    /// One line, one escaped literal, on purpose: the Rust parity test
-    /// scans this file for this exact text, and a line break or a string
-    /// concatenation here would defeat it.
-    /// </summary>
-    public const string Statement = "\"Exactly what would be sent\" is the exact text that would leave this machine. Pattern-based scrubbing may have missed something in it, and nothing here checks that you looked.";
-
-    /// <summary>Tooltip on an armed Contribute.</summary>
-    public const string ReadyHelp = "Sends this session. Nothing else.";
-
-    /// <summary>
-    /// Why Contribute is off on a preview that was built without an
-    /// enrollment. Nothing was pinned, so there is nothing to bind an
-    /// approval to; saying so beats a button that fails when pressed.
-    /// </summary>
-    public const string UnenrolledHelp =
-        "This device isn't connected yet, so this preview was built without your identity "
-        + "and nothing here can be contributed.";
-
     /// <summary>Raised whenever the one condition changes.</summary>
     public event Action? Changed;
 
@@ -78,8 +58,27 @@ public sealed class ReadGate
     /// <summary>The one question the sheet asks this object.</summary>
     public bool CanContribute => HasPinnedPreview;
 
-    /// <summary>The tooltip that explains the current answer.</summary>
-    public string Help => CanContribute ? ReadyHelp : UnenrolledHelp;
+    /// <summary>
+    /// Whether Contribute may be armed at all: a pinned preview AND the
+    /// sentences that explain what pressing it does.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The second half is not decoration. The gate statement is the whole of
+    /// what a contributor is told before an irreversible send, and a
+    /// <paramref name="copy"/> of null means this build could not read it --
+    /// a caught panic in the cdylib, or a payload that would not parse. A
+    /// sheet that rendered a blank where the claim goes and left the button
+    /// pressable would be taking an approval against a claim nobody made,
+    /// so no copy means no arming.
+    /// </para>
+    /// <para>
+    /// Static and pure so the rule is testable where the WinUI view model
+    /// is not: <c>TraceCommons.App</c> does not build on the machines this
+    /// suite runs on.
+    /// </para>
+    /// </remarks>
+    public static bool CanArm(ConsentCopy? copy, bool pinned) => copy is not null && pinned;
 
     /// <summary>
     /// Records that a pinned preview is available. A summary that failed to

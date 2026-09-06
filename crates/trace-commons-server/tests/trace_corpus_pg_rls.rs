@@ -5866,7 +5866,11 @@ async fn list_submissions_needing_gate_decision_excludes_decided_and_capped_subm
 
     let now = Utc::now();
     let work_items = backend
-        .list_submissions_needing_gate_decision(now, max_attempts, 30, 10)
+        // The enumeration is deliberately cross-tenant, so a small limit turns
+        // this into a race against every other ungated submission left in the
+        // database by earlier tests. The claim under test is which rows are
+        // eligible, not which ten come back first.
+        .list_submissions_needing_gate_decision(now, max_attempts, 30, 10_000)
         .await
         .expect("enumerate submissions needing a gate decision");
 
@@ -5902,17 +5906,30 @@ async fn list_submissions_needing_gate_decision_excludes_decided_and_capped_subm
 /// with a clear error rather than panicking.
 #[tokio::test]
 async fn list_submissions_needing_gate_decision_fails_closed_without_gate_driver_pool() {
-    let Some(backend) = postgres_backend().await else {
+    // Build the config here rather than going through `postgres_backend()`:
+    // that helper reads `TRACE_COMMONS_GATE_DRIVER_DATABASE_URL` from the
+    // ambient environment, so on a machine where the operator HAS provisioned
+    // the gate-driver pool this test would assert the opposite of its name and
+    // fail. The absent pool is the fixture, so state it explicitly.
+    let Some(mut config) = postgres_test_config() else {
+        eprintln!("skipping: TRACE_COMMONS_PG_TEST_DATABASE_URL or DATABASE_URL not configured");
         return;
     };
+    config.gate_driver_url = None;
+    let backend = PgBackend::new(&config)
+        .await
+        .expect("construct configured backend");
 
     let result = backend
         .list_submissions_needing_gate_decision(Utc::now(), 5, 30, 10)
         .await;
-    assert!(
-        result.is_err(),
-        "enumeration must fail closed when the gate-driver pool is not configured"
-    );
+    let error = result.expect_err("enumeration without a gate-driver pool must fail closed");
+    match error {
+        trace_commons_server::error::DatabaseError::Pool(message) => {
+            assert_eq!(message, "gate-driver pool not configured");
+        }
+        other => panic!("expected missing gate-driver pool, got {other:?}"),
+    }
 }
 
 /// Name of the NOBYPASSRLS role these tests run their assertions under.
@@ -5964,21 +5981,32 @@ async fn rls_actor_client() -> Option<tokio_postgres::Client> {
         .await
         .expect("inspect current role")
     {
-        // Provision the de-privileged role. Requires CREATEROLE, which the
-        // bypassing role we are on necessarily has.
-        client
+        // BYPASSRLS does not imply CREATEROLE. Only missing privilege while
+        // creating this fixture may skip; schema/grant/SET ROLE failures remain errors.
+        if let Err(error) = client
             .batch_execute(&format!(
                 "DO $$ BEGIN
                     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{RLS_TEST_ACTOR_ROLE}')
                     THEN CREATE ROLE {RLS_TEST_ACTOR_ROLE} NOLOGIN NOBYPASSRLS;
                     END IF;
-                 END $$;
-                 GRANT SELECT, INSERT, UPDATE, DELETE
+                 END $$;"
+            ))
+            .await
+        {
+            if error.code() == Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE) {
+                eprintln!("skipping: CREATEROLE privilege unavailable for RLS fixture");
+                return None;
+            }
+            panic!("create NOBYPASSRLS test role: {error}");
+        }
+        client
+            .batch_execute(&format!(
+                "GRANT SELECT, INSERT, UPDATE, DELETE
                     ON trace_community_withdrawal_evictions TO {RLS_TEST_ACTOR_ROLE};
                  SET ROLE {RLS_TEST_ACTOR_ROLE};"
             ))
             .await
-            .expect("provision and assume the NOBYPASSRLS test role");
+            .expect("grant and assume the NOBYPASSRLS test role");
     }
 
     assert!(

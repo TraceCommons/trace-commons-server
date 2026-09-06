@@ -2168,6 +2168,28 @@ pub unsafe extern "C" fn tc_routing_last_checked(when: *const c_char) -> *mut c_
     })
 }
 
+/// Every fixed sentence on the consent surface, in one call.
+///
+/// Needs no handle: it describes the build, not a running daemon.
+///
+/// Returns an owned JSON object whose keys are `ConsentCopy`'s fields; free
+/// it with [`tc_string_free`].
+///
+/// ONE CALL, NOT ONE PER SENTENCE. Three sentences is not three exports: a
+/// per-sentence export would let a shell take two of them and hand-write the
+/// third, and one of the three is the claim about what leaves this machine
+/// that a contributor reads immediately above an irreversible button.
+///
+/// Returns NULL only on a caught panic.
+#[unsafe(no_mangle)]
+pub extern "C" fn tc_consent_copy() -> *mut c_char {
+    guarded_string_no_err(|| {
+        let copy = trace_commons_contributor::consent_copy::consent_copy();
+        let json = serde_json::to_string(&copy).unwrap_or_else(|_| "{}".to_string());
+        Ok(to_owned_cstring(&json))
+    })
+}
+
 /// The tones the private-inference surface is painted in.
 ///
 /// DELIBERATELY DISJOINT FROM BOTH `TC_ROUTING_TONE_*` (0..=3) AND
@@ -2215,6 +2237,29 @@ pub extern "C" fn tc_private_inference_copy() -> *mut c_char {
         let copy = trace_commons_contributor::private_inference_copy::private_inference_copy();
         let json = serde_json::to_string(&copy).unwrap_or_else(|_| "{}".to_string());
         Ok(to_owned_cstring(&json))
+    })
+}
+
+/// The tooltip that explains why `Contribute` is armed or off.
+///
+/// `pinned` is 1 when a preview parsed and carries an enrollment, and 0
+/// otherwise. ANY OTHER VALUE IS NOT PINNED -- see the header. Routing's
+/// unknown values answer the tone that claims nothing; there is no sentence
+/// here that claims nothing, so an unknown value gets the one that claims
+/// less.
+///
+/// THE BRANCH CROSSES, NOT ONLY THE WORDS. Without this call each shell
+/// keeps its own two-way choice between the sentences from
+/// [`tc_consent_copy`], and three copies of that choice drift apart in
+/// silence while every string stays identical.
+///
+/// Returns an owned string; free it with [`tc_string_free`]. Returns NULL
+/// only on a caught panic.
+#[unsafe(no_mangle)]
+pub extern "C" fn tc_consent_gate_help(pinned: i32) -> *mut c_char {
+    guarded_string_no_err(|| {
+        let line = trace_commons_contributor::consent_copy::gate_help(pinned == 1);
+        Ok(to_owned_cstring(line))
     })
 }
 
