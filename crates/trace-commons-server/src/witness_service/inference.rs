@@ -464,18 +464,24 @@ impl InferenceAttestationPolicy {
     ///
     /// # Per model, because there is no single receipt-signing key
     ///
-    /// This replaces a pin on `gateway_attestation.signing_address`, which was
-    /// wrong in a way that could not be made right by tightening it: the
-    /// gateway key signs no receipt at all. A hosted-model receipt is
-    /// `signature_kind: "provider_tee"` and its signer is the key that model's
-    /// entry in `model_attestations` carries, which differs per model. Pinning
-    /// one key refused every real receipt.
+    /// This replaces a pin on `gateway_attestation.signing_address` that was
+    /// applied to *every* receipt, which was wrong in a way that could not be
+    /// made right by tightening it. The gateway key signs the Responses API
+    /// form and nothing else; a Chat Completions receipt is `signature_kind:
+    /// "provider_tee"` and its signer is the key that model's entry in
+    /// `model_attestations` carries, which differs per model. One key applied
+    /// to both kinds refused every `provider_tee` receipt.
+    ///
+    /// This set pins the `provider_tee` kind only. The gateway key is pinnable
+    /// again under its own name -- see
+    /// [`InferenceAttestationPolicy::pinning_gateway_keys`] -- and the two
+    /// sets are never tried against each other.
     ///
     /// The model compared against is the one in the **receipt's own text**
     /// (`{model}:{request_sha256}:{response_sha256}`), not one read beside it,
     /// so the receipt commits to the model whose key it is checked against. A
-    /// receipt that binds no model -- the two-part form -- cannot be placed
-    /// against any pin and is refused.
+    /// `provider_tee` receipt that binds no model cannot be placed against any
+    /// model pin and is refused.
     ///
     /// # Pins rather than a fetch
     ///
@@ -1614,12 +1620,14 @@ mod tests {
     }
 
     /// The defect, as a witness-level assertion. The shipped code compared
-    /// every receipt signer against one gateway key. Pin that key -- for the
-    /// right model, with everything else correct -- and a receipt signed by
-    /// the model's real `provider_tee` key is refused. Both values are live
-    /// captures, and they are different keys.
+    /// every receipt signer against one gateway key, whatever kind the receipt
+    /// was. Pin that key as a *model* key -- for the right model, with
+    /// everything else correct -- and a receipt signed by the model's real
+    /// `provider_tee` key is refused. Both values are live captures, and they
+    /// are different keys. (The gateway key does sign receipts, the Responses
+    /// API ones; it signs no `provider_tee` receipt, which is what this pins.)
     #[test]
-    fn the_gateway_key_pins_nothing_a_hosted_model_ever_signs() {
+    fn the_gateway_key_pins_nothing_a_provider_tee_receipt_signs() {
         assert_ne!(
             LIVE_GATEWAY_KEY, LIVE_MODEL_KEY,
             "the gateway key and the model's receipt signer are different keys; \
@@ -1644,7 +1652,7 @@ mod tests {
             ),
             Err(WitnessError::InferenceReceiptUnverified),
             "a receipt signed by anything other than the gateway key is refused \
-             under a gateway pin -- which is every real receipt"
+             under a gateway pin -- which is every chat-completions receipt"
         );
 
         // The fix: the model's own attested key.

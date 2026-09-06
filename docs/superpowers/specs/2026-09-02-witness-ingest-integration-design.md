@@ -129,6 +129,12 @@ which is sufficient:
 2. **The witness has never run.** `deploy/witness/README.md`'s "What in this
    document is unverified" opens with "No part of this has run on a real CVM",
    and "Nothing in this project has spoken to a live dstack guest agent."
+
+   *[Superseded 2026-09-06. Both quoted sentences were struck from that file
+   because they became false: a witness CVM is deployed, upgraded in place,
+   and its signing address and measurement are read back from the running
+   instance. Reasons 1, 3 and 4 in this list are unaffected; this reason no
+   longer holds, and the quotation is kept only so the citation resolves.]*
 3. **The bypass is a submit-path decision and the backlog is already past it.**
    `corpus_status_with_pii_backstop_hold` runs once, at submission. The 248
    held traces are already on `AwaitingPiiBackstop`; nothing this design adds

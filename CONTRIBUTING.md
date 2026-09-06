@@ -83,10 +83,17 @@ See `LICENSE` for the full statement and `AGENTS.md` for the working rules.
 
 Branch protection on `main` requires:
 
-- All CI checks green.
+- Thirteen required status checks green, on a branch that is up to date with
+  `main`. `README.md` lists them. `.github/workflows/ci.yml` runs more jobs
+  than that — the rest still run on your PR, they just do not block the
+  merge.
 - A pull request (no direct pushes).
 - Linear history (squash or rebase, no merge commits).
 - Any review conversations resolved before merge.
+
+`main` is behind a **merge queue**. Your PR merges by entering the queue,
+which re-runs the required checks against `main` as it stands at that
+moment — so a check that passed on your branch can still fail in the queue.
 
 Before pushing:
 

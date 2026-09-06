@@ -1,6 +1,10 @@
 # Verifying the receipt key that is actually attested
 
-**Status:** approved design. Trust boundary decided 2026-09-05.
+**Status:** approved design, **partly superseded**. Trust boundary decided
+2026-09-05; two of its premises were corrected on 2026-09-06 — see
+"Correction, 2026-09-06" at the end of this document before acting on the
+table below. The decision (verify the ed25519 receipt) stands; the account of
+what the report contains, and of which key signs a receipt, does not.
 
 `trace-commons-attestation` verifies NEAR AI receipts by EIP-191 secp256k1
 recovery, so it fetches them with `signing_algo=ecdsa`. Measured live, that
@@ -12,7 +16,9 @@ prove any enclave did.
 
 ## What the attestation report actually contains
 
-`GET /v1/attestation/report?model=..&nonce=..`:
+`GET /v1/attestation/report?model=..&nonce=..` — **note the missing
+`signing_algo`; that omission is what makes the table below wrong. See the
+correction at the end.**
 
 | Key | Algo | Attested |
 |---|---|---|
@@ -23,6 +29,12 @@ prove any enclave did.
 The same ECDSA signer appeared across two chat ids and two models, so it is
 one gateway-level key rather than a per-request one. It is simply not
 attested.
+
+*[Superseded in part, 2026-09-06: the row reading "`cb6fc58f…` ed25519 —
+Gateway" is right, but it is **not** the only attested ed25519 key, and the
+receipt signer is not unattested. The fetch above omitted
+`signing_algo=ed25519`, whose default is ECDSA. See the correction at the end
+of this document.]*
 
 ## The decision
 
@@ -105,3 +117,60 @@ or that unattested turns did not occur.
 
 `2026-09-04-attested-inference-release-design.md` — the system this verifies
 for, and the limits it currently states.
+
+---
+
+## Correction, 2026-09-06
+
+Two premises above are wrong. The decision they led to — verify the ed25519
+receipt — is unaffected and was the right call; what needs correcting is the
+account of the report and of the signer.
+
+**1. `signing_algo` is a query parameter of `GET /v1/attestation/report`, and
+its default is ECDSA.** Every fetch behind the table above omitted it, so the
+endpoint returned the ECDSA model attestations. Fetching
+`?model=..&signing_algo=ed25519&nonce=..` returns `model_attestations` entries
+whose `signing_address` is the per-model ed25519 key that signs that model's
+receipts. So "the key we verify is absent from the report" was an artefact of
+asking the wrong question, not a property of the endpoint. The design's own
+scope item 3 ("an optional check that the signer matches an
+attestation-report address") is therefore not optional-because-unavailable;
+it is implemented and it passes against live captures.
+
+**2. The binding is not a JSON field.** A `model_attestations` entry carries
+**no `report_data` field at all**. Only `gateway_attestation` has one, as an
+echo of its own quote. On a model attestation the binding lives inside
+`intel_quote` at the TDX `report_data` position — byte offset 568, 64 bytes,
+`signing_address || request_nonce` — and is valid to read only once the quote
+header shows version 4 and TEE type `0x81`. A verifier that requires a
+`report_data` field refuses every real model attestation.
+
+**3. There are two kinds of receipt, and the request protocol picks one.**
+This design speaks of "the" receipt signer. There are two, both legitimate,
+for the same hosted model:
+
+| request protocol | `signature_kind` | attested by |
+|---|---|---|
+| Chat Completions, `POST /v1/chat/completions` | `provider_tee` | the per-model key in `model_attestations` |
+| Responses API, `POST /v1/responses` | `gateway` | the shared key in `gateway_attestation` |
+
+Each kind is checked against its own key source and never the other. This
+matters because the Codex CLI speaks the Responses API exclusively, so a
+deployment whose contributors use Codex sees only `gateway` receipts.
+
+A gateway receipt's signed text is two-part, `{requestHash}:{responseHash}`,
+and names no model — so it attests the bytes and not the model. The
+three-part chat-completions form does bind the model.
+
+**What is unchanged.** The gateway remains a real trust boundary for the
+reasons this document gives (`ohttp_key_config` and `ohttp_attestation` are
+signed by its ed25519 key). Quote verification is still out of scope: a key
+read from a report is still a claim by NEAR AI checked for internal
+consistency and freshness, not a proof.
+
+Operator-facing consequences, including the retirement of
+`TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN` in favour of
+`TRACE_COMMONS_WITNESS_MODEL_KEY_PINS` and
+`TRACE_COMMONS_WITNESS_GATEWAY_RECEIPT_KEY_PINS`, and the three-deployment
+rollout the pins require, are in `deploy/witness/README.md` and
+`docs/operator/attested-inference.md`.

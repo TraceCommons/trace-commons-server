@@ -73,10 +73,17 @@ The protocol crate is `crates/trace-commons-protocol`; the server crate is
 
 ## CI
 
-Every job in `.github/workflows/ci.yml` gates every PR. There are eighteen
-as of 2026-08-29; the list below covers the long-standing ones and is not
+Every job in `.github/workflows/ci.yml` runs on every PR. There are twenty
+as of 2026-09-06; the list below covers the long-standing ones and is not
 a full inventory -- read the workflow for that. (It said "nine" while the
-file held fifteen, so treat any count here as stale until re-checked.)
+file held fifteen, and "eighteen" while it held twenty, so treat any count
+here as stale until re-checked.)
+
+Running is not the same as blocking. **Thirteen** of the twenty are required
+status checks on `main`, and only those block a merge -- `README.md` lists
+them. `main` is also behind a merge queue (`main merge queue`), so the
+required checks are re-run against `main` at merge time; a PR that never
+receives them times out of the queue instead of merging.
 
 - `cargo fmt --check` — runs `cargo fmt --all -- --check`. Run `cargo fmt --all`
   before committing.

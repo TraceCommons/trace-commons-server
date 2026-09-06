@@ -119,14 +119,17 @@ allow list; a GPL-2.0-only, SSPL, or proprietary dependency is a hard conflict.
 cargo deny check licenses
 cargo deny --features near-ai-scorer check licenses
 cargo deny --features local-gpu-models check licenses
+cargo deny --all-features check licenses
 ```
 
-Run all three: the feature sets pull in different trees. CI covers all
-three at once by running `check licenses` and `check sources` under
-`--all-features`, and runs `check advisories` under `--all-features` too, so
-this is a pre-flight rather than the only enforcement. Note this is separate
-from — and does not replace — the repo's standing rule that new dependencies
-need explicit human approval before you add them.
+Run all three, plus a fourth under `--all-features`: the feature sets pull in
+different trees, and 54 crates resolve only under `--all-features` (see
+`CLAUDE.md`). CI covers them at once by running `check licenses` and
+`check sources` under `--all-features`, and runs `check advisories` under
+`--all-features` too, so this is a pre-flight rather than the only
+enforcement. Note this is separate from — and does not replace — the repo's
+standing rule that new dependencies need explicit human approval before you
+add them.
 
 ### Checklist before claiming a change is done
 
@@ -134,7 +137,7 @@ need explicit human approval before you add them.
 - No permissive crate gained a dependency on an AGPL crate.
 - `cargo test -p trace-commons-server --test license_boundary` passes, without
   editing the test's expected sets.
-- `cargo deny check licenses` passes under all three feature sets, if you
+- `cargo deny check licenses` passes under all four invocations above, if you
   touched dependencies (CI now runs the same check, plus advisories and
   sources, on every push).
 

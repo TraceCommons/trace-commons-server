@@ -10,6 +10,20 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-05-ed25519-receipt-verification-design.md`
 
+> **Executed, and partly superseded on 2026-09-06.** This plan is kept as the
+> record of what was built. Three of its premises were corrected the next day,
+> and the doc-comment text quoted in its tasks was rewritten in the tree —
+> **do not copy the comments below back into the code.** In short: the receipt
+> signer *is* attested (`signing_algo` is a query parameter of the report
+> endpoint whose default is ECDSA, so the original fetch asked the wrong
+> question); a `model_attestations` entry carries no `report_data` field and
+> the binding is read from `intel_quote` at byte offset 568; and there are
+> **two** kinds of receipt, `provider_tee` (Chat Completions, per-model key)
+> and `gateway` (Responses API, shared key), each checked only against its own
+> attested source. The optional gateway-address check this plan describes was
+> replaced by that routing. See the "Correction, 2026-09-06" section of the
+> spec above, and `deploy/witness/README.md` for the operator surface.
+
 ## Global Constraints
 
 - Verify with `RUSTFLAGS='-D warnings'`. Plain `cargo check` does not apply it; CI does.

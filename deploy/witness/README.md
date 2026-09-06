@@ -1208,36 +1208,51 @@ against the manifest hash above, none of them should be.
 
 ## What in this document is unverified
 
-Stated plainly so nobody reads the rest as tested:
+Stated plainly so nobody reads the rest as tested. **Revised 2026-09-06**: the
+first four items below said this had never run on a real CVM. It has — see
+"The production deployment, as of 2026-09-06" above, whose every value was read
+back from the running instance. Those items are struck and replaced rather than
+deleted, because what they were wrong about is worth knowing.
 
-- **No part of this has run on a real CVM.** The image build was exercised on a
-  developer machine and the binary was confirmed to start, and fail closed
-  without a guest agent, in the runtime image; the deployment was not.
-- **The image whose build was exercised is arm64.** The developer machine is
-  Apple Silicon. TDX is Intel, so the image you deploy is an amd64 one, and the
-  digest you pin must come from an amd64 build. The `Dockerfile` is
-  architecture-neutral and nothing in it is conditional on one, but that is an
-  argument, not a build log.
-- **Nothing in this project has spoken to a live dstack guest agent.** The
-  socket path, the `/v0` method names and the JSON encoding of the agent's
-  responses are taken from dstack's guest-API documentation and are exercised
-  only against a test double.
-- **`app-compose.json`'s field set has not been validated by a dstack
-  deployer.** The manifest is written from dstack's documented schema, not from
-  a rejected-then-corrected upload. Confirm the keys against the version you
-  deploy — in particular `public_tcbinfo` and `no_instance_id`, which are the
-  two whose spelling this project has never seen an agent accept. An unknown
-  key that a deployer silently drops changes nothing visible except the compose
-  hash you pinned.
-- **The compose-hash derivation is unconfirmed.** `build-app-compose.sh`
-  computes SHA-256 over the manifest bytes. That the value equals a running
-  instance's `tcb_info.compose_hash` is the assumption to check first on a real
-  instance.
+- ~~**No part of this has run on a real CVM.**~~ **Superseded.** It runs on
+  one. The image was built for amd64, deployed to CVM
+  `8b8e6543-9743-41fc-ac05-a6b414888d5e`, and upgraded in place — the signing
+  address survived, which is the proof it was an upgrade and not a recreation.
+- ~~**Nothing in this project has spoken to a live dstack guest agent.**~~
+  **Superseded.** The `/v0` guest-agent method names and JSON encoding are
+  correct against dstack 0.5.9, exercised live rather than against the test
+  double alone.
+- ~~**`app-compose.json`'s field set has not been validated by a dstack
+  deployer.**~~ **Superseded, and by a worse answer than validation:**
+  `phala deploy` **never reads `app-compose.json`**. It builds its own
+  manifest, forces `public_logs` and `public_sysinfo` to true unless told
+  otherwise, and adds `DSTACK_AUTHORIZED_KEYS`. So the file's field set is not
+  what you deployed, and the only honest reading is the manifest fetched back
+  from the instance. This is why the deployment section tells you to pass
+  `--no-public-logs --no-public-sysinfo` and re-read afterwards.
+- ~~**The compose-hash derivation is unconfirmed.**~~ **Confirmed, and it
+  disagrees.** `build-app-compose.sh` printed `bcbd152e` for the deployment
+  whose instance `compose_hash` is
+  `e848cac038d7a3181b0a9dbbd7ba63fbec3a2bed6aa6e58ad9309992eb9756eb`. That is
+  the previous item's consequence, not a hashing bug: the script hashes a
+  manifest the deployer never used. **Pin the instance's `compose_hash`, never
+  the script's output.** MRCONFIGID = `01` + the instance value + zero padding
+  is separately confirmed.
+- ~~**The `full-pipeline` sibling-container topology has not been built.**~~
+  **Superseded.** Production runs `full-pipeline` with the NEAR AI classifier.
+  The performance number quoted for it is still a pilot-host measurement, not
+  an in-CVM one.
+
+Still unverified:
+
 - **The container-user / socket-permission question is open** — see First boot.
 - **The image has never been reproduced**, by anyone, on any second machine.
-- **The `full-pipeline` sibling-container topology has not been built.** The
-  performance number quoted for it is measured, but on the pilot host rather
-  than inside a CVM.
+- **The attested-inference path has not completed end to end.** The witness is
+  deployed and its measurement is pinnable, but a hosted exchange yielding a
+  verified receipt and a body-free stored envelope has not been observed. See
+  `docs/superpowers/reports/2026-09-06-attested-inference-first-run.md`. The
+  receipt-key pins are at step 1 of their three-step rollout: deployed with
+  both pin variables unset, which is dormant.
 
 ---
 
