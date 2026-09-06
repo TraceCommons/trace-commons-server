@@ -1876,6 +1876,17 @@ async fn account_ctx_ext(state: &Arc<AppState>, headers: &HeaderMap) -> Extensio
     Extension(ctx)
 }
 
+/// Mint + redeem a browser session for `token`'s device principal and return the
+/// request headers that replay it. A device upload claim is deliberately NOT an
+/// account credential (see `account_ctx_refuses_a_device_bearer`), so every
+/// account-surface handler test has to present a real session cookie; the mint
+/// step also creates the durable account and links the device principal to it,
+/// which is what those tests previously relied on `mint_login_link_handler` for.
+async fn account_session_headers(state: &Arc<AppState>, token: &str) -> HeaderMap {
+    let cookie = mint_redeem_session_cookie_value(state, token).await;
+    cookie_request_headers("tc_account_session", &cookie)
+}
+
 fn cookie_request_headers(name: &str, value: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -3264,7 +3275,7 @@ async fn account_traces_list_returns_only_owned_submissions() {
     let _other_tenant =
         insert_account_test_submission(backend.as_ref(), "tenant-b", &device_principal).await;
 
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let Json(page) = account_traces_list_handler(
         State(state.clone()),
         ext,
@@ -3319,7 +3330,7 @@ async fn account_traces_list_cursor_pages_are_disjoint_and_ordered() {
     }
 
     // Page 1: limit 2.
-    let ext1 = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext1 = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let Json(page1) = account_traces_list_handler(
         State(state.clone()),
         ext1,
@@ -3337,7 +3348,7 @@ async fn account_traces_list_cursor_pages_are_disjoint_and_ordered() {
         .expect("full page yields a cursor");
 
     // Page 2: continue from the cursor.
-    let ext2 = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext2 = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let Json(page2) = account_traces_list_handler(
         State(state.clone()),
         ext2,
@@ -3396,7 +3407,7 @@ async fn account_trace_detail_owned_returns_metadata_unowned_and_missing_are_uni
     let random = Uuid::new_v4();
 
     // Owned id -> metadata.
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let Json(item) = account_trace_detail_handler(State(state.clone()), ext, AxumPath(owned))
         .await
         .expect("owned detail succeeds");
@@ -3404,11 +3415,11 @@ async fn account_trace_detail_owned_returns_metadata_unowned_and_missing_are_uni
 
     // Unowned id and a random nonexistent id must produce the IDENTICAL 404
     // (status AND body) -- no existence oracle.
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let unowned_err = account_trace_detail_handler(State(state.clone()), ext, AxumPath(unowned))
         .await
         .expect_err("unowned -> 404");
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let missing_err = account_trace_detail_handler(State(state.clone()), ext, AxumPath(random))
         .await
         .expect_err("missing -> 404");
@@ -3534,7 +3545,7 @@ async fn account_trace_content_owned_returns_redacted_body_unowned_and_missing_a
     let stored_body = write_redacted_envelope_to_disk(state.as_ref(), "tenant-a", owned).await;
 
     // Owned id with a readable artifact -> 200 + redacted body.
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let response = account_trace_content_handler(State(state.clone()), ext, AxumPath(owned))
         .await
         .expect("owned content read succeeds");
@@ -3579,11 +3590,11 @@ async fn account_trace_content_owned_returns_redacted_body_unowned_and_missing_a
     // Unowned and nonexistent ids collapse to the IDENTICAL 404 the detail
     // handler returns -- no existence oracle, and ownership is enforced before
     // any read.
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let unowned_err = account_trace_content_handler(State(state.clone()), ext, AxumPath(unowned))
         .await
         .expect_err("unowned -> 404");
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let missing_err = account_trace_content_handler(State(state.clone()), ext, AxumPath(random))
         .await
         .expect_err("missing -> 404");
@@ -3596,7 +3607,7 @@ async fn account_trace_content_owned_returns_redacted_body_unowned_and_missing_a
 
     // Cross-check the content 404 body is byte-identical to the detail 404 body
     // (same `not_found()` helper -> no oracle divergence across surfaces).
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let detail_missing_err =
         account_trace_detail_handler(State(state.clone()), ext, AxumPath(random))
             .await
@@ -3637,7 +3648,7 @@ async fn account_trace_content_read_failure_fails_closed_with_generic_500() {
     let owned =
         insert_account_test_submission(backend.as_ref(), "tenant-a", &device_principal).await;
 
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let err = account_trace_content_handler(State(state.clone()), ext, AxumPath(owned))
         .await
         .expect_err("missing artifact -> fail closed");
@@ -3759,7 +3770,7 @@ async fn account_trace_withdraw_quarantined_deletes_content_and_is_idempotent() 
     let _ = mint_login_link_handler(State(state.clone()), auth_headers("token-a"))
         .await
         .expect("mint");
-    let device_principal = principal_storage_ref("token-a");
+    let device_principal = static_token_principal_ref("token-a");
     let owned = insert_account_test_submission_with_status(
         backend.as_ref(),
         "tenant-a",
@@ -3775,7 +3786,7 @@ async fn account_trace_withdraw_quarantined_deletes_content_and_is_idempotent() 
     );
     assert!(object_path.exists(), "content is staged before withdrawal");
 
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let Json(first) = account_trace_withdraw_handler(State(state.clone()), ext, AxumPath(owned))
         .await
         .expect("own trace withdraws");
@@ -3795,7 +3806,7 @@ async fn account_trace_withdraw_quarantined_deletes_content_and_is_idempotent() 
     );
 
     // Twice is a success, and reports the SAME tier and timestamp.
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let Json(second) = account_trace_withdraw_handler(State(state.clone()), ext, AxumPath(owned))
         .await
         .expect("withdrawing twice is idempotent");
@@ -3861,11 +3872,11 @@ async fn account_trace_withdraw_unowned_and_missing_are_uniform_404() {
         insert_account_test_submission(backend.as_ref(), "tenant-a", "principal_not_ours").await;
     let random = Uuid::new_v4();
 
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let unowned_err = account_trace_withdraw_handler(State(state.clone()), ext, AxumPath(unowned))
         .await
         .expect_err("another contributor's trace -> 404");
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let missing_err = account_trace_withdraw_handler(State(state.clone()), ext, AxumPath(random))
         .await
         .expect_err("missing -> 404");
@@ -3907,7 +3918,7 @@ async fn account_trace_withdraw_reports_each_distribution_tier() {
     let _ = mint_login_link_handler(State(state.clone()), auth_headers("token-a"))
         .await
         .expect("mint");
-    let device_principal = principal_storage_ref("token-a");
+    let device_principal = static_token_principal_ref("token-a");
 
     // Tier 1: not yet in the commons. `received` deliberately exercises a
     // status the local corpus-status projection DROPS, proving withdrawal is
@@ -3919,7 +3930,7 @@ async fn account_trace_withdraw_reports_each_distribution_tier() {
         StorageTraceCorpusStatus::Received,
     )
     .await;
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let Json(tier1) = account_trace_withdraw_handler(State(state.clone()), ext, AxumPath(received))
         .await
         .expect("received withdraws");
@@ -3930,7 +3941,7 @@ async fn account_trace_withdraw_reports_each_distribution_tier() {
     // Tier 2: accepted into the commons, never used downstream.
     let accepted =
         insert_account_test_submission(backend.as_ref(), "tenant-a", &device_principal).await;
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let Json(tier2) = account_trace_withdraw_handler(State(state.clone()), ext, AxumPath(accepted))
         .await
         .expect("accepted withdraws");
@@ -3976,7 +3987,7 @@ async fn account_trace_withdraw_reports_each_distribution_tier() {
         .await
         .expect("manifest item writes");
 
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let Json(tier3) = account_trace_withdraw_handler(State(state.clone()), ext, AxumPath(exported))
         .await
         .expect("exported trace withdraws");
@@ -4021,7 +4032,7 @@ async fn account_trace_withdraw_evicts_vector_entry_and_dedup_cluster() {
     let _ = mint_login_link_handler(State(state.clone()), auth_headers("token-a"))
         .await
         .expect("mint");
-    let device_principal = principal_storage_ref("token-a");
+    let device_principal = static_token_principal_ref("token-a");
     let owned =
         insert_account_test_submission(backend.as_ref(), "tenant-a", &device_principal).await;
     let record = backend
@@ -4132,7 +4143,7 @@ async fn account_trace_withdraw_evicts_vector_entry_and_dedup_cluster() {
         .await
         .expect("dedup assignment writes");
 
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let Json(_) = account_trace_withdraw_handler(State(state.clone()), ext, AxumPath(owned))
         .await
         .expect("own trace withdraws");
@@ -26962,7 +26973,9 @@ async fn revocation_propagation_scheduler_tick_dry_run_keeps_due_items_pending()
         false,
         false,
     );
-    let source_submission_id = Uuid::new_v4();
+    let source_submission_id =
+        insert_account_test_submission(backend.as_ref(), "tenant-a", "principal_revocation_source")
+            .await;
     let propagation_item_id = Uuid::new_v4();
     backend
         .upsert_trace_revocation_propagation_item(StorageTraceRevocationPropagationItemWrite {
@@ -27043,7 +27056,9 @@ async fn revocation_propagation_scheduler_tick_completes_tenant_due_items_only()
         false,
         false,
     );
-    let source_submission_id = Uuid::new_v4();
+    let source_submission_id =
+        insert_account_test_submission(backend.as_ref(), "tenant-a", "principal_revocation_source")
+            .await;
     let propagation_item_id = Uuid::new_v4();
     let receipt_sha256 = "sha256:revocation-scheduler-live-receipt";
     backend
@@ -27070,7 +27085,9 @@ async fn revocation_propagation_scheduler_tick_completes_tenant_due_items_only()
         })
         .await
         .expect("revocation propagation item writes");
-    let tenant_b_source_submission_id = Uuid::new_v4();
+    let tenant_b_source_submission_id =
+        insert_account_test_submission(backend.as_ref(), "tenant-b", "principal_revocation_source")
+            .await;
     let tenant_b_propagation_item_id = Uuid::new_v4();
     backend
         .upsert_trace_revocation_propagation_item(StorageTraceRevocationPropagationItemWrite {
@@ -27214,7 +27231,8 @@ async fn seed_vector_entry_propagation_item(
     tenant_id: &str,
     attempt_count: u32,
 ) -> (Uuid, Uuid, Uuid) {
-    let source_submission_id = Uuid::new_v4();
+    let source_submission_id =
+        insert_account_test_submission(backend, tenant_id, "principal_revocation_source").await;
     let trace_id = Uuid::new_v4();
     let propagation_item_id = Uuid::new_v4();
     let vector_entry_id = Uuid::new_v4();
@@ -27792,7 +27810,8 @@ async fn seed_worker_queue_propagation_item(
     tenant_id: &str,
     attempt_count: u32,
 ) -> (Uuid, Uuid) {
-    let source_submission_id = Uuid::new_v4();
+    let source_submission_id =
+        insert_account_test_submission(backend, tenant_id, "principal_revocation_source").await;
     let propagation_item_id = Uuid::new_v4();
     let queue_surface = "process_evaluation_queue".to_string();
     let queue_key_hash =
@@ -73074,7 +73093,7 @@ async fn assert_target_invisible_across_all_three_reads(
     own_ids: &[Uuid],
 ) {
     // List: target absent; own ids present.
-    let list_ext = account_ctx_ext(state, &auth_headers(token)).await;
+    let list_ext = account_ctx_ext(state, &account_session_headers(state, token).await).await;
     let Json(page) = account_traces_list_handler(
         State(state.clone()),
         list_ext,
@@ -73096,12 +73115,14 @@ async fn assert_target_invisible_across_all_three_reads(
 
     // Detail: uniform 404 (byte-identical to a random nonexistent id).
     let random = Uuid::new_v4();
-    let target_detail_ext = account_ctx_ext(state, &auth_headers(token)).await;
+    let target_detail_ext =
+        account_ctx_ext(state, &account_session_headers(state, token).await).await;
     let target_detail_err =
         account_trace_detail_handler(State(state.clone()), target_detail_ext, AxumPath(target))
             .await
             .expect_err("foreign detail -> 404");
-    let random_detail_ext = account_ctx_ext(state, &auth_headers(token)).await;
+    let random_detail_ext =
+        account_ctx_ext(state, &account_session_headers(state, token).await).await;
     let random_detail_err =
         account_trace_detail_handler(State(state.clone()), random_detail_ext, AxumPath(random))
             .await
@@ -73113,7 +73134,8 @@ async fn assert_target_invisible_across_all_three_reads(
     );
 
     // Content: uniform 404, byte-identical to the detail 404 (same not_found()).
-    let target_content_ext = account_ctx_ext(state, &auth_headers(token)).await;
+    let target_content_ext =
+        account_ctx_ext(state, &account_session_headers(state, token).await).await;
     let target_content_err =
         account_trace_content_handler(State(state.clone()), target_content_ext, AxumPath(target))
             .await
@@ -73171,7 +73193,7 @@ async fn isolation_a_two_accounts_one_tenant_cannot_cross_read() {
 
     // And A's OWN content read-back succeeds (proves the 404 above is ownership,
     // not a blanket read failure).
-    let own_ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let own_ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let response = account_trace_content_handler(State(state.clone()), own_ext, AxumPath(a_owned))
         .await
         .expect("A's own content read succeeds");
@@ -75794,7 +75816,8 @@ async fn passkey_rename_updates_label_and_404s_unknown() {
     let (_auth, cred) = enroll_passkey_for_token(&state, &session_cookie).await;
 
     // Rename succeeds and is reflected in the list.
-    let rename_ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let rename_ext =
+        account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let status = account_passkey_rename_handler(
         State(state.clone()),
         rename_ext,
@@ -75820,7 +75843,8 @@ async fn passkey_rename_updates_label_and_404s_unknown() {
     );
 
     // Rename of an UNKNOWN credential -> 404.
-    let rename_ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let rename_ext =
+        account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let err = account_passkey_rename_handler(
         State(state.clone()),
         rename_ext,
@@ -75932,7 +75956,8 @@ async fn passkey_management_is_cross_account_isolated() {
     );
 
     // B's PATCH of A's credential -> 404.
-    let b_rename_ext = account_ctx_ext(&state, &auth_headers("token-a-2")).await;
+    let b_rename_ext =
+        account_ctx_ext(&state, &account_session_headers(&state, "token-a-2").await).await;
     let err = account_passkey_rename_handler(
         State(state.clone()),
         b_rename_ext,
@@ -75946,7 +75971,8 @@ async fn passkey_management_is_cross_account_isolated() {
     assert_eq!(err.0, StatusCode::NOT_FOUND);
 
     // B's DELETE of A's credential -> 404.
-    let b_remove_ext = account_ctx_ext(&state, &auth_headers("token-a-2")).await;
+    let b_remove_ext =
+        account_ctx_ext(&state, &account_session_headers(&state, "token-a-2").await).await;
     let err = account_passkey_remove_handler(
         State(state.clone()),
         b_remove_ext,
@@ -76558,7 +76584,8 @@ async fn seed_near_login_identity(
     near_account_id: &str,
 ) -> (Uuid, ring::signature::Ed25519KeyPair, String) {
     let session_cookie = mint_redeem_session_cookie_value(state, token).await;
-    let account_id = account_id_for_principal(backend, tenant, &principal_storage_ref(token)).await;
+    let account_id =
+        account_id_for_principal(backend, tenant, &static_token_principal_ref(token)).await;
 
     let (message, nonce, recipient, ceremony_pair) =
         near_enroll_start(state, &session_cookie).await;
@@ -77364,7 +77391,7 @@ async fn gate_treats_device_bearer_as_weak() {
 
     // Carve-out: with zero strong authenticators the bearer may add the first
     // passkey -> register/start 200.
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let pk = account_passkey_register_start_handler(State(state.clone()), ext)
         .await
         .expect("bearer may add the first authenticator (carve-out)");
@@ -77375,7 +77402,7 @@ async fn gate_treats_device_bearer_as_weak() {
     let weak_cookie = mint_redeem_session_cookie_value(&state, "token-a").await;
     let (_auth, _cred) = enroll_passkey_for_token(&state, &weak_cookie).await;
 
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let err = account_passkey_register_start_handler(State(state.clone()), ext)
         .await
         .expect_err("a device bearer is gated once a strong authenticator exists");
@@ -77510,7 +77537,7 @@ async fn mint_device_login_code(
         .expect("url carries code")
         .to_string();
     let account_id =
-        account_id_for_principal(backend, tenant_id, &principal_storage_ref(token)).await;
+        account_id_for_principal(backend, tenant_id, &static_token_principal_ref(token)).await;
     (code, account_id)
 }
 
@@ -77946,7 +77973,7 @@ async fn near_identity_rename_endpoint_updates_label_and_404s_unknown() {
             .await;
 
     // Rename (not gated): a blank-padded label is trimmed and stored.
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let status = account_near_identity_rename_handler(
         State(state.clone()),
         ext,
@@ -77972,7 +77999,7 @@ async fn near_identity_rename_endpoint_updates_label_and_404s_unknown() {
     );
 
     // Rename of an unknown key -> uniform 404.
-    let ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let err = account_near_identity_rename_handler(
         State(state.clone()),
         ext,
@@ -78013,7 +78040,7 @@ async fn near_identity_remove_endpoint_gated_and_soft_deletes() {
         .expect("insert second identity");
 
     // A WEAK (bearer) session is BLOCKED (403) from removing while >=1 strong remains.
-    let weak_ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let weak_ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let err = account_near_identity_remove_handler(
         State(state.clone()),
         weak_ext,
@@ -78092,7 +78119,7 @@ async fn near_identity_remove_endpoint_gated_and_soft_deletes() {
     // already revoked. The 404 (not 403) is the observable proof the carve-out let
     // the weak request through.
     let denied_before = gate_denied_audit_count(backend.as_ref(), tenant).await;
-    let weak_ext = account_ctx_ext(&state, &auth_headers("token-a")).await;
+    let weak_ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let err =
         account_near_identity_remove_handler(State(state.clone()), weak_ext, AxumPath(pk1.clone()))
             .await
@@ -78142,7 +78169,7 @@ async fn near_identity_management_is_cross_account_isolated() {
     );
 
     // B's PATCH of A's identity -> 404.
-    let b_ext = account_ctx_ext(&state, &auth_headers("token-a-2")).await;
+    let b_ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a-2").await).await;
     let err = account_near_identity_rename_handler(
         State(state.clone()),
         b_ext,
@@ -78155,7 +78182,7 @@ async fn near_identity_management_is_cross_account_isolated() {
 
     // B's DELETE of A's identity -> 404. (B has zero strong of its own, so the gate
     // permits the attempt; the DB scoping yields the 404.)
-    let b_ext = account_ctx_ext(&state, &auth_headers("token-a-2")).await;
+    let b_ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a-2").await).await;
     let err =
         account_near_identity_remove_handler(State(state.clone()), b_ext, AxumPath(pk_a.clone()))
             .await

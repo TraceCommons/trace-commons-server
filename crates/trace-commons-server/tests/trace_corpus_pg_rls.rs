@@ -5902,7 +5902,18 @@ async fn list_submissions_needing_gate_decision_excludes_decided_and_capped_subm
 /// with a clear error rather than panicking.
 #[tokio::test]
 async fn list_submissions_needing_gate_decision_fails_closed_without_gate_driver_pool() {
-    let Some(backend) = postgres_backend().await else {
+    // Build the config here rather than going through `postgres_backend()`:
+    // that helper reads `TRACE_COMMONS_GATE_DRIVER_DATABASE_URL` from the
+    // ambient environment, so on a machine where the operator HAS provisioned
+    // the gate-driver pool this test would assert the opposite of its name and
+    // fail. The absent pool is the fixture, so state it explicitly.
+    let Some(mut config) = postgres_test_config() else {
+        eprintln!("skipping: TRACE_COMMONS_PG_TEST_DATABASE_URL or DATABASE_URL not configured");
+        return;
+    };
+    config.gate_driver_url = None;
+    let Ok(backend) = PgBackend::new(&config).await else {
+        eprintln!("skipping: database unavailable");
         return;
     };
 
