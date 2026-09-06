@@ -698,79 +698,136 @@ witness cannot tell which it got.
 Render the count `n_of_m` — one verified receipt over a trace declaring three
 calls is `1_of_3`. Never "attested", never "genuine".
 
-### The model is not bound, and we cannot make it so
+### The model, and which form of receipt binds it
 
-`verify_receipt` supports a three-part receipt whose leading part is the model,
-and an earlier draft of this control refused anything else. That was wrong about
-the provider: NEAR AI signs the **two-part** form — `<requestHash>:<responseHash>`,
-no model prefix — and supplies the model as a query parameter on retrieval
-(`GET /v1/signature/{chat_id}?model=...`). A query parameter is not signed and is
-chosen by whoever fetches the receipt, so it establishes nothing. Refusing the
-two-part form would refuse every real receipt, and a model allowlist checked
-against it would be a control that cannot fail.
+`verify_receipt` supports both a two-part receipt — `<requestHash>:<responseHash>`,
+binding no model — and a three-part one whose leading part is the model name and
+is covered by the signature.
 
-There is therefore no model policy and no allowlist variable. That is a
-**limitation of the provider's current API**, not a decision this deployment
-made. Note what it costs: a policy model swap substitutes the model that served,
-and a bound model is exactly what would have caught it.
+A hosted NEAR AI model returns the **three-part** form: the receipt text is
+`{model}:{requestHash}:{responseHash}`, so the receipt names its own model.
+That is the model this witness looks a pin up by. The `model` query parameter
+on retrieval (`GET /v1/signature/{chat_id}?model=...`) is *not* signed and is
+chosen by whoever fetches the receipt, so it establishes nothing and is not
+read here.
 
-### Pinning the gateway signing key
+An earlier revision of this document asserted the provider signs only the
+two-part form and concluded that no model policy was possible. That was wrong
+about the provider, and the conclusion drawn from it — pinning one
+provider-wide key — could not work, because the signing key is per model. The
+two-part form is still accepted where nothing is pinned; under pins it is
+refused, because there is no model to look a pin up by.
 
-`TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN` is **unset by default**, and unset is
-exactly the behaviour that shipped before it existed.
+### Pinning the receipt signing keys, per model
+
+> **Breaking change for anyone running the previous release.**
+> `TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN` is **gone and is no longer read**.
+> It pinned the gateway's ed25519 key, and the gateway key signs **no
+> receipt** — so a witness with it set refused every real receipt, under the
+> same folded `witness_inference_receipt_unverified` label as a forgery.
+> **Unset that variable** and, if you want pinning, set
+> `TRACE_COMMONS_WITNESS_MODEL_KEY_PINS` instead. A witness left with only the
+> old variable set starts and runs **unpinned**.
+
+`TRACE_COMMONS_WITNESS_MODEL_KEY_PINS` is **unset by default**, and unset is
+exactly the behaviour that shipped before any of this existed.
 
 Verifying a receipt establishes that a well-formed signature over these bytes
 checks out against the key **the receipt itself names**. Any key satisfies
 that, including one the submitter holds. What makes a receipt mean *an attested
-NEAR AI enclave signed this* is comparing that key against the one NEAR AI's
-attestation report binds into a TDX quote — `gateway_attestation.report_data`
-is `signing_address || nonce`, so a key read from a report issued against a
-nonce you chose was attested for you, now.
+NEAR AI enclave signed this* is comparing that key against one NEAR AI's
+attestation report binds into a TDX quote — `report_data` is `signing_address
+|| nonce`, so a key read from a report issued against a nonce you chose was
+attested for you, now.
 
 The contributor client already makes that comparison, against a report it
 fetches itself. A check the submitter runs on its own submission is not a
 bound: a patched client does not run it. This variable is the same comparison
 made at the point the decision is enforced.
 
-Set it to the gateway's ed25519 public key: **64 hex characters, no `0x`**.
-Obtain it once, out of band, from `GET {base}/attestation/report?model=..&nonce=..`
-and check that `report_data` really is that key followed by your nonce before
-you pin it. The witness does not fetch the report on the request path — it
-makes no outbound calls while serving, and a report fetched at request time
-would be trusted over a path an attacker able to substitute a signing key is
-also positioned to influence.
+**The key is per model.** A hosted-model receipt comes back with
+`signature_kind: "provider_tee"` and a `signing_address` that differs per
+model; that key lives in the report's `model_attestations`, never in
+`gateway_attestation`. So the pin is a map, and the model it is looked up by is
+the one in the **receipt's own signed text**
+(`{model}:{requestHash}:{responseHash}`), not one supplied beside it.
 
-Three properties worth stating plainly:
+Set it to `model=key[,model=key...]`, each key **64 hex characters, no `0x`**.
+Repeat a model to pin more than one key for it, which is how a model served by
+several enclaves is pinned. Derive the keys once, out of band:
+
+```bash
+NONCE=$(openssl rand -hex 32)
+MODEL='Qwen/Qwen3.6-35B-A3B-FP8'
+curl -s --get https://cloud-api.near.ai/v1/attestation/report \
+  --data-urlencode "model=$MODEL" \
+  --data-urlencode "signing_algo=ed25519" \
+  --data-urlencode "nonce=$NONCE" \
+| jq -r --arg n "$NONCE" --arg m "$MODEL" '
+    .model_attestations[]
+    | select(.model_name == $m)
+    | select(.signing_algo == "ed25519")
+    | select(.report_data == (.signing_address + $n))
+    | .signing_address'
+```
+
+`signing_algo=ed25519` is **not optional and not cosmetic**: it is a query
+parameter that selects which attestations come back, and the default is ECDSA
+— whose signer appears in no ed25519 attestation and signs nothing this witness
+verifies. A report fetched without it looks entirely well formed and attests
+the wrong thing. That omission is what produced the gateway-key mistake above.
+
+The `select(.report_data == (.signing_address + $n))` line is the binding
+check, and it is the reason for the nonce: without it you are pinning a key
+some report once listed, rather than one attested against a value you chose.
+
+The witness does not fetch the report on the request path — it makes no
+outbound calls while serving, and a report fetched at request time would be
+trusted over a path an attacker able to substitute a signing key is also
+positioned to influence.
+
+Four properties worth stating plainly:
 
 - **ed25519 only.** The ECDSA signer NEAR AI also issues appears in **no**
-  attestation report, so it cannot be pinned and an ECDSA receipt can never
+  ed25519 attestation, so it cannot be pinned and an ECDSA receipt can never
   satisfy a pin, however well it verifies. Pinning is therefore also a
   decision to require the ed25519 form.
-- **Independent of the requirement.** The pin constrains *which key* is
+- **A receipt binding no model cannot satisfy a pin.** The two-part
+  `<requestHash>:<responseHash>` form commits to no model, so there is no pin
+  to place it against and a pinning witness refuses it. Choosing a pin for it
+  from the request body would be checking the receipt against something its
+  signature never covered.
+- **Independent of the requirement.** The pins constrain *which key* is
   trusted; `TRACE_COMMONS_WITNESS_REQUIRE_ATTESTED_INFERENCE` decides *whether
   a receipt is needed*. A witness that requires nothing still refuses a
   receipt from an unpinned key when one is offered — certifying it would be
   the silent downgrade that accepting an invalid receipt already is not.
-- **Malformed is a startup failure.** A value that is not a 32-byte hex key —
-  the empty string included — refuses to start rather than becoming a pin that
-  matches nothing. The value is never echoed into a log; the process logs a
-  `gateway_key_pin_sha256_prefix` at startup so an operator can confirm which
-  key it holds.
+- **Malformed is a startup failure.** A value that is not `model=key` pairs of
+  32-byte hex keys — the empty string included — refuses to start rather than
+  becoming a pin that matches nothing. The value is never echoed into a log;
+  the process logs a `model_key_pins_sha256_prefix` and a `pinned_models`
+  count at startup so an operator can confirm which set it holds, without
+  putting a key or a model name on an operational surface.
 
-A pin failure is reported as `witness_inference_receipt_unverified`, the same
-label as every other receipt failure, and that is deliberate. A label of its
-own would make this route an oracle for the pinned key: a prober could learn
-from a refusal alone whether its receipt was signed by the key you trust.
+Every pin failure — unpinned model, unpinned key, a receipt binding no model,
+an ECDSA receipt — is reported as `witness_inference_receipt_unverified`, the
+same label as every other receipt failure, and that is deliberate. A label of
+its own would make this route an oracle: a prober could learn from a refusal
+alone whether its receipt was signed by a key you trust, and which models you
+pin. The cost is that a **missing** pin for a model you actually serve looks
+exactly like a forgery from outside, which is why the committed compose ships
+with no pins rather than a guess at your model list.
 
 What it still does not establish: quote verification of the report is not part
-of this path. You pinned a key you decided to trust after reading a report, and
+of this path. You pinned keys you decided to trust after reading a report, and
 the strength of the pin is the strength of that one-time procedure.
 
 Like `TRACE_COMMONS_WITNESS_REQUIRE_ATTESTED_INFERENCE`, this variable is not
-in the committed compose, so the deployment described here does not set it.
-Adding it to `docker-compose.yml` puts the pinned key inside the measurement —
-which is the right place for it, and means rotating the gateway key moves the
-measurement and needs re-allowlisting everywhere it is pinned.
+set in the committed compose, so the deployment described here does not pin.
+Setting it in `docker-compose.yml` puts the pinned keys inside the measurement
+— which is the right place for them, and means rotating a model key, or adding
+a model, moves the measurement and needs re-allowlisting everywhere it is
+pinned.
 
 ### The bodies do not leave the enclave
 
@@ -840,7 +897,7 @@ certificate at all.
 | `witness_inference_call_absent` | the contribution declares no inference call at all |
 | `witness_inference_call_unattestable` | the final call declares a restarted stream, for which no receipt exists or ever will |
 | `witness_inference_body_not_in_session` | the last call carries no bodies — in practice, the contribution withheld tool payloads |
-| `witness_inference_receipt_unverified` | the receipt did not verify against those bytes, **or** it was signed by a key other than `TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN` |
+| `witness_inference_receipt_unverified` | the receipt did not verify against those bytes, **or** — where `TRACE_COMMONS_WITNESS_MODEL_KEY_PINS` is set — it binds an unpinned model, binds no model at all, or was signed by a key not pinned for the model it binds. One label for all of them, deliberately: see the anti-oracle note above |
 | `witness_inference_body_too_large` | a body exceeds `TRACE_COMMONS_WITNESS_MAX_INFERENCE_BODY_BYTES` |
 
 `witness_inference_receipt_unverified` is the one to read carefully. SHA-256

@@ -373,6 +373,153 @@ pub fn signer_is_attested(receipt_signer: &str, attested_key: &str) -> bool {
     !attested_key.is_empty() && receipt_signer.eq_ignore_ascii_case(attested_key)
 }
 
+/// Why a key could not be read out of an attestation report.
+///
+/// Carries no payload. A report holds keys and identifiers, and an error
+/// string is the one place they must not end up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AttestedKeyError {
+    /// The report, or the attestation object inside it, is not the shape this
+    /// reader expects.
+    #[error("attestation report is not the expected JSON shape")]
+    Malformed,
+    /// The attestation's `signing_algo` is not `ed25519`.
+    #[error("attestation is not ed25519")]
+    NotEd25519,
+    /// `report_data` committed to a nonce other than the one we sent.
+    #[error("attestation was issued for a different nonce")]
+    NonceMismatch,
+    /// `report_data` does not begin with the `signing_address` it lists.
+    #[error("attestation report_data does not commit to the listed key and nonce")]
+    ReportDataMismatch,
+    /// `signing_address` is not 32 bytes of hex.
+    #[error("attestation signing key is not 32 bytes of hex")]
+    KeyMalformed,
+    /// The report carries no ed25519 attestation for the model asked about.
+    #[error("attestation report carries no ed25519 attestation for this model")]
+    ModelNotAttested,
+}
+
+/// The ed25519 signing key one attestation object binds to `expected_nonce`.
+///
+/// `attestation` is a single attestation object -- `gateway_attestation`, or
+/// one entry of `model_attestations`. Both carry the same four fields and both
+/// are bound the same way: the TDX quote's `report_data` is `signing_address ||
+/// request_nonce`, so a key read out of an attestation whose `report_data`
+/// carries the nonce *we* chose is one attested for us, now, rather than one
+/// copied out of an older report.
+///
+/// **This does not verify the quote.** It reads the report's self-description
+/// and checks its internal consistency.
+///
+/// The order of the checks is load-bearing. The algorithm is refused first,
+/// then the key's shape -- a short or empty `signing_address` would
+/// `strip_prefix` trivially against any `report_data` and make the binding
+/// check vacuous -- and only then is `report_data` split.
+///
+/// # Errors
+///
+/// [`AttestedKeyError`] for each of those conditions; see its variants.
+pub fn attested_ed25519_key(
+    attestation: &serde_json::Value,
+    expected_nonce: &str,
+) -> Result<String, AttestedKeyError> {
+    let field = |name: &str| {
+        attestation
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .ok_or(AttestedKeyError::Malformed)
+    };
+
+    if ReceiptAlgo::from_wire(field("signing_algo")?) != Some(ReceiptAlgo::Ed25519) {
+        return Err(AttestedKeyError::NotEd25519);
+    }
+    let key =
+        normalize_ed25519_key(field("signing_address")?).ok_or(AttestedKeyError::KeyMalformed)?;
+    // `request_nonce` is the provider's own label for the value; required for
+    // shape, but the binding trusted here is `report_data` itself, checked
+    // below against the key it names and the nonce we asked for.
+    let _ = field("request_nonce")?;
+    let report_data = field("report_data")?.to_ascii_lowercase();
+    let attested_nonce = report_data
+        .strip_prefix(key.as_str())
+        .ok_or(AttestedKeyError::ReportDataMismatch)?;
+    if attested_nonce != expected_nonce.to_ascii_lowercase() {
+        return Err(AttestedKeyError::NonceMismatch);
+    }
+    Ok(key)
+}
+
+/// The ed25519 signing keys a report attests **for one model**.
+///
+/// This is the set a hosted-model receipt's signer must be checked against,
+/// and it is not the gateway key. NEAR AI signs each hosted model's receipts
+/// with a **per-model** `provider_tee` key, and that key appears only in
+/// `model_attestations`, and only when the report was requested with
+/// `signing_algo=ed25519` -- without that query parameter the endpoint answers
+/// with the ECDSA model attestations instead, which is how it came to be
+/// missed. Checking a hosted-model receipt against
+/// `gateway_attestation.signing_address` refuses every real one, because the
+/// gateway key signs no receipts.
+///
+/// Every returned key carries the full binding discipline of
+/// [`attested_ed25519_key`]: `report_data == signing_address || nonce` for the
+/// nonce this caller sent. Entries for other models are skipped; an entry for
+/// *this* model that is malformed, not ed25519, or bound to another nonce is
+/// **refused outright** rather than skipped, so a report that mixes a sound
+/// entry with a forged one cannot be answered with the sound half.
+///
+/// More than one key can come back: a model served by several enclaves has an
+/// attestation each, and a receipt matching any of them was signed inside an
+/// attested one.
+///
+/// # Errors
+///
+/// [`AttestedKeyError::Malformed`] when the report is not JSON or has no
+/// `model_attestations` array; [`AttestedKeyError::ModelNotAttested`] when no
+/// entry names this model; and the binding errors of [`attested_ed25519_key`]
+/// when an entry that does name it fails to bind.
+pub fn model_ed25519_keys(
+    report_json: &str,
+    expected_nonce: &str,
+    model: &str,
+) -> Result<Vec<String>, AttestedKeyError> {
+    let document: serde_json::Value =
+        serde_json::from_str(report_json).map_err(|_| AttestedKeyError::Malformed)?;
+    let entries = document
+        .get("model_attestations")
+        .and_then(serde_json::Value::as_array)
+        .ok_or(AttestedKeyError::Malformed)?;
+
+    let mut keys = Vec::new();
+    for entry in entries {
+        // An absent `model_name` is not a match, and one naming another model
+        // is skipped. Exact comparison: a model identifier is a routing key,
+        // and `Qwen3.8-27B` and `Qwen3.6-35B-A3B-FP8` are different
+        // deployments with different signing keys.
+        if entry.get("model_name").and_then(serde_json::Value::as_str) != Some(model) {
+            continue;
+        }
+        keys.push(attested_ed25519_key(entry, expected_nonce)?);
+    }
+    if keys.is_empty() {
+        return Err(AttestedKeyError::ModelNotAttested);
+    }
+    Ok(keys)
+}
+
+/// Whether a verified receipt's signer is one of a model's attested keys.
+///
+/// The set form of [`signer_is_attested`], with the same guard against an
+/// empty key: an empty set matches nothing, and neither does an empty entry
+/// inside one.
+#[must_use]
+pub fn signer_is_attested_for_model(receipt_signer: &str, attested_keys: &[String]) -> bool {
+    attested_keys
+        .iter()
+        .any(|key| signer_is_attested(receipt_signer, key))
+}
+
 /// Decode a 32-byte hex digest, in either case. `None` if it is not one.
 fn decode_sha256_hex(s: &str) -> Option<[u8; 32]> {
     if s.len() != 64 {
@@ -1041,5 +1188,199 @@ mod tests {
         let err = verify_receipt(&payload, b"not the request", b"not the response", "unused")
             .expect_err("neither the signature nor the bodies are right");
         assert_eq!(err, ReceiptError::Ed25519SignatureInvalid);
+    }
+
+    // ---------------------------------------------------------------------
+    // Model attestations.
+    //
+    // Every key below is a value NEAR AI actually returned on 2026-09-06, not
+    // one authored beside this code. That distinction is the whole point: the
+    // defect this covers was shipped alongside tests proving that a report
+    // parses and that a signature verifies under a key the *same fixture*
+    // supplied, which is true of the wrong key as well as the right one.
+    // ---------------------------------------------------------------------
+
+    /// The gateway's ed25519 signing key -- the one the shipped code checked
+    /// receipts against. It signs no receipt.
+    const LIVE_GATEWAY_KEY: &str =
+        "cb6fc58f6bd685919fa42fb54d3fcfe03222e324bdda91f0bac6d5c73dc4f1c6";
+    const MODEL_A: &str = "Qwen/Qwen3.6-35B-A3B-FP8";
+    /// The `provider_tee` key that actually signs `MODEL_A`'s receipts.
+    const MODEL_A_KEY: &str = "aba45f0b8f90869baab26db02e8b01354bb8f8730769c60650cb7a635da602d4";
+    const MODEL_B: &str = "Qwen/Qwen3.8-27B";
+    /// And `MODEL_B`'s -- a different key, which is why one pin cannot serve.
+    const MODEL_B_KEY: &str = "73cf225ab4f09154ad8b299d4ac89425c7f25468a42ba9a87d09fcd4e87b8bf5";
+
+    const REPORT_NONCE: &str = "482934fb749d13aa81b2e543a253cf4d8cc847dab55a8d49989effd5023ddb5d";
+
+    /// One `model_attestations` entry, in the shape the live endpoint returns
+    /// for `signing_algo=ed25519`. `report_data` is recomposed here as
+    /// `signing_address || request_nonce` -- the binding rule the live report
+    /// satisfies -- so the fixture can be re-nonced without inventing a quote.
+    fn model_entry(model: &str, key: &str, algo: &str, nonce_in_report_data: &str) -> String {
+        format!(
+            r#"{{"model_name":"{model}","signing_address":"{key}","signing_algo":"{algo}","request_nonce":"{REPORT_NONCE}","report_data":"{key}{nonce_in_report_data}","intel_quote":"..","nvidia_payload":"..","event_log":"[]"}}"#
+        )
+    }
+
+    fn report_with(entries: &[String]) -> String {
+        format!(
+            r#"{{"gateway_attestation":{{"signing_address":"{LIVE_GATEWAY_KEY}","signing_algo":"ed25519","request_nonce":"{REPORT_NONCE}","report_data":"{LIVE_GATEWAY_KEY}{REPORT_NONCE}"}},"model_attestations":[{}]}}"#,
+            entries.join(",")
+        )
+    }
+
+    fn live_report() -> String {
+        report_with(&[
+            model_entry(MODEL_A, MODEL_A_KEY, "ed25519", REPORT_NONCE),
+            model_entry(MODEL_B, MODEL_B_KEY, "ed25519", REPORT_NONCE),
+        ])
+    }
+
+    /// The defect, stated as an assertion: a receipt signer for a hosted model
+    /// is the model's key and is **not** the gateway key. A verifier holding
+    /// the gateway key refuses it.
+    #[test]
+    fn a_hosted_model_receipt_signer_is_not_the_gateway_key() {
+        let keys = model_ed25519_keys(&live_report(), REPORT_NONCE, MODEL_A).expect("attested");
+        assert_eq!(keys, vec![MODEL_A_KEY.to_string()]);
+        assert!(
+            signer_is_attested_for_model(MODEL_A_KEY, &keys),
+            "the real signer must verify against the real model attestation"
+        );
+        assert!(
+            !signer_is_attested(MODEL_A_KEY, LIVE_GATEWAY_KEY),
+            "the gateway key is what the shipped check compared against, and \
+             it refuses every real hosted-model receipt"
+        );
+    }
+
+    /// Per-model selection. One report, two models, two different keys, and
+    /// neither model's key is accepted for the other. A single pinned key
+    /// cannot express this, which is why the pin had to become a set.
+    #[test]
+    fn each_model_gets_its_own_signer_set() {
+        let report = live_report();
+        let a = model_ed25519_keys(&report, REPORT_NONCE, MODEL_A).expect("model a");
+        let b = model_ed25519_keys(&report, REPORT_NONCE, MODEL_B).expect("model b");
+        assert_eq!(a, vec![MODEL_A_KEY.to_string()]);
+        assert_eq!(b, vec![MODEL_B_KEY.to_string()]);
+        assert!(!signer_is_attested_for_model(MODEL_A_KEY, &b));
+        assert!(!signer_is_attested_for_model(MODEL_B_KEY, &a));
+    }
+
+    /// A model the report says nothing about is not attested. Refused rather
+    /// than answered with some other model's key, and rather than answered
+    /// with an empty set that would match nothing but read as a success.
+    #[test]
+    fn a_model_the_report_does_not_name_is_refused() {
+        assert_eq!(
+            model_ed25519_keys(&live_report(), REPORT_NONCE, "Qwen/Qwen3.9-Nonexistent")
+                .unwrap_err(),
+            AttestedKeyError::ModelNotAttested
+        );
+    }
+
+    /// An entry naming this model whose `report_data` carries a different
+    /// nonce is stale or replayed; the whole lookup fails rather than the
+    /// entry being quietly dropped.
+    #[test]
+    fn a_model_attestation_for_another_nonce_is_refused() {
+        let report = report_with(&[model_entry(
+            MODEL_A,
+            MODEL_A_KEY,
+            "ed25519",
+            &"0".repeat(64),
+        )]);
+        assert_eq!(
+            model_ed25519_keys(&report, REPORT_NONCE, MODEL_A).unwrap_err(),
+            AttestedKeyError::NonceMismatch
+        );
+    }
+
+    /// `report_data` that does not begin with the key the entry lists is not
+    /// a binding to that key.
+    #[test]
+    fn a_model_attestation_whose_report_data_names_another_key_is_refused() {
+        let report = format!(
+            r#"{{"model_attestations":[{{"model_name":"{MODEL_A}","signing_address":"{MODEL_A_KEY}","signing_algo":"ed25519","request_nonce":"{REPORT_NONCE}","report_data":"{}{REPORT_NONCE}"}}]}}"#,
+            MODEL_B_KEY
+        );
+        assert_eq!(
+            model_ed25519_keys(&report, REPORT_NONCE, MODEL_A).unwrap_err(),
+            AttestedKeyError::ReportDataMismatch
+        );
+    }
+
+    /// Without `signing_algo=ed25519` on the request the endpoint answers with
+    /// ECDSA model attestations. Those bind no receipt-signing key this crate
+    /// can use, and are refused rather than read as if they were ed25519.
+    #[test]
+    fn an_ecdsa_model_attestation_is_refused() {
+        let report = report_with(&[model_entry(MODEL_A, MODEL_A_KEY, "ecdsa", REPORT_NONCE)]);
+        assert_eq!(
+            model_ed25519_keys(&report, REPORT_NONCE, MODEL_A).unwrap_err(),
+            AttestedKeyError::NotEd25519
+        );
+    }
+
+    /// A short or empty `signing_address` would `strip_prefix` against any
+    /// `report_data` and make the binding check vacuous, so the shape is
+    /// checked before the split.
+    #[test]
+    fn a_model_attestation_key_that_is_not_32_bytes_is_refused() {
+        for bad in ["", "ab", &"z".repeat(64)] {
+            let report = report_with(&[model_entry(MODEL_A, bad, "ed25519", REPORT_NONCE)]);
+            assert_eq!(
+                model_ed25519_keys(&report, REPORT_NONCE, MODEL_A).unwrap_err(),
+                AttestedKeyError::KeyMalformed,
+                "key {bad:?} should be refused as malformed"
+            );
+        }
+    }
+
+    /// A report with no `model_attestations` array at all -- what the endpoint
+    /// returns for a brokered model -- is malformed for this purpose, not an
+    /// empty success.
+    #[test]
+    fn a_report_without_model_attestations_is_malformed() {
+        assert_eq!(
+            model_ed25519_keys(r#"{"gateway_attestation":{}}"#, REPORT_NONCE, MODEL_A).unwrap_err(),
+            AttestedKeyError::Malformed
+        );
+        assert_eq!(
+            model_ed25519_keys("not json", REPORT_NONCE, MODEL_A).unwrap_err(),
+            AttestedKeyError::Malformed
+        );
+    }
+
+    /// An empty attested set matches nothing. This is the way the set form
+    /// would fail open.
+    #[test]
+    fn an_empty_attested_set_matches_nothing() {
+        assert!(!signer_is_attested_for_model(MODEL_A_KEY, &[]));
+        assert!(!signer_is_attested_for_model(MODEL_A_KEY, &[String::new()]));
+        assert!(
+            signer_is_attested_for_model(
+                &MODEL_A_KEY.to_ascii_uppercase(),
+                &[MODEL_A_KEY.to_string()]
+            ),
+            "case is a spelling of one key, not a different key"
+        );
+    }
+
+    /// Several enclaves can serve one model; a receipt from any attested one
+    /// is accepted, and one from an unattested key still is not.
+    #[test]
+    fn a_model_served_by_two_enclaves_yields_both_keys() {
+        let report = report_with(&[
+            model_entry(MODEL_A, MODEL_A_KEY, "ed25519", REPORT_NONCE),
+            model_entry(MODEL_A, MODEL_B_KEY, "ed25519", REPORT_NONCE),
+        ]);
+        let keys = model_ed25519_keys(&report, REPORT_NONCE, MODEL_A).expect("both");
+        assert_eq!(keys.len(), 2);
+        assert!(signer_is_attested_for_model(MODEL_A_KEY, &keys));
+        assert!(signer_is_attested_for_model(MODEL_B_KEY, &keys));
+        assert!(!signer_is_attested_for_model(LIVE_GATEWAY_KEY, &keys));
     }
 }

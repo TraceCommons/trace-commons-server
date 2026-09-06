@@ -159,28 +159,30 @@
 //! operator as [`WitnessError::InferenceAttestationMissing`], which is
 //! fail-closed but less informative.
 //!
-//! # The model is not bound, and this witness cannot make it so
+//! # The model, and which form of receipt binds it
 //!
-//! `verify_receipt` supports a three-part receipt text whose leading part is
-//! the model, and an earlier version of this module refused anything else.
-//! That was wrong about the provider. The current NEAR AI API signs the
-//! **two-part** form -- `<requestHash>:<responseHash>`, no model prefix -- and
-//! supplies the model as a query parameter on retrieval
-//! (`GET /v1/signature/{chat_id}?model=...`). A query parameter is not signed
-//! and is chosen by whoever fetches the receipt, so it establishes nothing. A
-//! policy refusing the two-part form would therefore refuse every real
-//! receipt, and a model allowlist checked against it would be a control that
-//! cannot fail.
+//! `verify_receipt` supports both forms of receipt text: the **two-part**
+//! `<requestHash>:<responseHash>`, which binds no model, and the
+//! **three-part** `{model}:{requestHash}:{responseHash}`, whose leading part
+//! is covered by the signature.
 //!
-//! So there is no model policy here, and its absence is a **limitation of the
-//! provider API**, not a decision this deployment made. The model named in the
-//! attested request body is hash-bound and can be read, but it is the model
-//! IronWire asked for rather than the model that served -- and on a policy
-//! swap those differ, which is exactly the substitution a bound model would
-//! have caught. When a three-part receipt does arrive, `verify_receipt`
-//! compares its bound model against the request body's `model` and a mismatch
-//! surfaces as [`WitnessError::InferenceReceiptUnverified`]; nothing more is
-//! enforced until the provider signs one.
+//! A hosted NEAR AI model returns the three-part form, so a real receipt names
+//! its own model. That -- and only that -- is the model a pin is looked up by
+//! below. The `model` query parameter on retrieval
+//! (`GET /v1/signature/{chat_id}?model=...`) is not signed and is chosen by
+//! whoever fetches the receipt, so it establishes nothing and is not read.
+//!
+//! An earlier version of this module asserted the provider signs only the
+//! two-part form and concluded no model policy was possible. That was wrong
+//! about the provider, and the pin built on that belief -- one provider-wide
+//! gateway key -- could not have worked, because the signing key is per model.
+//!
+//! The model named in the attested request body is also hash-bound and is
+//! read, but only as the value `verify_receipt` compares a three-part
+//! receipt's bound model against; a mismatch surfaces as
+//! [`WitnessError::InferenceReceiptUnverified`]. It is the model IronWire
+//! asked for rather than the model that served, and on a policy swap those
+//! differ -- so it is not what a pin is keyed by.
 //!
 //! # Who signed, not just that a signature verifies
 //!
@@ -189,24 +191,37 @@
 //! that, the submitter's included -- so on its own it is a statement about
 //! self-consistency, not about provenance.
 //!
-//! [`InferenceAttestationPolicy::pinning_gateway_key`] is what turns it into
-//! one. NEAR AI's attestation report binds the gateway's ed25519 signing key
-//! into a TDX quote (`report_data == signing_address || nonce`), and the
-//! contributor client already compares a fetched receipt's signer against a
-//! freshly-nonced report. A check the submitter runs on its own submission is
-//! not a bound: a patched client skips it. The pin is the same comparison,
-//! made here, against a key the operator configured.
+//! [`InferenceAttestationPolicy::pinning_model_keys`] is what turns it into
+//! one. NEAR AI's attestation report binds an ed25519 signing key into a TDX
+//! quote (`report_data == signing_address || nonce`), and the contributor
+//! client compares a fetched receipt's signer against a freshly-nonced report.
+//! A check the submitter runs on its own submission is not a bound: a patched
+//! client skips it. The pin is the same comparison, made here, against keys
+//! the operator configured.
 //!
-//! A pin rather than a live report fetch, because this module makes no
+//! **Per model, and that is the correction.** An earlier version of this
+//! pinned a single `gateway_attestation.signing_address`. That key signs no
+//! receipt. A hosted-model receipt comes back `signature_kind:
+//! "provider_tee"` with a signer that differs per model -- the key that
+//! appears in the report's `model_attestations`, and only when the report was
+//! requested with `signing_algo=ed25519`. One key therefore cannot match the
+//! signer set, and the shipped pin refused every real receipt. The pin is a
+//! map from model name to that model's attested key set, and the model is
+//! read out of the **receipt's own text**, which is `{model}:{request_sha256}:
+//! {response_sha256}`.
+//!
+//! Pins rather than a live report fetch, because this module makes no
 //! outbound call on the request path and one that did would be trusting a
 //! report fetched over a path an attacker able to substitute a signing key is
-//! also positioned to influence. And ed25519 only: the ECDSA signer is in no
-//! attestation report, so an ECDSA receipt cannot satisfy a pin.
+//! also positioned to influence. The operator derives the keys out of band
+//! with a nonce-bound `signing_algo=ed25519` report; see
+//! `deploy/witness/README.md`. And ed25519 only: the ECDSA signer is in no
+//! ed25519 attestation, so an ECDSA receipt cannot satisfy a pin.
 //!
 //! Dormant when unset, and a pin failure folds into
 //! [`WitnessError::InferenceReceiptUnverified`] with every other receipt
 //! failure -- a label of its own would make an unauthenticated route an oracle
-//! for the pinned key.
+//! for the pinned keys.
 //!
 //! # Nothing here is logged
 //!
@@ -225,8 +240,11 @@ use trace_commons_protocol::trace_contribution::{
     TraceContributionEventType,
 };
 
+use std::collections::BTreeMap;
+
 use crate::near_attestation::receipt::{
-    ReceiptAlgo, ReceiptPayload, normalize_ed25519_key, signer_is_attested, verify_receipt,
+    ReceiptAlgo, ReceiptPayload, normalize_ed25519_key, signer_is_attested_for_model,
+    verify_receipt,
 };
 
 use super::WitnessError;
@@ -247,9 +265,10 @@ pub const DEFAULT_MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 pub struct InferenceAttestationPolicy {
     required: bool,
     max_body_bytes: usize,
-    /// The gateway ed25519 signing key this deployment trusts, normalised.
-    /// `None` is the dormant default; see [`Self::pinning_gateway_key`].
-    gateway_key_pin: Option<String>,
+    /// Model name -> the ed25519 receipt-signing keys this deployment trusts
+    /// for it, normalised. `None` is the dormant default; see
+    /// [`Self::pinning_model_keys`].
+    model_key_pins: Option<BTreeMap<String, Vec<String>>>,
 }
 
 /// The requirement was configured in a way that would not require anything.
@@ -257,14 +276,58 @@ pub struct InferenceAttestationPolicy {
 #[error("the attested-inference requirement is configured to require nothing")]
 pub struct PolicyMisconfigured;
 
-/// The configured gateway key pin is not a 32-byte ed25519 key.
+/// The configured model key pins are not a usable `model=key` set.
 ///
 /// Carries nothing. The value is deployment configuration and, on a
-/// misconfiguration, is quite possibly a key material paste; it does not
+/// misconfiguration, is quite possibly a key-material paste; it does not
 /// belong in an error string that will be logged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("the pinned gateway signing key is not 32 bytes of hex")]
-pub struct GatewayKeyPinMalformed;
+#[error("the pinned model signing keys are not a `model=key` set of 32-byte ed25519 keys")]
+pub struct ModelKeyPinMalformed;
+
+/// Parse the `model=key[,model=key...]` spelling an operator configures.
+///
+/// One model may appear more than once, which is how a model served by
+/// several enclaves is pinned: the keys accumulate into that model's set.
+///
+/// Whitespace around each element is trimmed, because a wrapped or
+/// pretty-printed environment value is a spelling of the same set. Everything
+/// else is refused: an element with no `=`, an empty model name, a key that is
+/// not 32 bytes of hex, and an empty overall set. An operator who set the
+/// variable to nothing would otherwise get a witness that pins nothing while
+/// appearing configured.
+///
+/// # Errors
+///
+/// [`ModelKeyPinMalformed`] for each of those.
+pub fn parse_model_key_pins(
+    spec: &str,
+) -> Result<BTreeMap<String, Vec<String>>, ModelKeyPinMalformed> {
+    let mut pins: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for element in spec.split(',') {
+        let element = element.trim();
+        if element.is_empty() {
+            continue;
+        }
+        // `split_once`, not `split`: a model name never contains `=`, but a
+        // key never does either, and an element with two of them is not
+        // something to guess at.
+        let (model, key) = element.split_once('=').ok_or(ModelKeyPinMalformed)?;
+        let model = model.trim();
+        if model.is_empty() || key.contains('=') {
+            return Err(ModelKeyPinMalformed);
+        }
+        let key = normalize_ed25519_key(key).ok_or(ModelKeyPinMalformed)?;
+        let keys = pins.entry(model.to_string()).or_default();
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    if pins.is_empty() {
+        return Err(ModelKeyPinMalformed);
+    }
+    Ok(pins)
+}
 
 impl InferenceAttestationPolicy {
     /// No requirement: a submission carrying no receipt is certified.
@@ -276,17 +339,18 @@ impl InferenceAttestationPolicy {
         Self {
             required: false,
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
-            gateway_key_pin: None,
+            model_key_pins: None,
         }
     }
 
     /// Refuse any contribution whose last declared inference call does not
     /// carry a verified receipt.
     ///
-    /// There is no model parameter, and its absence is the provider's doing
-    /// rather than this deployment's: the receipts NEAR AI signs today bind no
-    /// model, so an allowlist checked against one would be a control that
-    /// cannot fail. See the module docs.
+    /// There is no model parameter here: a *requirement* is about whether a
+    /// receipt must be present, not about which model may have served. Which
+    /// models are trusted, and under which keys, is
+    /// [`Self::pinning_model_keys`], and the two are deliberately
+    /// independent.
     pub fn required(max_body_bytes: usize) -> Result<Self, PolicyMisconfigured> {
         if max_body_bytes == 0 {
             return Err(PolicyMisconfigured);
@@ -294,50 +358,85 @@ impl InferenceAttestationPolicy {
         Ok(Self {
             required: true,
             max_body_bytes,
-            gateway_key_pin: None,
+            model_key_pins: None,
         })
     }
 
-    /// Trust receipts signed by exactly this gateway ed25519 key, and no
-    /// other.
+    /// Trust a receipt only when the model it binds is pinned and its signer
+    /// is one of that model's attested ed25519 keys.
     ///
     /// # What this closes, and what it does not
     ///
     /// Without it, `verify_receipt` establishes that *someone* signed these
     /// bytes and that the signature is self-consistent -- it does not
-    /// establish *who*. NEAR AI's attestation report binds the gateway's
-    /// ed25519 signing key into a TDX quote (`report_data == signing_address
-    /// || nonce`), and the contributor client checks a fetched receipt's
-    /// signer against a freshly-nonced report. But a client-side check is a
-    /// check the submitter performs on itself: a patched client simply does
-    /// not perform it. This is the same comparison made where the decision is
-    /// enforced, against a key the *operator* configured.
+    /// establish *who*. NEAR AI's attestation report binds an ed25519 signing
+    /// key into a TDX quote (`report_data == signing_address || nonce`), and
+    /// the contributor client checks a fetched receipt's signer against a
+    /// freshly-nonced report. But a client-side check is a check the submitter
+    /// performs on itself: a patched client simply does not perform it. This
+    /// is the same comparison made where the decision is enforced, against
+    /// keys the *operator* configured.
     ///
-    /// It is a pin rather than a live report fetch on purpose. A witness
-    /// makes no outbound network calls on the request path, and one that did
-    /// would be trusting a report fetched over a path an attacker who could
-    /// substitute a signing key is also positioned to influence. An operator
-    /// obtains the key once, out of band, and pins it -- the same shape as
-    /// every other measurement this deployment pins.
+    /// # Per model, because there is no single receipt-signing key
     ///
-    /// **ed25519 only, and that is the point.** Only the ed25519 signer
-    /// appears in the gateway's attestation report; the ECDSA signer appears
-    /// in none. A pin is therefore a 32-byte key, and an ECDSA receipt cannot
-    /// satisfy one however well it verifies.
+    /// This replaces a pin on `gateway_attestation.signing_address`, which was
+    /// wrong in a way that could not be made right by tightening it: the
+    /// gateway key signs no receipt at all. A hosted-model receipt is
+    /// `signature_kind: "provider_tee"` and its signer is the key that model's
+    /// entry in `model_attestations` carries, which differs per model. Pinning
+    /// one key refused every real receipt.
     ///
-    /// Dormant by default. An unset pin leaves every existing path exactly as
-    /// it was, which is what makes this safe to ship ahead of the operator
-    /// procedure for obtaining the key.
+    /// The model compared against is the one in the **receipt's own text**
+    /// (`{model}:{request_sha256}:{response_sha256}`), not one read beside it,
+    /// so the receipt commits to the model whose key it is checked against. A
+    /// receipt that binds no model -- the two-part form -- cannot be placed
+    /// against any pin and is refused.
+    ///
+    /// # Pins rather than a fetch
+    ///
+    /// A witness makes no outbound network calls on the request path, and one
+    /// that did would be trusting a report fetched over a path an attacker who
+    /// could substitute a signing key is also positioned to influence. The
+    /// operator derives each model's key set once, out of band, from a
+    /// nonce-bound `signing_algo=ed25519` attestation report -- the same
+    /// binding `trace_commons_attestation::receipt::model_ed25519_keys`
+    /// enforces, and the same one the client applies live. See
+    /// `deploy/witness/README.md` for the procedure.
+    ///
+    /// **ed25519 only, and that is the point.** Only ed25519 attestations
+    /// carry a receipt-signing key; the ECDSA signer appears in none. A pin is
+    /// therefore a 32-byte key, and an ECDSA receipt cannot satisfy one
+    /// however well it verifies.
+    ///
+    /// Dormant by default. Unset pins leave every existing path exactly as it
+    /// was.
     ///
     /// # Errors
     ///
-    /// [`GatewayKeyPinMalformed`] when `key` is not 32 bytes of hex --
-    /// including empty, which is how an operator who set the variable to
-    /// nothing would otherwise get a witness that pins nothing while
-    /// appearing configured. Refused here, where the policy is built, so a
-    /// witness fails to start rather than holding a pin that can never match.
-    pub fn pinning_gateway_key(mut self, key: &str) -> Result<Self, GatewayKeyPinMalformed> {
-        self.gateway_key_pin = Some(normalize_ed25519_key(key).ok_or(GatewayKeyPinMalformed)?);
+    /// [`ModelKeyPinMalformed`] when the set is empty or any key is not 32
+    /// bytes of hex -- including empty, which is how an operator who set the
+    /// variable to nothing would otherwise get a witness that pins nothing
+    /// while appearing configured. Refused here, where the policy is built, so
+    /// a witness fails to start rather than holding pins that can never match.
+    pub fn pinning_model_keys(
+        mut self,
+        pins: BTreeMap<String, Vec<String>>,
+    ) -> Result<Self, ModelKeyPinMalformed> {
+        if pins.is_empty() {
+            return Err(ModelKeyPinMalformed);
+        }
+        let mut normalised: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (model, keys) in pins {
+            if model.trim().is_empty() || keys.is_empty() {
+                return Err(ModelKeyPinMalformed);
+            }
+            let keys = keys
+                .iter()
+                .map(|key| normalize_ed25519_key(key).ok_or(ModelKeyPinMalformed))
+                .collect::<Result<Vec<_>, _>>()?;
+            normalised.insert(model, keys);
+        }
+        self.model_key_pins = Some(normalised);
         Ok(self)
     }
 
@@ -351,14 +450,15 @@ impl InferenceAttestationPolicy {
         self.max_body_bytes
     }
 
-    /// The pinned gateway signing key, normalised, or `None` where no pin is
-    /// configured.
+    /// The pinned per-model signing keys, normalised, or `None` where no pins
+    /// are configured.
     ///
-    /// A public key, so returning it is not a disclosure -- but it is still
-    /// deployment configuration, and no caller may put it on an operational
-    /// surface except as a hash prefix.
-    pub fn gateway_key_pin(&self) -> Option<&str> {
-        self.gateway_key_pin.as_deref()
+    /// Public keys, so returning them is not a disclosure -- but they are
+    /// still deployment configuration, and no caller may put one on an
+    /// operational surface except as a hash prefix. The model names are
+    /// likewise configuration; a count and a digest are what an operator gets.
+    pub fn model_key_pins(&self) -> Option<&BTreeMap<String, Vec<String>>> {
+        self.model_key_pins.as_ref()
     }
 }
 
@@ -474,13 +574,14 @@ pub fn check_inference_attestation(
         return Err(WitnessError::InferenceReceiptTooLarge);
     }
 
-    // Best-effort, and unused by every receipt the provider signs today: the
-    // two-part form binds no model, so `verify_receipt` ignores this. It is
-    // read out of the hash-bound request body rather than from a field beside
-    // the receipt so that if a three-part receipt ever does arrive, the model
-    // it is checked against is one the receipt itself commits to instead of
-    // one the caller typed. An unparseable body is not a refusal of its own:
-    // the hashes are what matter, and they are checked next either way.
+    // What a three-part receipt's bound model is compared against; the
+    // two-part form binds no model, so `verify_receipt` ignores it there. It
+    // is read out of the hash-bound request body rather than from a field
+    // beside the receipt, so the comparison is against bytes the receipt
+    // commits to instead of something the caller typed. An unparseable body is
+    // not a refusal of its own: the hashes are what matter, and they are
+    // checked next either way. Note this is the model IronWire *asked* for --
+    // the pins below are keyed by the model the receipt itself names.
     let requested_model = serde_json::from_str::<Value>(request_body)
         .ok()
         .as_ref()
@@ -492,10 +593,9 @@ pub fn check_inference_attestation(
     // One label for every `ReceiptError`; see the module's note on why a
     // re-serialised capture is indistinguishable from a forgery here.
     //
-    // The verdict's `model` is `None` for every receipt the provider signs
-    // today and its hashes are the ones just checked, so neither is read. Its
-    // `signing_address` is the inference gateway's key, and that one is read:
-    // see the pin below.
+    // The verdict's hashes are the ones just checked, so they are not read
+    // again. Its `model` and its `signing_address` both are: see the pins
+    // below.
     let verdict = verify_receipt(
         receipt,
         request_body.as_bytes(),
@@ -508,29 +608,44 @@ pub fn check_inference_attestation(
     //
     // `verify_receipt` alone says a well-formed signature over these bytes
     // verifies against the key the receipt itself names -- which any key
-    // satisfies, including one the submitter holds. The pin is the operator's
-    // statement of which key that may be. It is the same comparison the
-    // contributor client makes against a freshly-fetched attestation report,
-    // made here, where the decision is actually enforced and where a patched
-    // client cannot skip it.
+    // satisfies, including one the submitter holds. The pins are the
+    // operator's statement of which keys may sign for which model. It is the
+    // same comparison the contributor client makes against a freshly-fetched
+    // attestation report, made here, where the decision is actually enforced
+    // and where a patched client cannot skip it.
     //
-    // ed25519 only: the ECDSA signer is in no attestation report, so an ECDSA
+    // The model comes from `verdict.model`, which is the leading part of the
+    // receipt's signed `text` -- so the receipt itself commits to the model
+    // whose key set it is checked against. A receipt binding no model (the
+    // two-part form) can be placed against no pin and is refused; picking a
+    // pin for it by any other means would be checking it against a model the
+    // signature never covered.
+    //
+    // ed25519 only: the ECDSA signer is in no ed25519 attestation, so an ECDSA
     // receipt cannot satisfy a pin. The scheme is checked explicitly rather
     // than left to the string comparison, which would also reject it (a
     // 20-byte `0x` address never equals a 32-byte key) but for an incidental
     // reason that a future address format could stop being true of.
     //
-    // Folded into `InferenceReceiptUnverified` deliberately. A distinct label
-    // would turn this route into an oracle for the pinned key: a prober could
-    // learn from the refusal alone whether its receipt was signed by the key
-    // this deployment trusts. Nothing is logged here for the same reason the
-    // rest of this module logs nothing -- the key and the signer are both
-    // caller-visible data on one side and deployment configuration on the
+    // Every one of these -- unpinned model, absent model, wrong scheme, wrong
+    // signer -- folds into `InferenceReceiptUnverified`, the same single label
+    // every other receipt failure uses. A distinct label would turn this
+    // unauthenticated route into an oracle: a prober could learn from the
+    // refusal alone which models this deployment pins and whether its receipt
+    // carried a trusted key. Nothing is logged here for the same reason the
+    // rest of this module logs nothing -- the keys and the signer are
+    // deployment configuration on one side and caller-visible data on the
     // other, and neither belongs on a per-request surface.
-    if let Some(pinned) = policy.gateway_key_pin() {
-        let signed_by_the_pinned_gateway = verdict.signing_algo == ReceiptAlgo::Ed25519
-            && signer_is_attested(&verdict.signing_address, pinned);
-        if !signed_by_the_pinned_gateway {
+    if let Some(pins) = policy.model_key_pins() {
+        let attested = verdict
+            .model
+            .as_deref()
+            .and_then(|model| pins.get(model))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let signed_by_a_pinned_key = verdict.signing_algo == ReceiptAlgo::Ed25519
+            && signer_is_attested_for_model(&verdict.signing_address, attested);
+        if !signed_by_a_pinned_key {
             return Err(WitnessError::InferenceReceiptUnverified);
         }
     }
@@ -929,7 +1044,7 @@ mod tests {
             Some(&two_part_receipt(&request, &response)),
             &raw,
         )
-        .expect("the two-part form is what NEAR AI signs today");
+        .expect("the two-part form still verifies where nothing is pinned");
         assert_eq!(outcome.verified, 1);
     }
 
@@ -1182,31 +1297,72 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // The gateway signing-key pin.
+    // The per-model receipt signing-key pins.
     // ---------------------------------------------------------------
 
     /// Two fixed ed25519 seeds, for the same reason the secp256k1 key above
     /// is fixed: a generated key makes a failure unreproducible.
-    const GATEWAY_SEED_HEX: &str =
+    const MODEL_A_SEED_HEX: &str =
         "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
     const IMPOSTOR_SEED_HEX: &str =
         "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb";
+    const MODEL_B_SEED_HEX: &str =
+        "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7";
+
+    /// A second model, so per-model selection has something to select
+    /// between.
+    const OTHER_MODEL: &str = "Qwen/Qwen3.6-35B-A3B-FP8";
+
+    /// The gateway's live ed25519 signing key, captured 2026-09-06. It is here
+    /// to be *refused*: the shipped pin compared receipt signers against this
+    /// key, and it signs no receipt.
+    const LIVE_GATEWAY_KEY: &str =
+        "cb6fc58f6bd685919fa42fb54d3fcfe03222e324bdda91f0bac6d5c73dc4f1c6";
+    /// The live `provider_tee` signer for `OTHER_MODEL`, same capture. A
+    /// different key from the gateway's, which is the defect in one line.
+    const LIVE_MODEL_KEY: &str = "aba45f0b8f90869baab26db02e8b01354bb8f8730769c60650cb7a635da602d4";
 
     fn ed25519_pair(seed_hex: &str) -> ring::signature::Ed25519KeyPair {
         ring::signature::Ed25519KeyPair::from_seed_unchecked(&hex::decode(seed_hex).expect("hex"))
             .expect("seed")
     }
 
-    /// The public key in the spelling NEAR AI renders and the pin takes: 64
+    /// The public key in the spelling NEAR AI renders and a pin takes: 64
     /// lowercase hex characters, no `0x`.
     fn ed25519_key_hex(seed_hex: &str) -> String {
         use ring::signature::KeyPair as _;
         hex::encode(ed25519_pair(seed_hex).public_key().as_ref())
     }
 
-    /// A two-part ed25519 receipt over these exact bytes -- the form NEAR AI
-    /// signs today, in the scheme whose signer its attestation report binds.
-    fn ed25519_receipt(seed_hex: &str, request_body: &str, response_body: &str) -> ReceiptPayload {
+    /// A three-part ed25519 receipt over these exact bytes -- the form a
+    /// hosted model returns, whose leading part is the model name the
+    /// signature covers.
+    fn ed25519_receipt(
+        seed_hex: &str,
+        model: &str,
+        request_body: &str,
+        response_body: &str,
+    ) -> ReceiptPayload {
+        let text = format!(
+            "{model}:{}:{}",
+            sha256_hex(request_body),
+            sha256_hex(response_body)
+        );
+        let signature = ed25519_pair(seed_hex).sign(text.as_bytes());
+        ReceiptPayload {
+            signature: hex::encode(signature.as_ref()),
+            signing_address: ed25519_key_hex(seed_hex),
+            text,
+            signing_algo: ReceiptAlgo::Ed25519,
+        }
+    }
+
+    /// The two-part ed25519 form, which binds no model at all.
+    fn two_part_ed25519_receipt(
+        seed_hex: &str,
+        request_body: &str,
+        response_body: &str,
+    ) -> ReceiptPayload {
         let text = format!("{}:{}", sha256_hex(request_body), sha256_hex(response_body));
         let signature = ed25519_pair(seed_hex).sign(text.as_bytes());
         ReceiptPayload {
@@ -1217,26 +1373,46 @@ mod tests {
         }
     }
 
-    fn pinned(policy: InferenceAttestationPolicy, key: &str) -> InferenceAttestationPolicy {
-        policy.pinning_gateway_key(key).expect("a well formed pin")
+    fn pins(entries: &[(&str, &str)]) -> BTreeMap<String, Vec<String>> {
+        let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (model, key) in entries {
+            map.entry((*model).to_string())
+                .or_default()
+                .push((*key).to_string());
+        }
+        map
     }
 
-    /// The positive control for every refusal below: a receipt signed by the
-    /// pinned key is admitted, so the refusals are the pin and not the
-    /// ed25519 fixture.
+    fn pinned(
+        policy: InferenceAttestationPolicy,
+        entries: &[(&str, &str)],
+    ) -> InferenceAttestationPolicy {
+        policy
+            .pinning_model_keys(pins(entries))
+            .expect("well formed pins")
+    }
+
+    /// The positive control for every refusal below: a receipt bound to a
+    /// pinned model and signed by that model's pinned key is admitted, so the
+    /// refusals are the pins and not the ed25519 fixture.
     #[test]
-    fn a_receipt_signed_by_the_pinned_gateway_key_is_admitted() {
+    fn a_receipt_signed_by_the_models_pinned_key_is_admitted() {
         let request = request_body(MODEL, "hello");
         let response = response_body("hi there");
         let raw = contribution(&[(request.clone(), response.clone())]);
-        let policy = pinned(required(), &ed25519_key_hex(GATEWAY_SEED_HEX));
+        let policy = pinned(required(), &[(MODEL, &ed25519_key_hex(MODEL_A_SEED_HEX))]);
 
         let outcome = check(
             &policy,
-            Some(&ed25519_receipt(GATEWAY_SEED_HEX, &request, &response)),
+            Some(&ed25519_receipt(
+                MODEL_A_SEED_HEX,
+                MODEL,
+                &request,
+                &response,
+            )),
             &raw,
         )
-        .expect("a receipt from the pinned key");
+        .expect("a receipt from this model's pinned key");
         assert_eq!(
             outcome,
             InferenceAttestationOutcome {
@@ -1246,14 +1422,154 @@ mod tests {
         );
     }
 
+    /// The defect, as a witness-level assertion. The shipped code compared
+    /// every receipt signer against one gateway key. Pin that key -- for the
+    /// right model, with everything else correct -- and a receipt signed by
+    /// the model's real `provider_tee` key is refused. Both values are live
+    /// captures, and they are different keys.
+    #[test]
+    fn the_gateway_key_pins_nothing_a_hosted_model_ever_signs() {
+        assert_ne!(
+            LIVE_GATEWAY_KEY, LIVE_MODEL_KEY,
+            "the gateway key and the model's receipt signer are different keys; \
+             a pin on the first can never match a receipt from the second"
+        );
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+
+        // The shipped shape: the gateway key, trusted for this model.
+        let gateway_pinned = pinned(required(), &[(MODEL, LIVE_GATEWAY_KEY)]);
+        assert_eq!(
+            check(
+                &gateway_pinned,
+                Some(&ed25519_receipt(
+                    MODEL_A_SEED_HEX,
+                    MODEL,
+                    &request,
+                    &response
+                )),
+                &raw
+            ),
+            Err(WitnessError::InferenceReceiptUnverified),
+            "a receipt signed by anything other than the gateway key is refused \
+             under a gateway pin -- which is every real receipt"
+        );
+
+        // The fix: the model's own attested key.
+        let model_pinned = pinned(required(), &[(MODEL, &ed25519_key_hex(MODEL_A_SEED_HEX))]);
+        assert!(
+            check(
+                &model_pinned,
+                Some(&ed25519_receipt(
+                    MODEL_A_SEED_HEX,
+                    MODEL,
+                    &request,
+                    &response
+                )),
+                &raw
+            )
+            .is_ok()
+        );
+    }
+
+    /// Per-model selection. Two models, two keys, one policy: each model's
+    /// receipt is admitted under its own key and refused under the other's.
+    /// A single pinned key cannot express this.
+    #[test]
+    fn each_models_receipt_is_checked_against_that_models_keys() {
+        let policy = pinned(
+            required(),
+            &[
+                (MODEL, &ed25519_key_hex(MODEL_A_SEED_HEX)),
+                (OTHER_MODEL, &ed25519_key_hex(MODEL_B_SEED_HEX)),
+            ],
+        );
+
+        for (model, right_seed, wrong_seed) in [
+            (MODEL, MODEL_A_SEED_HEX, MODEL_B_SEED_HEX),
+            (OTHER_MODEL, MODEL_B_SEED_HEX, MODEL_A_SEED_HEX),
+        ] {
+            let request = request_body(model, "hello");
+            let response = response_body("hi there");
+            let raw = contribution(&[(request.clone(), response.clone())]);
+            assert!(
+                check(
+                    &policy,
+                    Some(&ed25519_receipt(right_seed, model, &request, &response)),
+                    &raw
+                )
+                .is_ok(),
+                "{model} must accept its own attested signer"
+            );
+            assert_eq!(
+                check(
+                    &policy,
+                    Some(&ed25519_receipt(wrong_seed, model, &request, &response)),
+                    &raw
+                ),
+                Err(WitnessError::InferenceReceiptUnverified),
+                "{model} must not accept another model's attested signer"
+            );
+        }
+    }
+
+    /// A receipt bound to a model this deployment pins nothing for is refused
+    /// rather than checked against some other model's keys. Both bodies and
+    /// the receipt agree on the model; the only thing missing is a pin.
+    #[test]
+    fn a_receipt_for_an_unpinned_model_is_refused() {
+        let request = request_body(OTHER_MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        let policy = pinned(required(), &[(MODEL, &ed25519_key_hex(MODEL_A_SEED_HEX))]);
+
+        assert_eq!(
+            check(
+                &policy,
+                Some(&ed25519_receipt(
+                    MODEL_A_SEED_HEX,
+                    OTHER_MODEL,
+                    &request,
+                    &response
+                )),
+                &raw
+            ),
+            Err(WitnessError::InferenceReceiptUnverified),
+            "the signer is pinned, but not for this model"
+        );
+    }
+
+    /// A receipt binding no model cannot be placed against any pin, so a
+    /// pinning witness refuses it. Fail-closed: there is no model the
+    /// signature covers, and picking one from the request body would be
+    /// checking the receipt against something it never committed to.
+    #[test]
+    fn a_receipt_binding_no_model_cannot_satisfy_a_pin() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        let two_part = two_part_ed25519_receipt(MODEL_A_SEED_HEX, &request, &response);
+
+        // It verifies as a receipt: an unpinned witness admits it, so the
+        // refusal below is the pin and not the fixture.
+        assert!(check(&required(), Some(&two_part), &raw).is_ok());
+
+        let policy = pinned(required(), &[(MODEL, &ed25519_key_hex(MODEL_A_SEED_HEX))]);
+        assert_eq!(
+            check(&policy, Some(&two_part), &raw),
+            Err(WitnessError::InferenceReceiptUnverified)
+        );
+    }
+
     /// The whole point. A receipt that is perfectly well signed, over exactly
-    /// these bytes, by a key that is not the pinned one.
+    /// these bytes, for exactly this model, by a key that is not pinned.
     #[test]
     fn a_receipt_from_an_unpinned_key_is_refused_even_though_it_verifies() {
         let request = request_body(MODEL, "hello");
         let response = response_body("hi there");
         let raw = contribution(&[(request.clone(), response.clone())]);
-        let impostor = ed25519_receipt(IMPOSTOR_SEED_HEX, &request, &response);
+        let impostor = ed25519_receipt(IMPOSTOR_SEED_HEX, MODEL, &request, &response);
 
         // It verifies as a receipt: an unpinned witness admits it.
         assert!(
@@ -1262,7 +1578,7 @@ mod tests {
              below proves nothing"
         );
 
-        let policy = pinned(required(), &ed25519_key_hex(GATEWAY_SEED_HEX));
+        let policy = pinned(required(), &[(MODEL, &ed25519_key_hex(MODEL_A_SEED_HEX))]);
         assert_eq!(
             check(&policy, Some(&impostor), &raw),
             Err(WitnessError::InferenceReceiptUnverified),
@@ -1272,22 +1588,40 @@ mod tests {
     /// Unset is unchanged. The same contribution and the same receipts, under
     /// a policy built the way every existing deployment builds one.
     #[test]
-    fn an_unset_pin_leaves_both_paths_exactly_as_they_were() {
+    fn unset_pins_leave_both_paths_exactly_as_they_were() {
         let request = request_body(MODEL, "hello");
         let response = response_body("hi there");
         let raw = contribution(&[(request.clone(), response.clone())]);
 
-        assert_eq!(required().gateway_key_pin(), None);
-        assert_eq!(
-            InferenceAttestationPolicy::not_required().gateway_key_pin(),
-            None
+        assert!(required().model_key_pins().is_none());
+        assert!(
+            InferenceAttestationPolicy::not_required()
+                .model_key_pins()
+                .is_none()
         );
-        // Both schemes, and the ECDSA one in particular: a witness with no
-        // pin must keep admitting the receipts it admitted before.
+        // Every shape a witness with no pins admitted before it must keep
+        // admitting: the two-part ed25519 form, the three-part one, and ECDSA.
         assert!(
             check(
                 &required(),
-                Some(&ed25519_receipt(IMPOSTOR_SEED_HEX, &request, &response)),
+                Some(&two_part_ed25519_receipt(
+                    IMPOSTOR_SEED_HEX,
+                    &request,
+                    &response
+                )),
+                &raw
+            )
+            .is_ok()
+        );
+        assert!(
+            check(
+                &required(),
+                Some(&ed25519_receipt(
+                    IMPOSTOR_SEED_HEX,
+                    MODEL,
+                    &request,
+                    &response
+                )),
                 &raw
             )
             .is_ok()
@@ -1300,44 +1634,51 @@ mod tests {
             )
             .is_ok()
         );
+        // And a contribution carrying no receipt is unaffected either way.
+        assert!(check(&InferenceAttestationPolicy::not_required(), None, &raw).is_ok());
     }
 
-    /// The pin binds a receipt that is *offered*, not only one that is
+    /// The pins bind a receipt that is *offered*, not only one that is
     /// *required*. A deployment requiring nothing still must not certify a
     /// trace carrying a receipt from a key it does not trust; accepting it
     /// would be the same silent downgrade an invalid receipt already is not.
     #[test]
-    fn the_pin_binds_an_offered_receipt_where_nothing_is_required() {
+    fn the_pins_bind_an_offered_receipt_where_nothing_is_required() {
         let request = request_body(MODEL, "hello");
         let response = response_body("hi there");
         let raw = contribution(&[(request.clone(), response.clone())]);
         let policy = pinned(
             InferenceAttestationPolicy::not_required(),
-            &ed25519_key_hex(GATEWAY_SEED_HEX),
+            &[(MODEL, &ed25519_key_hex(MODEL_A_SEED_HEX))],
         );
 
         assert_eq!(
             check(
                 &policy,
-                Some(&ed25519_receipt(IMPOSTOR_SEED_HEX, &request, &response)),
+                Some(&ed25519_receipt(
+                    IMPOSTOR_SEED_HEX,
+                    MODEL,
+                    &request,
+                    &response
+                )),
                 &raw
             ),
             Err(WitnessError::InferenceReceiptUnverified)
         );
-        // A submission carrying no receipt at all is still certified: the pin
-        // constrains which key is trusted, it does not impose a requirement.
+        // A submission carrying no receipt at all is still certified: the pins
+        // constrain which key is trusted, they do not impose a requirement.
         assert!(check(&policy, None, &raw).is_ok());
     }
 
-    /// A pin is a 32-byte ed25519 key, and only the ed25519 signer is bound
-    /// into the gateway's attestation report. An ECDSA receipt therefore
-    /// cannot satisfy one, however well it verifies.
+    /// A pin is a 32-byte ed25519 key, and only an ed25519 attestation binds
+    /// a receipt-signing key. An ECDSA receipt therefore cannot satisfy one,
+    /// however well it verifies -- even bound to a pinned model.
     #[test]
-    fn an_ecdsa_receipt_cannot_satisfy_a_gateway_key_pin() {
+    fn an_ecdsa_receipt_cannot_satisfy_a_model_key_pin() {
         let request = request_body(MODEL, "hello");
         let response = response_body("hi there");
         let raw = contribution(&[(request.clone(), response.clone())]);
-        let policy = pinned(required(), &ed25519_key_hex(GATEWAY_SEED_HEX));
+        let policy = pinned(required(), &[(MODEL, &ed25519_key_hex(MODEL_A_SEED_HEX))]);
 
         assert_eq!(
             check(&policy, Some(&receipt(MODEL, &request, &response)), &raw),
@@ -1352,31 +1693,73 @@ mod tests {
         let request = request_body(MODEL, "hello");
         let response = response_body("hi there");
         let raw = contribution(&[(request.clone(), response.clone())]);
-        let policy = pinned(
-            required(),
-            &format!(
-                "  {}  ",
-                ed25519_key_hex(GATEWAY_SEED_HEX).to_ascii_uppercase()
-            ),
+        let shouty = format!(
+            "  {}  ",
+            ed25519_key_hex(MODEL_A_SEED_HEX).to_ascii_uppercase()
         );
+        let policy = pinned(required(), &[(MODEL, &shouty)]);
         assert_eq!(
-            policy.gateway_key_pin(),
-            Some(ed25519_key_hex(GATEWAY_SEED_HEX).as_str())
+            policy.model_key_pins().expect("pins").get(MODEL),
+            Some(&vec![ed25519_key_hex(MODEL_A_SEED_HEX)])
         );
         assert!(
             check(
                 &policy,
-                Some(&ed25519_receipt(GATEWAY_SEED_HEX, &request, &response)),
+                Some(&ed25519_receipt(
+                    MODEL_A_SEED_HEX,
+                    MODEL,
+                    &request,
+                    &response
+                )),
                 &raw
             )
             .is_ok()
         );
     }
 
-    /// Fail-closed configuration: a pin that is not a key is refused where it
-    /// is configured, so a witness cannot start holding one that can never
-    /// match. Empty is refused too -- an operator who set the variable to
-    /// nothing must not get a witness that silently pins nothing.
+    /// Two enclaves serving one model: both attested keys are pinned under
+    /// that model, and a receipt from either is admitted.
+    #[test]
+    fn a_model_may_pin_more_than_one_key() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        let policy = pinned(
+            required(),
+            &[
+                (MODEL, &ed25519_key_hex(MODEL_A_SEED_HEX)),
+                (MODEL, &ed25519_key_hex(MODEL_B_SEED_HEX)),
+            ],
+        );
+        for seed in [MODEL_A_SEED_HEX, MODEL_B_SEED_HEX] {
+            assert!(
+                check(
+                    &policy,
+                    Some(&ed25519_receipt(seed, MODEL, &request, &response)),
+                    &raw
+                )
+                .is_ok()
+            );
+        }
+        assert_eq!(
+            check(
+                &policy,
+                Some(&ed25519_receipt(
+                    IMPOSTOR_SEED_HEX,
+                    MODEL,
+                    &request,
+                    &response
+                )),
+                &raw
+            ),
+            Err(WitnessError::InferenceReceiptUnverified)
+        );
+    }
+
+    /// Fail-closed configuration: pins that are not keys are refused where
+    /// they are configured, so a witness cannot start holding ones that can
+    /// never match. Empty is refused too -- an operator who set the variable
+    /// to nothing must not get a witness that silently pins nothing.
     #[test]
     fn a_pin_that_is_not_a_key_is_refused_rather_than_ignored() {
         for malformed in [
@@ -1387,39 +1770,149 @@ mod tests {
             "zzzzc58f6bd685919fa42fb54d3fcfe03222e324bdda91f0bac6d5c73dc4f1c6",
         ] {
             assert_eq!(
-                required().pinning_gateway_key(malformed).err(),
-                Some(GatewayKeyPinMalformed),
+                required()
+                    .pinning_model_keys(pins(&[(MODEL, malformed)]))
+                    .err(),
+                Some(ModelKeyPinMalformed),
                 "{malformed:?} is not a 32-byte hex key"
+            );
+        }
+        assert_eq!(
+            required().pinning_model_keys(BTreeMap::new()).err(),
+            Some(ModelKeyPinMalformed),
+            "an empty pin set is configured-but-pins-nothing"
+        );
+        assert_eq!(
+            required()
+                .pinning_model_keys(BTreeMap::from([(MODEL.to_string(), Vec::new())]))
+                .err(),
+            Some(ModelKeyPinMalformed),
+            "a model with no keys would match nothing while reading as pinned"
+        );
+        assert_eq!(
+            required()
+                .pinning_model_keys(BTreeMap::from([(
+                    "  ".to_string(),
+                    vec![ed25519_key_hex(MODEL_A_SEED_HEX)]
+                )]))
+                .err(),
+            Some(ModelKeyPinMalformed),
+            "a blank model name names no model"
+        );
+    }
+
+    /// The env-var spelling an operator actually types, parsed where a
+    /// malformed value is a startup failure.
+    #[test]
+    fn the_pin_spec_parses_the_shape_an_operator_configures() {
+        let spec = format!(
+            " {MODEL}={} , {OTHER_MODEL}={} ",
+            ed25519_key_hex(MODEL_A_SEED_HEX).to_ascii_uppercase(),
+            ed25519_key_hex(MODEL_B_SEED_HEX)
+        );
+        let parsed = parse_model_key_pins(&spec).expect("a well formed spec");
+        assert_eq!(
+            parsed.get(MODEL),
+            Some(&vec![ed25519_key_hex(MODEL_A_SEED_HEX)])
+        );
+        assert_eq!(
+            parsed.get(OTHER_MODEL),
+            Some(&vec![ed25519_key_hex(MODEL_B_SEED_HEX)])
+        );
+
+        // A model repeated accumulates keys rather than replacing them, and a
+        // key repeated does not double.
+        let repeated = format!(
+            "{MODEL}={},{MODEL}={},{MODEL}={}",
+            ed25519_key_hex(MODEL_A_SEED_HEX),
+            ed25519_key_hex(MODEL_B_SEED_HEX),
+            ed25519_key_hex(MODEL_A_SEED_HEX)
+        );
+        assert_eq!(
+            parse_model_key_pins(&repeated).expect("repeats").get(MODEL),
+            Some(&vec![
+                ed25519_key_hex(MODEL_A_SEED_HEX),
+                ed25519_key_hex(MODEL_B_SEED_HEX)
+            ])
+        );
+
+        for bad in [
+            "",
+            "   ",
+            ",,",
+            // No `=` at all: a bare key names no model.
+            &ed25519_key_hex(MODEL_A_SEED_HEX),
+            // A model with no key, and a key with no model.
+            &format!("{MODEL}="),
+            &format!("={}", ed25519_key_hex(MODEL_A_SEED_HEX)),
+            // A second `=` is not something to guess at.
+            &format!("{MODEL}={}=x", ed25519_key_hex(MODEL_A_SEED_HEX)),
+            &format!("{MODEL}=0x{}", ed25519_key_hex(MODEL_A_SEED_HEX)),
+        ] {
+            assert_eq!(
+                parse_model_key_pins(bad).err(),
+                Some(ModelKeyPinMalformed),
+                "{bad:?} is not a usable pin spec"
             );
         }
     }
 
-    /// Anti-oracle: a pin failure and a receipt bound to other bytes are the
-    /// same `WitnessError`, so they are the same label on the wire. A prober
-    /// cannot learn from a refusal whether it guessed the pinned key.
+    /// Anti-oracle: every pin failure and a receipt bound to other bytes are
+    /// the same `WitnessError`, so they are the same label on the wire. A
+    /// prober cannot learn from a refusal whether it guessed a pinned key,
+    /// nor which models this deployment pins.
     #[test]
     fn a_pin_failure_is_indistinguishable_from_any_other_receipt_failure() {
         let request = request_body(MODEL, "hello");
         let response = response_body("hi there");
         let raw = contribution(&[(request.clone(), response.clone())]);
-        let policy = pinned(required(), &ed25519_key_hex(GATEWAY_SEED_HEX));
+        let policy = pinned(required(), &[(MODEL, &ed25519_key_hex(MODEL_A_SEED_HEX))]);
 
         let unpinned_key = check(
             &policy,
-            Some(&ed25519_receipt(IMPOSTOR_SEED_HEX, &request, &response)),
+            Some(&ed25519_receipt(
+                IMPOSTOR_SEED_HEX,
+                MODEL,
+                &request,
+                &response,
+            )),
+            &raw,
+        );
+        // A receipt from the pinned key, bound to a model that is not pinned.
+        let unpinned_model = check(
+            &policy,
+            Some(&ed25519_receipt(
+                MODEL_A_SEED_HEX,
+                OTHER_MODEL,
+                &request,
+                &response,
+            )),
+            &raw,
+        );
+        // A receipt from the pinned key, binding no model at all.
+        let no_model = check(
+            &policy,
+            Some(&two_part_ed25519_receipt(
+                MODEL_A_SEED_HEX,
+                &request,
+                &response,
+            )),
             &raw,
         );
         // A receipt from the pinned key, over bodies that are not these.
         let wrong_bytes = check(
             &policy,
             Some(&ed25519_receipt(
-                GATEWAY_SEED_HEX,
+                MODEL_A_SEED_HEX,
+                MODEL,
                 "some other request",
                 &response,
             )),
             &raw,
         );
         assert_eq!(unpinned_key, wrong_bytes);
+        assert_eq!(unpinned_model, wrong_bytes);
+        assert_eq!(no_model, wrong_bytes);
         assert_eq!(unpinned_key, Err(WitnessError::InferenceReceiptUnverified));
     }
 }

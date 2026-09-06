@@ -40,7 +40,7 @@ use tokio::net::TcpListener;
 use trace_commons_server::witness_service::enclave::{DSTACK_SOCKET_PATH, DstackSocketAgent};
 use trace_commons_server::witness_service::http::{WitnessLoadBound, witness_router};
 use trace_commons_server::witness_service::inference::{
-    DEFAULT_MAX_BODY_BYTES, InferenceAttestationPolicy,
+    DEFAULT_MAX_BODY_BYTES, InferenceAttestationPolicy, parse_model_key_pins,
 };
 use trace_commons_server::witness_service::surface::WitnessService;
 use trace_commons_server::witness_service::{
@@ -218,21 +218,35 @@ struct Args {
     )]
     max_inference_body_bytes: usize,
 
-    /// The inference gateway's ed25519 signing key: 64 hex characters, no
-    /// `0x`. A receipt signed by any other key is refused.
+    /// The ed25519 keys that may sign an inference receipt, **per model**:
+    /// `model=key[,model=key...]`, each key 64 hex characters with no `0x`.
+    /// A receipt whose bound model is not listed, or whose signer is not one
+    /// of that model's keys, is refused. Repeating a model accumulates keys,
+    /// which is how a model served by more than one enclave is pinned.
+    ///
+    /// Replaces `TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN`, which pinned the
+    /// gateway's key. That key signs no receipt: NEAR AI signs each hosted
+    /// model's receipts with a per-model `provider_tee` key, so the gateway
+    /// pin refused every real receipt. **An operator upgrading past that
+    /// release must unset the old variable and set this one** -- the old name
+    /// is no longer read, and a witness left with only the old variable set
+    /// runs unpinned.
+    ///
+    /// The values are public keys, obtained once and out of band from NEAR
+    /// AI's attestation report: `GET /attestation/report?model=..&
+    /// signing_algo=ed25519&nonce=<64 hex>`, taking each `model_attestations`
+    /// entry whose `report_data` is `signing_address || nonce`.
+    /// `signing_algo=ed25519` is not optional -- without it the endpoint
+    /// answers with ECDSA attestations, whose keys sign nothing verified here.
+    /// They are not fetched on the request path: a witness makes no outbound
+    /// calls while serving, and a report fetched at request time would be
+    /// trusted over a path an attacker able to substitute a signing key is
+    /// also positioned to influence.
     ///
     /// Unset by default, and unset is exactly the behaviour that shipped
-    /// before this existed -- a receipt still has to verify, but against the
-    /// key it names rather than against one this deployment trusts. Setting
-    /// it is what makes the verification say *who* signed.
-    ///
-    /// The value is a public key, obtained once and out of band from NEAR
-    /// AI's attestation report (`GET /attestation/report`, whose
-    /// `gateway_attestation.report_data` is `signing_address || nonce` inside
-    /// a TDX quote). It is not fetched on the request path: a witness makes
-    /// no outbound calls while serving, and a report fetched at request time
-    /// would be trusted over a path an attacker able to substitute a signing
-    /// key is also positioned to influence.
+    /// before any of this existed -- a receipt still has to verify, but
+    /// against the key it names rather than against ones this deployment
+    /// trusts.
     ///
     /// Independent of `--require-attested-inference`. A witness that requires
     /// nothing still refuses a receipt from an unpinned key when one is
@@ -241,8 +255,8 @@ struct Args {
     /// Malformed is a startup failure, never an ignored value -- including
     /// the empty string, which is what an operator who exported the variable
     /// without a value would otherwise get a pin-less witness from.
-    #[arg(long, env = "TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN")]
-    gateway_key_pin: Option<String>,
+    #[arg(long, env = "TRACE_COMMONS_WITNESS_MODEL_KEY_PINS")]
+    model_key_pins: Option<String>,
 }
 
 #[tokio::main]
@@ -361,31 +375,48 @@ async fn main() -> Result<()> {
         InferenceAttestationPolicy::not_required()
     };
 
-    // The gateway key pin, applied to whichever policy was just built: it
-    // constrains which key a receipt may be signed by, and says nothing about
-    // whether a receipt is required. Resolved here, before the listener binds,
-    // so a pin that is not a key is a startup failure rather than a control
-    // that silently matches nothing.
-    let inference_policy = match args.gateway_key_pin.as_deref() {
-        Some(pin) => {
-            let policy = inference_policy.pinning_gateway_key(pin).map_err(|_| {
+    // The per-model key pins, applied to whichever policy was just built: they
+    // constrain which key a receipt may be signed by for the model the receipt
+    // itself binds, and say nothing about whether a receipt is required.
+    // Resolved here, before the listener binds, so pins that are not keys are
+    // a startup failure rather than a control that silently matches nothing.
+    let inference_policy = match args.model_key_pins.as_deref() {
+        Some(spec) => {
+            let malformed = || {
                 // The value is not echoed. On a misconfiguration it is
                 // whatever the operator pasted, and that is not something to
                 // put in a log line.
                 anyhow::anyhow!(
-                    "TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN must be a 32-byte ed25519 \
-                     key: 64 hex characters, no `0x` prefix"
+                    "TRACE_COMMONS_WITNESS_MODEL_KEY_PINS must be \
+                     `model=key[,model=key...]`, each key a 32-byte ed25519 key: \
+                     64 hex characters, no `0x` prefix"
                 )
-            })?;
+            };
+            let pins = parse_model_key_pins(spec).map_err(|_| malformed())?;
+            let policy = inference_policy
+                .pinning_model_keys(pins)
+                .map_err(|_| malformed())?;
             // Hash-only, like every other operational surface here. A short
-            // prefix is enough for an operator to confirm that the process
-            // holds the key they meant to pin, and carries no more of it than
-            // that comparison needs.
-            let pinned = policy.gateway_key_pin().expect("the pin was just accepted");
-            let digest = hex::encode(sha2::Sha256::digest(pinned.as_bytes()));
+            // prefix over the whole normalised pin set is enough for an
+            // operator to confirm that the process holds the pins they meant
+            // to configure, and carries neither a key nor a model name.
+            let pins = policy
+                .model_key_pins()
+                .expect("the pins were just accepted");
+            let mut hasher = sha2::Sha256::new();
+            for (model, keys) in pins {
+                hasher.update(model.as_bytes());
+                for key in keys {
+                    hasher.update(b"\0");
+                    hasher.update(key.as_bytes());
+                }
+                hasher.update(b"\n");
+            }
+            let digest = hex::encode(hasher.finalize());
             tracing::info!(
-                gateway_key_pin_sha256_prefix = %&digest[..8],
-                "witness inference gateway key pin"
+                model_key_pins_sha256_prefix = %&digest[..8],
+                pinned_models = pins.len(),
+                "witness inference model key pins"
             );
             policy
         }
