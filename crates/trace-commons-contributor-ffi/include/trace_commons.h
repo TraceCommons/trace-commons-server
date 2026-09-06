@@ -608,8 +608,8 @@ char*       tc_private_inference_state_line(const char* state);
  * of the TC_PRIVATE_INFERENCE_TONE_* values.
  *
  * Takes what the sentence takes, so the two stay in step by construction. A
- * SHELL MUST NOT RECOVER THIS BY READING THE RENDERED SENTENCE: port_in_use,
- * start_failed and crashed all begin "Not on." but have distinct recoveries.
+ * SHELL MUST NOT RECOVER THIS BY READING THE RENDERED SENTENCE: port_in_use and
+ * start_failed both begin "Not on." but have distinct recoveries.
  *
  * Answers TC_PRIVATE_INFERENCE_TONE_NEUTRAL for a label this build has never
  * heard of, for a NULL or non-UTF-8 state, and on a caught panic. There is no

@@ -41,7 +41,7 @@ public enum TCPrivateInference {
     /// `TC_PRIVATE_INFERENCE_TONE_*` value.
     ///
     /// Takes what the sentence takes, so the two stay in step. Never
-    /// recover it by reading the sentence: three of the seven begin with the
+    /// recover it by reading the sentence: two refusal sentences begin with the
     /// same two words. There is no failure value -- an unknown state, and a
     /// caught panic, both answer the tone that claims nothing.
     public static func stateTone(state: String) -> Int32 {
