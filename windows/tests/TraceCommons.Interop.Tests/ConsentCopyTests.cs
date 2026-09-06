@@ -112,6 +112,69 @@ public sealed class ConsentCopyTests
     }
 
     /// <summary>
+    /// A build that cannot read the sentences cannot arm Contribute.
+    ///
+    /// <para>
+    /// The gate statement is the whole of what a contributor is told before
+    /// pressing an irreversible button. When the payload will not decode
+    /// there is no statement to print, and a sheet that printed a blank
+    /// where the claim goes and left the button pressable would be
+    /// approving a send against a claim nobody made. Fail closed: no copy,
+    /// no arming.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void ASurfaceWithNoSentencesCannotBeContributed()
+    {
+        ConsentCopy copy = Assert.IsType<ConsentCopy>(ConsentSurface.Copy());
+
+        Assert.False(ReadGate.CanArm(null, pinned: true));
+        Assert.False(ReadGate.CanArm(null, pinned: false));
+        Assert.False(ReadGate.CanArm(copy, pinned: false));
+        Assert.True(ReadGate.CanArm(copy, pinned: true));
+    }
+
+    /// <summary>
+    /// The sheet asks that rule rather than arming on the pin alone.
+    ///
+    /// <para>
+    /// Asserted about the WinUI source because <c>TraceCommons.App</c>
+    /// cannot be built on the machines this suite runs on. The shape this
+    /// exists to fail on is the one it shipped with: a
+    /// <c>?? string.Empty</c> on the statement beside a
+    /// <c>CanContribute</c> that never looked at the copy, which renders a
+    /// blank safety claim above a pressable button.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void ThePreviewSheetRefusesToArmWithoutTheClaim()
+    {
+        string path = Path.Combine(
+            AppContext.BaseDirectory,
+            "shell-source", "TraceCommons.App", "ViewModels", "PreviewSheetViewModel.cs.txt");
+        Assert.True(File.Exists(path), $"the view model source was not copied to {path}");
+
+        string uncommented = string.Join(
+            "\n",
+            File.ReadAllText(path)
+                .Split('\n')
+                .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)
+                    && !line.TrimStart().StartsWith("///", StringComparison.Ordinal)));
+
+        Assert.Contains(
+            "ReadGate.CanArm(_consent, Gate.CanContribute)",
+            uncommented,
+            StringComparison.Ordinal);
+
+        // The pin alone is not the condition any more. This is the exact
+        // expression the blank-claim bug was written as.
+        Assert.DoesNotContain(
+            "CanContribute => Gate.CanContribute &&",
+            uncommented,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// No wording is authored in the consent surface's own sources.
     ///
     /// <para>

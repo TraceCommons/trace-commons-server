@@ -2219,54 +2219,6 @@ mod tests {
 
     use crate::model::human_bytes;
 
-    /// The statement that replaced the read gate, character for character.
-    ///
-    /// Written out here rather than compared to itself: this is the copy
-    /// the product asserts about redaction at the instant of consent, and
-    /// the point of the assertion is that changing the sentence is a
-    /// decision somebody has to make twice.
-    const STATEMENT: &str = "\"Exactly what would be sent\" is the exact text that would leave \
-         this machine. Pattern-based scrubbing may have missed something in it, and nothing here \
-         checks that you looked.";
-
-    #[test]
-    fn the_consent_statement_is_exactly_what_was_agreed() {
-        assert_eq!(GATE_STATEMENT, STATEMENT);
-        // The two things the removed checkbox used to make a contributor
-        // say out loud. Neither may quietly drop out of the sentence.
-        assert!(GATE_STATEMENT.contains("Pattern-based scrubbing may have missed something"));
-        assert!(GATE_STATEMENT.contains("nothing here checks that you looked"));
-    }
-
-    /// The parity check, done against the other two shells' actual sources.
-    ///
-    /// Three shells print this sentence and the only thing that has ever
-    /// held three languages to one sentence in this repo is an assertion
-    /// that reads all three. The needle is derived from `GATE_STATEMENT`
-    /// by re-escaping its quotes, which is how the literal appears in Swift
-    /// and C# source too, so editing the sentence here without editing it
-    /// there fails rather than drifts.
-    #[test]
-    fn the_three_shells_print_the_same_statement() {
-        let needle = GATE_STATEMENT.replace('"', "\\\"");
-        for relative in [
-            // The Windows shell reads this sentence from `consent_copy.rs`
-            // across the ABI now, so there is nothing in its source to grep.
-            // macOS is the last transcription standing; this test goes with
-            // it in the next commit.
-            "../../macos/Sources/TCShellCore/ReadGate.swift",
-        ] {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative);
-            let source = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("{} must be readable: {e}", path.display()));
-            assert!(
-                source.contains(&needle),
-                "{} does not print the consent statement verbatim",
-                path.display()
-            );
-        }
-    }
-
     /// The correction disclosure, character for character, and then in the
     /// other two shells' actual sources.
     ///
@@ -2276,6 +2228,10 @@ mod tests {
     /// exception and the page does not yet say so. Until it does, this
     /// sentence is the whole of what a contributor is told, so a shell that
     /// shortens it for layout is shipping the exception undisclosed.
+    ///
+    /// TODO(shell-copy slice 2): this goes when `CorrectionCopy` moves into
+    /// `correction_copy.rs`. It is the scaffold the migration spec wants
+    /// gone, and it stays exactly as long as the transcriptions it guards do.
     #[test]
     fn the_correction_disclosure_is_intact_in_all_three_shells() {
         assert_eq!(

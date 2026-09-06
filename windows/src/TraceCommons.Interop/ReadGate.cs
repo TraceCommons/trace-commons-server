@@ -59,6 +59,28 @@ public sealed class ReadGate
     public bool CanContribute => HasPinnedPreview;
 
     /// <summary>
+    /// Whether Contribute may be armed at all: a pinned preview AND the
+    /// sentences that explain what pressing it does.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The second half is not decoration. The gate statement is the whole of
+    /// what a contributor is told before an irreversible send, and a
+    /// <paramref name="copy"/> of null means this build could not read it --
+    /// a caught panic in the cdylib, or a payload that would not parse. A
+    /// sheet that rendered a blank where the claim goes and left the button
+    /// pressable would be taking an approval against a claim nobody made,
+    /// so no copy means no arming.
+    /// </para>
+    /// <para>
+    /// Static and pure so the rule is testable where the WinUI view model
+    /// is not: <c>TraceCommons.App</c> does not build on the machines this
+    /// suite runs on.
+    /// </para>
+    /// </remarks>
+    public static bool CanArm(ConsentCopy? copy, bool pinned) => copy is not null && pinned;
+
+    /// <summary>
     /// Records that a pinned preview is available. A summary that failed to
     /// parse, or one built without an enrollment, must pass false.
     /// </summary>

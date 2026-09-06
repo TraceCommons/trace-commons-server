@@ -451,11 +451,25 @@ public sealed class PreviewSheetViewModel : INotifyPropertyChanged, IDisposable
 
     /// <summary>Whether there is a pinned preview to contribute, and no
     /// decision already in flight.</summary>
-    public bool CanContribute => Gate.CanContribute && !_deciding;
+    /// <summary>
+    /// Armed only with a pinned preview and the sentences that explain the
+    /// button. See <see cref="ReadGate.CanArm"/>: a build that cannot read
+    /// the claim must not take an approval against it.
+    /// </summary>
+    public bool CanContribute => ReadGate.CanArm(_consent, Gate.CanContribute) && !_deciding;
 
     public bool CanDecide => !_deciding;
 
-    public string ContributeHelp => ConsentSurface.GateHelp(Gate.CanContribute) ?? string.Empty;
+    /// <summary>
+    /// The tooltip that explains the current answer, chosen by the ABI.
+    ///
+    /// Empty when the sentences are unavailable -- the same condition that
+    /// disarms <see cref="CanContribute"/>, so nothing is claimed and
+    /// nothing is pressable. A sentence written here instead would be a
+    /// fourth place the wording lives.
+    /// </summary>
+    public string ContributeHelp =>
+        (_consent is null ? null : ConsentSurface.GateHelp(Gate.CanContribute)) ?? string.Empty;
 
     /// <summary>
     /// The contributor's answer to <see cref="VerdictCopy.Question"/>: one of

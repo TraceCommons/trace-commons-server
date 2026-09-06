@@ -295,6 +295,15 @@ struct PreviewSummary: Decodable, Equatable, Sendable {
     let consentScopes: [String]
     let residualRisk: String
     var envelopeDigest: String? = nil
+    /// Whether the preview pinned a real identity.
+    ///
+    /// False when the preview was built from the placeholder identity a
+    /// device that has not enrolled carries, and false against a daemon
+    /// predating the field. A hard gate on approving rather than a cosmetic
+    /// flag: nothing was pinned, so there is no envelope for an approval to
+    /// bind to. `PreviewSheet` keeps `Contribute` off and says why, which is
+    /// what the Windows and Linux shells already do.
+    var enrolled: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case wouldSendBytes = "would_send_bytes"
@@ -307,6 +316,7 @@ struct PreviewSummary: Decodable, Equatable, Sendable {
         case consentScopes = "consent_scopes"
         case residualRisk = "residual_risk"
         case envelopeDigest = "envelope_digest"
+        case enrolled
     }
 
     /// "12 secrets, 4 tokens, 31 paths" -- category labels and counts only;
@@ -713,7 +723,8 @@ extension PreviewSummary {
             piiLabelsPresent: try c.decode([String].self, forKey: .piiLabelsPresent),
             consentScopes: try c.decode([String].self, forKey: .consentScopes),
             residualRisk: try c.decode(String.self, forKey: .residualRisk),
-            envelopeDigest: try c.decodeIfPresent(String.self, forKey: .envelopeDigest)
+            envelopeDigest: try c.decodeIfPresent(String.self, forKey: .envelopeDigest),
+            enrolled: try c.decodeIfPresent(Bool.self, forKey: .enrolled) ?? false
         )
     }
 }
