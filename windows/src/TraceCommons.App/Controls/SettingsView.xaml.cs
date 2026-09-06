@@ -48,6 +48,23 @@ public sealed partial class SettingsView : UserControl
         await Task.WhenAll(ViewModel.LoadAsync(), Settings.LoadAsync());
     }
 
+    /// <summary>
+    /// The switch that makes this app answer model calls itself.
+    ///
+    /// Guarded against the programmatic fill: the toggle is bound one-way to
+    /// the view model, so re-rendering it after a write raises Toggled again
+    /// and would echo the value straight back at the daemon.
+    /// </summary>
+    private async void OnPrivateInferenceToggled(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ToggleSwitch toggle || toggle.IsOn == Settings.PrivateInferenceEnabled)
+        {
+            return;
+        }
+
+        await Settings.SetPrivateInferenceAsync(toggle.IsOn);
+    }
+
     private async void OnDisableInferenceEvidence(object sender, RoutedEventArgs e)
     {
         await Settings.SetInferenceEvidenceAsync(false);

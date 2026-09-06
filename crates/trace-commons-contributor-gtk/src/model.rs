@@ -620,6 +620,39 @@ pub struct Settings {
     pub ironwire_attested_bodies: bool,
     #[serde(default)]
     pub admission_evidence_required: Option<bool>,
+    /// Whether this daemon has been asked to answer model calls itself.
+    ///
+    /// What was *asked for*. What actually happened is
+    /// [`Settings::private_inference_state`] beside it, and the two differ
+    /// whenever the listener refused to start -- which is exactly the case a
+    /// screen rendering the boolean alone would draw as on.
+    #[serde(default)]
+    pub private_inference: bool,
+    /// Whether the contributor has already been asked about the switch.
+    ///
+    /// Written on either answer, so a decline is remembered. Absent on a
+    /// daemon that predates the key, which reads as unanswered and is what
+    /// makes the offer appear once after an upgrade.
+    #[serde(default)]
+    pub private_inference_offer_seen: bool,
+    /// What the listener is actually doing.
+    #[serde(default)]
+    pub private_inference_state: Option<PrivateInferenceState>,
+}
+
+/// `get_settings`'s and `status`'s `private_inference_state` block.
+///
+/// The label is carried as the daemon's own string and handed straight to
+/// [`crate::copy::private_inference_state_line`] and its tone twin. It is
+/// deliberately not parsed into an enum here: a label a later daemon grows
+/// would then have to be spelled in this shell before it could be shown, and
+/// the shared table already answers an unknown label safely.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PrivateInferenceState {
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub port: Option<u16>,
 }
 
 /// `get_settings`'s `ironwire` block.

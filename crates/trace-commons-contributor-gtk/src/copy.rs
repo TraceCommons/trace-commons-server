@@ -2079,6 +2079,32 @@ pub use trace_commons_contributor::routing_copy::{
     ironwire_state_tone, ironwire_token_line, ironwire_unreachable_line, tool_tone, tool_word,
 };
 
+// --- Model calls on this computer --------------------------------------
+//
+// The words are NOT here, for the reason stated above the Tools block: the
+// macOS and Windows shells render this same offer and reach these sentences
+// across the C ABI, so all three read one definition. The forbidden-word
+// sweep lives with them, between that module's own
+// `PRIVATE-INFERENCE-SURFACE-BEGIN` marker and its closing twin.
+//
+// `state_line` and `state_tone` are re-exported as a pair and must be used
+// as one: a shell that recovered the tone by reading the sentence would be
+// matching on text, and three of the seven sentences begin with the same two
+// words.
+pub use trace_commons_contributor::private_inference_copy::{
+    OFFER_ACCEPT as PRIVATE_INFERENCE_OFFER_ACCEPT,
+    OFFER_ASKED_ONCE as PRIVATE_INFERENCE_OFFER_ASKED_ONCE,
+    OFFER_DECLINE as PRIVATE_INFERENCE_OFFER_DECLINE,
+    OFFER_EXPOSURE as PRIVATE_INFERENCE_OFFER_EXPOSURE,
+    OFFER_NO_REPOINT as PRIVATE_INFERENCE_OFFER_NO_REPOINT,
+    OFFER_TITLE as PRIVATE_INFERENCE_OFFER_TITLE, OFFER_WHAT as PRIVATE_INFERENCE_OFFER_WHAT,
+    PrivateInferenceTone, SETTINGS_APPLIES_AT_ONCE as PRIVATE_INFERENCE_APPLIES_AT_ONCE,
+    SETTINGS_TITLE as PRIVATE_INFERENCE_TITLE, SETTINGS_TOGGLE as PRIVATE_INFERENCE_TOGGLE,
+    STATE_OFF as PRIVATE_INFERENCE_STATE_OFF, serving_line as private_inference_serving_line,
+    should_offer as private_inference_should_offer, state_line as private_inference_state_line,
+    state_tone as private_inference_state_tone,
+};
+
 // --- The redaction witness ---------------------------------------------
 //
 // Same rule as the Tools block above, for the same reason. The witness

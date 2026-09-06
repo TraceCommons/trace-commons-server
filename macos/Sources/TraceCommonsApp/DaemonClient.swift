@@ -248,6 +248,45 @@ final class DaemonClient {
         case unconfirmedWrite
     }
 
+    // MARK: - Answering model calls on this computer
+
+    /// Records the contributor's answer to the offer, and starts the
+    /// listener only if they said yes.
+    ///
+    /// Declining writes the marker alone; the object comes from
+    /// `PrivateInferenceSurface.offerParams`, which is where that rule
+    /// lives.
+    ///
+    /// The write is confirmed rather than assumed, the way
+    /// `setInferenceEvidence` confirms its own: a shell that recorded an
+    /// answer the daemon refused would stop asking about something that
+    /// never happened.
+    func answerPrivateInferenceOffer(accepted: Bool) throws -> DaemonSettingsView {
+        let settings = try setSettings(PrivateInferenceSurface.offerParams(accepted: accepted))
+        guard settings.privateInferenceAnswered else {
+            throw PrivateInferenceRefusal.unconfirmedWrite
+        }
+        return settings
+    }
+
+    /// Flips the switch on the settings card, and records that the question
+    /// has been answered.
+    ///
+    /// The switch is confirmed; the listener's own outcome deliberately is
+    /// NOT. `private_inference_state` may honestly come back `port_in_use`
+    /// or `crashed`, and that is a sentence to render, not a failed write.
+    func setPrivateInference(_ on: Bool) throws -> DaemonSettingsView {
+        let settings = try setSettings(PrivateInferenceSurface.settingsParams(on: on))
+        guard settings.privateInferenceOn == on else {
+            throw PrivateInferenceRefusal.unconfirmedWrite
+        }
+        return settings
+    }
+
+    enum PrivateInferenceRefusal: Error {
+        case unconfirmedWrite
+    }
+
     /// Shape-checks a settings object, refusing rather than returning one
     /// that cannot honestly be sent.
     ///

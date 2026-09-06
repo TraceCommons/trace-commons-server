@@ -59,6 +59,7 @@ pub struct QueueView {
     /// that change the queue, since an upload landing is what moves a
     /// project past the threshold.
     arming_offer: gtk::Box,
+    private_inference_offer: gtk::Box,
     /// Persistent rather than rebuilt each render: it is the only widget in
     /// this window that updates once a second, and rebuilding it under the
     /// pointer would move `Undo` out from under a contributor reaching for
@@ -202,6 +203,34 @@ impl QueueView {
             .sync_create()
             .build();
 
+        // The offer to answer model calls on this computer, drawn where the
+        // contributor already looks. Settings is where this switch LIVES;
+        // Settings alone is the failure this whole design exists to fix,
+        // because nobody who did not already know about it went there.
+        //
+        // Built here and left hidden. Whether to show it is not this view's
+        // decision -- see `render_private_inference_offer`, which asks the
+        // shared table.
+        let private_inference_offer = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(space::S)
+            .visible(false)
+            .build();
+        private_inference_offer.add_css_class("tc-card");
+
+        let private_inference_clamp = adw::Clamp::builder()
+            .maximum_size(super::COLUMN_MAX)
+            .tightening_threshold(super::COLUMN_TIGHTEN)
+            .margin_top(space::L)
+            .margin_start(space::XL)
+            .margin_end(space::XL)
+            .child(&private_inference_offer)
+            .build();
+        private_inference_offer
+            .bind_property("visible", &private_inference_clamp, "visible")
+            .sync_create()
+            .build();
+
         let guide = trace_commons_contributor::witness_copy::witness_copy().onboarding;
         let first_contribution = gtk::Expander::builder()
             .label(guide.heading)
@@ -227,6 +256,7 @@ impl QueueView {
         first_contribution.set_child(Some(&steps));
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.add_css_class("tc-root");
+        root.append(&private_inference_clamp);
         root.append(&arming_clamp);
         root.append(&undo_clamp);
         root.append(&first_contribution);
@@ -237,6 +267,7 @@ impl QueueView {
             root,
             first_contribution,
             arming_offer,
+            private_inference_offer,
             undo_bar,
             undo_headline,
             undo_held,
@@ -614,6 +645,112 @@ pub fn render_arming_offer(app: &Rc<App>, offer: Option<crate::model::ArmingOffe
             },
         );
     });
+}
+
+/// The offer to answer model calls on this computer.
+///
+/// Drawn on the queue, which is what this shell opens on, and not only in
+/// Settings: a switch nobody discovers is the defect this offer exists to
+/// remove. It is shown once. Both answers are written to the daemon, so
+/// "Not now" is remembered across relaunches and across shells, exactly as
+/// the arming offer's decline is.
+///
+/// WHETHER TO ASK IS NOT DECIDED HERE. `copy::private_inference_should_offer`
+/// is the shared table, so this shell, the macOS shell and the Windows shell
+/// cannot come to disagree about whether somebody has already been asked.
+pub fn render_private_inference_offer(app: &Rc<App>, settings: &crate::model::Settings) {
+    let view = &app.queue;
+    clear(&view.private_inference_offer);
+    if !copy::private_inference_should_offer(
+        settings.private_inference_offer_seen,
+        settings.private_inference,
+    ) {
+        view.private_inference_offer.set_visible(false);
+        return;
+    }
+
+    let title = gtk::Label::builder()
+        .label(copy::PRIVATE_INFERENCE_OFFER_TITLE)
+        .xalign(0.0)
+        .wrap(true)
+        .build();
+    title.add_css_class("tc-card-title");
+    view.private_inference_offer.append(&title);
+
+    // What it does, then what it exposes, then what it does NOT do. The
+    // middle one is the reason this offer is allowed to exist and is never
+    // folded into a caption: while the switch is on, anything else on this
+    // machine can spend the accounts configured here.
+    for text in [
+        copy::PRIVATE_INFERENCE_OFFER_WHAT,
+        copy::PRIVATE_INFERENCE_OFFER_EXPOSURE,
+        copy::PRIVATE_INFERENCE_OFFER_NO_REPOINT,
+    ] {
+        let label = gtk::Label::builder()
+            .label(text)
+            .xalign(0.0)
+            .wrap(true)
+            .build();
+        view.private_inference_offer.append(&label);
+    }
+    style::append_caveat(
+        &view.private_inference_offer,
+        copy::PRIVATE_INFERENCE_OFFER_ASKED_ONCE,
+    );
+
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, space::M);
+    let decline = gtk::Button::with_label(copy::PRIVATE_INFERENCE_OFFER_DECLINE);
+    let accept = gtk::Button::with_label(copy::PRIVATE_INFERENCE_OFFER_ACCEPT);
+    // Neither is `suggested-action`, for the reason the arming offer gives:
+    // a card that leads the eye to "yes" is not asking a question, and this
+    // question opens a listener anything on the machine can use.
+    actions.append(&decline);
+    actions.append(&accept);
+    view.private_inference_offer.append(&actions);
+    view.private_inference_offer.set_visible(true);
+
+    let declined = Rc::clone(app);
+    decline.connect_clicked(move |_| {
+        // The marker alone. Declining must never write the switch, not even
+        // as `false`: the switch is already false, and a write would make a
+        // refusal indistinguishable from a change.
+        let app = Rc::clone(&declined);
+        app.call(
+            "set_settings",
+            serde_json::json!({ "private_inference_offer_seen": true }),
+            |app, _| hide_private_inference_offer(app),
+        );
+    });
+
+    let accepted = Rc::clone(app);
+    accept.connect_clicked(move |_| {
+        // Both keys in one call: an accept that recorded the answer and
+        // failed to start, or started and failed to record, would leave the
+        // contributor asked again about something already running.
+        let app = Rc::clone(&accepted);
+        app.call(
+            "set_settings",
+            serde_json::json!({
+                "private_inference": true,
+                "private_inference_offer_seen": true,
+            }),
+            |app, _| {
+                hide_private_inference_offer(app);
+                app.refresh();
+            },
+        );
+    });
+}
+
+/// Take the card down without re-reading settings.
+///
+/// The answer has been written; the card is about a question that has now
+/// been asked, and leaving it up while the write lands would invite a second
+/// answer.
+fn hide_private_inference_offer(app: &Rc<App>) {
+    let view = &app.queue;
+    clear(&view.private_inference_offer);
+    view.private_inference_offer.set_visible(false);
 }
 
 pub fn render_undo(app: &Rc<App>) {
