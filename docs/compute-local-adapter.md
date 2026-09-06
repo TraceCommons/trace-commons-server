@@ -129,9 +129,39 @@ The script runs `UPDATE_WORKER_IPC_VECTORS=1 cargo test -p holonear-protocol
 Copy `crates/holonear-protocol/tests/fixtures/worker_ipc/orchard_v0.json`
 without reformatting. Its SHA-256 is
 `eb7a86d64173203a39e332f40cc795da5f3e631c0951526b523258b88c30b23b`.
-The fixture also records the generator module's SHA-256 and the original
-worker implementation revision `7d6f70512fb6cd9faf936fc27ca367a5cd539de5`.
+The fixture also records the generator module's SHA-256
+`402e6d791a890030f863e2f246b5f82f71b12371143f8faf30deee78bd589d68` and the
+original worker implementation revision
+`7d6f70512fb6cd9faf936fc27ca367a5cd539de5`.
 The generating Orchard protocol crate is licensed MIT OR Apache-2.0.
+
+#### What a reader without access can and cannot check
+
+A third party with only this repository **can**:
+
+- recompute the fixture's SHA-256 and confirm it is the digest published
+  above -- `orchard_fixture_provenance_fields_are_present_and_match_the_documentation`
+  does exactly this in-tree, over `include_bytes!` of the committed file, and
+  also asserts that the fixture's provenance fields are present, well formed,
+  and identical to the values named in this document;
+- re-verify every signature in the fixture against Trace's own production
+  request signer and response verifier, and confirm the tampering arms fail.
+
+That same reader **cannot**:
+
+- regenerate the fixture. The generating repository is private to the nearai
+  organization, so the reproduce command below runs only in an authorized
+  checkout;
+- establish from this repository that Orchard, rather than a local
+  regeneration by Trace, produced the bytes. The seeds are public and the
+  signature scheme is deterministic, so bytes produced by Trace's own signer
+  would satisfy every cryptographic assertion here identically. The digest
+  and metadata pins are drift tripwires -- they detect a *changed* fixture --
+  not evidence of origin.
+
+The claim this fixture supports is therefore cross-implementation message
+compatibility as captured at a named revision, not independently verifiable
+upstream provenance.
 
 Orchard's actual `holonear-crypto` / ed25519-dalek path generated these
 signatures using two distinct public fixed test seeds for Status and Drain.
