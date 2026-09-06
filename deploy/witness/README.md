@@ -1018,7 +1018,7 @@ Stated plainly so nobody reads the rest as tested:
 - `docs/operator/pii-backstop.md` — the backstop this certificate does **not**
   replace.
 
-## The production deployment, as of 2026-09-05
+## The production deployment, as of 2026-09-06
 
 Read back from the running instance, not from what we asked for. Every value
 below came from `phala cvms get --json` or from a live certificate.
@@ -1032,11 +1032,11 @@ what was current when it was written.
 |---|---|
 | CVM | `8b8e6543-9743-41fc-ac05-a6b414888d5e` (upgraded, not recreated) |
 | App | `f1654b0beac2ac2afae4235ee3d907096cd8f3de` |
-| Image | `ghcr.io/tracecommons/trace-commons-witness@sha256:389b9198a4d20b39009963a85c74c68d86bd8a42d7b8ebfbca06199b526c8dd0` |
+| Image | `ghcr.io/tracecommons/trace-commons-witness@sha256:052165938c552e1d3ab68e141de4bc39d86f11761875fbd096a1454cd76d3345` |
 | Mode | `full-pipeline` (NEAR AI classifier) |
 | Signing address | `0x655a17fcf6d0b9069e1b1dd07a7f5535d0c76798` |
-| Instance `compose_hash` | `177eea9a58121613c91ef11c6bf0a7dbe7f00f7f2d8a5a492779896c2f258315` |
-| Measurement | `mrtd:f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077+mrconfigid:01177eea9a58121613c91ef11c6bf0a7dbe7f00f7f2d8a5a492779896c2f258315000000000000000000000000000000` |
+| Instance `compose_hash` | `454992a4c0ef366ce7049303d48937b5f5d560d3412935b27f6a09e15cab10e4` |
+| Measurement | `mrtd:f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077+mrconfigid:01454992a4c0ef366ce7049303d48937b5f5d560d3412935b27f6a09e15cab10e4000000000000000000000000000000` |
 | Policy version | `ironclaw-deterministic-secret-path-v3+privacy-filter-near-ai-v1` |
 | `public_logs` / `public_sysinfo` / `public_tcbinfo` | `false` / `false` / `true` |
 | `allowed_envs` | `["TRACE_NEAR_AI_PRIVACY_API_KEY"]` |
