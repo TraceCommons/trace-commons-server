@@ -718,7 +718,11 @@ pub fn render_private_inference_offer(app: &Rc<App>, settings: &crate::model::Se
         app.call(
             "set_settings",
             serde_json::json!({ "private_inference_offer_seen": true }),
-            |app, _| hide_private_inference_offer(app),
+            |app, result| {
+                if private_inference_answer_confirmed(&result, false) {
+                    hide_private_inference_offer(app);
+                }
+            },
         );
     });
 
@@ -734,12 +738,33 @@ pub fn render_private_inference_offer(app: &Rc<App>, settings: &crate::model::Se
                 "private_inference": true,
                 "private_inference_offer_seen": true,
             }),
-            |app, _| {
-                hide_private_inference_offer(app);
-                app.refresh();
+            |app, result| {
+                if private_inference_answer_confirmed(&result, true) {
+                    hide_private_inference_offer(app);
+                    app.refresh();
+                }
             },
         );
     });
+}
+
+/// Only the daemon's successful echo can acknowledge the answer. A decline
+/// writes the marker alone; it must not require or manufacture an off switch.
+fn private_inference_answer_confirmed(
+    result: &Result<serde_json::Value, String>,
+    accepted: bool,
+) -> bool {
+    result.as_ref().is_ok_and(|settings| {
+        settings
+            .get("private_inference_offer_seen")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+            && (!accepted
+                || settings
+                    .get("private_inference")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true))
+    })
 }
 
 /// Take the card down without re-reading settings.
@@ -1599,6 +1624,33 @@ pub(crate) fn approve_params(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn private_inference_offer_requires_a_confirmed_write() {
+        use super::private_inference_answer_confirmed as confirmed;
+        use serde_json::json;
+        for accepted in [false, true] {
+            assert!(!confirmed(&Err("write-failed".into()), accepted));
+            for frame in [
+                json!({}),
+                json!({"private_inference_offer_seen": false}),
+                json!({"private_inference_offer_seen": "true"}),
+            ] {
+                assert!(!confirmed(&Ok(frame), accepted));
+            }
+        }
+        let marker = Ok(json!({"private_inference_offer_seen": true}));
+        assert!(confirmed(&marker, false));
+        assert!(!confirmed(&marker, true));
+        assert!(confirmed(
+            &Ok(json!({"private_inference_offer_seen": true, "private_inference": true})),
+            true
+        ));
+        assert!(!confirmed(
+            &Ok(json!({"private_inference_offer_seen": true, "private_inference": false})),
+            true
+        ));
+    }
+
     use super::*;
 
     const TEST_ENTRY_ID: &str = "test-entry-id";
