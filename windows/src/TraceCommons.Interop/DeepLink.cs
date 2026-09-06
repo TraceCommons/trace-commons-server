@@ -66,7 +66,7 @@ public static class DeepLink
     public static string? InviteFromCommandLine(string? commandLine)
     {
         if (string.IsNullOrWhiteSpace(commandLine)) return null;
-        IntPtr argv = CommandLineToArgvW(commandLine, out int count);
+        IntPtr argv = NativeMethods.CommandLineToArgvW(commandLine, out int count);
         if (argv == IntPtr.Zero) return null;
         try
         {
@@ -77,14 +77,8 @@ public static class DeepLink
             }
             return null;
         }
-        finally { LocalFree(argv); }
+        finally { NativeMethods.LocalFree(argv); }
     }
-
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern IntPtr CommandLineToArgvW(string commandLine, out int count);
-
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr LocalFree(IntPtr memory);
 
     /// <summary>
     /// Selects the cold-launch invite. A protocol payload is authoritative,

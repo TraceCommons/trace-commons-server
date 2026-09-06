@@ -1,6 +1,5 @@
 using System;
 using TraceCommons.Interop;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.UI.Dispatching;
@@ -27,7 +26,9 @@ public static class Program
         }
         catch (Exception)
         {
-            // Preserve the existing daemon-lock refusal UI on SDK failure.
+            // SDK failure starts a local window, which may lose the daemon lock.
+            // This fallback cannot deliver the invite to the existing instance;
+            // the contributor must reopen it after recovering that window.
             // Activation credentials and exception messages are never logged.
         }
         Application.Start(initialization =>
@@ -55,7 +56,8 @@ public static class Program
         {
             // Pump COM on the STA thread while the MTA performs redirection.
             // A stale holder must not hang a launch indefinitely.
-            uint result = CoWaitForMultipleObjects(0, 30000, 1,
+            // Timeout falls back to a local window, not confirmed delivery.
+            uint result = Win32NativeMethods.CoWaitForMultipleObjects(0, 30000, 1,
                 new[] { completed.SafeWaitHandle.DangerousGetHandle() }, out _);
             return result == 0 && redirect.GetAwaiter().GetResult();
         }
@@ -67,7 +69,4 @@ public static class Program
         }
     }
 
-    [DllImport("ole32.dll")]
-    private static extern uint CoWaitForMultipleObjects(
-        uint flags, uint milliseconds, uint count, IntPtr[] handles, out uint index);
 }

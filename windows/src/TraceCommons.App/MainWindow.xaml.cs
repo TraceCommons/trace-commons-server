@@ -89,7 +89,8 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherQueueTimer _visibilityDebounceTimer;
 
     private OnboardingWindow? _onboarding;
-    private readonly Queue<string> _redirectedInvites = new();
+    private readonly PendingInviteActivation _redirectedInvite = new();
+    private bool _activationDaemonAvailable;
     private bool _activationReady;
     private bool _closed;
 
@@ -286,6 +287,8 @@ public sealed partial class MainWindow : Window
     {
         Activated -= OnFirstActivated;
         await ViewModel.InitializeAsync();
+        _activationReady = ViewModel.NeedsSessionRoots;
+        OfferNextRedirectedInvite();
 
         // Everything below this point talks to a daemon. A start refused for
         // undeclared session sources has none, so the roots screen goes first
@@ -348,6 +351,7 @@ public sealed partial class MainWindow : Window
     {
         // The daemon is up now, so the queue window needs the first snapshot
         // it could not load, and then the startup it did not finish.
+        ViewModel.SessionRootsDeclared();
         await ViewModel.RefreshAsync();
         await ContinueStartupAsync();
     }
@@ -538,18 +542,28 @@ public sealed partial class MainWindow : Window
     {
         if (_closed) return;
         BringForward();
-        if (invite is not null) _redirectedInvites.Enqueue(invite);
+        _redirectedInvite.Receive(invite);
         OfferNextRedirectedInvite();
     }
 
     private void OfferNextRedirectedInvite()
     {
-        // Do not replace an enrollment, consent decision, or NEAR operation.
-        // Keep incoming invites until the existing onboarding window closes.
-        if (_closed || !_activationReady || _onboarding is not null || _redirectedInvites.Count == 0) return;
-        if (ViewModel.NeedsSessionRoots) return;
+        if (_closed)
+        {
+            return;
+        }
+        var decision = _redirectedInvite.Take(_activationReady, ViewModel.NeedsSessionRoots,
+            _activationDaemonAvailable, _onboarding is not null);
+        if (decision.Notice is string notice)
+        {
+            ViewModel.ShowNotice(notice);
+        }
+        if (decision.Invite is not string invite)
+        {
+            return;
+        }
         var onboarding = OpenOnboarding(OnboardingState.Default());
-        onboarding.OfferInvite(_redirectedInvites.Dequeue());
+        onboarding.OfferInvite(invite);
         onboarding.Activate();
     }
 
@@ -612,11 +626,15 @@ public sealed partial class MainWindow : Window
         // worse than saying nothing, so this says the true thing instead.
         if (status.IsError)
         {
+            _activationDaemonAvailable = false;
+            _activationReady = true;
             ViewModel.ReportAlreadyRunning(App.PendingInvite is not null);
+            OfferNextRedirectedInvite();
             return;
         }
 
         _activationReady = true;
+        _activationDaemonAvailable = true;
         string? tenantId = null;
         bool loggedIn = false;
         if (status.Result is JsonElement element)
@@ -1267,7 +1285,7 @@ public sealed partial class MainWindow : Window
     {
         _closed = true;
         _activationReady = false;
-        _redirectedInvites.Clear();
+        _redirectedInvite.Clear();
         // Before the daemon teardown, and synchronously: an icon left in the
         // notification area after the process exits is a ghost the shell only
         // reaps when someone hovers over it, and it would claim a watcher

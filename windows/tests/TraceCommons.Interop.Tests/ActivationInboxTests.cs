@@ -26,12 +26,39 @@ public sealed class ActivationInboxTests
     }
 
     [Fact]
+    public void CallbackCanWaitForAnotherProducerWithoutHoldingTheInboxLock()
+    {
+        var inbox = new ActivationInbox<int>();
+        var delivered = new List<int>();
+        inbox.Enqueue(1);
+        inbox.Attach(value =>
+        {
+            delivered.Add(value);
+            if (value == 1)
+            {
+                Assert.True(Task.Run(() => inbox.Enqueue(2)).Wait(TimeSpan.FromSeconds(5)));
+            }
+        });
+        Assert.Equal(new[] { 1, 2 }, delivered);
+    }
+
+    [WindowsFact]
     public void NativeWindowsRedirectedArgumentsUsePlatformQuoting()
     {
-        if (!OperatingSystem.IsWindows()) return; // Exercised by Windows CI.
         Assert.Equal("one", DeepLink.InviteFromCommandLine("\"C:\\Program Files\\Trace Commons.exe\" \"tracecommons://enroll?invite=one\""));
         Assert.Null(DeepLink.InviteFromCommandLine("TraceCommons.exe https://enroll?invite=wrong"));
         Assert.Null(DeepLink.InviteFromCommandLine("TraceCommons.exe --ordinary-launch"));
         Assert.Null(DeepLink.InviteFromCommandLine(" "));
+    }
+}
+
+public sealed class WindowsFactAttribute : FactAttribute
+{
+    public WindowsFactAttribute()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Skip = "Requires the Windows command-line parser; exercised by Windows CI.";
+        }
     }
 }
