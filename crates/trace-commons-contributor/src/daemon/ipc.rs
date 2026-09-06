@@ -363,6 +363,12 @@ pub struct Event {
     pub data: serde_json::Value,
 }
 
+struct RoutingSnapshot {
+    declaration: Option<super::settings::IronWireDeclaration>,
+    ledger: Option<Arc<crate::routing::ironwire::IronWireLedger>>,
+    derived: bool,
+}
+
 /// Everything the daemon's loops and its IPC server share.
 pub struct DaemonShared {
     pub store: ConfigStore,
@@ -411,12 +417,13 @@ pub struct DaemonShared {
     ///
     /// Behind an `RwLock` because the declaration can change while the
     /// daemon runs: `set_settings` rebuilds this in place (see
-    /// [`Self::rebuild_routing`]). Telling a contributor to restart the
+    /// [`Self::rebuild_effective_routing`]). Telling a contributor to restart the
     /// daemon because they typed a port number is the friction that makes a
     /// feature feel broken. Readers take the lock only long enough to clone
     /// the `Arc` out -- nothing holds it across an await, and nothing holds
     /// it while doing I/O.
-    routing: RwLock<Option<Arc<crate::routing::ironwire::IronWireLedger>>>,
+    routing: RwLock<RoutingSnapshot>,
+    private_inference_endpoint: Mutex<Option<super::private_inference::OwnedEndpoint>>,
     /// Whether the last state this daemon reported for `routing` was
     /// "has rows". Compared against on every refresh so a transition is
     /// reported once, not on every poll -- see [`Self::routing_transition`].
@@ -499,6 +506,8 @@ pub const ROUTING_ROWS_SEEN: &str = "rows_seen";
 /// reader exists, and it will stay that way until somebody changes
 /// something on this machine.
 pub const ROUTING_TOKEN_UNREADABLE: &str = "token_unreadable";
+/// Internal routing state could not be read; no token diagnosis is available.
+pub const ROUTING_UNKNOWN: &str = "unknown";
 
 impl DaemonShared {
     pub fn load(store: ConfigStore) -> Result<Self> {
@@ -547,9 +556,11 @@ impl DaemonShared {
         // Built here from the declaration this settings file carries at
         // startup. A later edit does not wait for a restart:
         // `set_settings` rebuilds the instance in place.
-        let routing = RwLock::new(super::settings::ironwire_ledger_for(
-            settings.ironwire.as_ref(),
-        ));
+        let routing = RwLock::new(RoutingSnapshot {
+            declaration: settings.ironwire.clone(),
+            ledger: super::settings::ironwire_ledger_for(settings.ironwire.as_ref()),
+            derived: false,
+        });
         let (events, _) = broadcast::channel(256);
         let paused = state.paused;
         Ok(Self {
@@ -566,6 +577,7 @@ impl DaemonShared {
             events,
             previews: Arc::new(PreviewScheduler::default()),
             routing,
+            private_inference_endpoint: Mutex::new(None),
             routing_had_rows: AtomicBool::new(false),
             // Constructed, never started. Nothing binds until the reconcile
             // pass reads `private_inference` out of settings and finds it
@@ -670,6 +682,8 @@ impl DaemonShared {
                     | super::private_inference::PrivateInferenceState::RunningWithoutBackends { .. }) {
                     None
                 } else {
+                    *self.private_inference_endpoint.lock().expect("proxy endpoint lock") = host.owned_endpoint();
+                    self.rebuild_effective_routing(&settings);
                     let reported = host.state();
                     let changed = *state != reported;
                     *state = reported;
@@ -706,6 +720,11 @@ impl DaemonShared {
             self.private_inference_terminating
                 .store(true, Ordering::Release);
         }
+        *self
+            .private_inference_endpoint
+            .lock()
+            .expect("proxy endpoint lock") = None;
+        self.withdraw_derived_routing();
         let Some(runtime) = self
             .proxy_runtime
             .get()
@@ -876,7 +895,7 @@ impl DaemonShared {
     /// snapshot, which is the defect this helper exists to prevent -- see
     /// `DaemonSettings::source_roots`, which stays bare on purpose.
     pub(crate) fn source_roots_with_routing(&self) -> crate::source::SourceRoots {
-        let (roots, bodies) = {
+        let (roots, bodies, ledger) = {
             let s = self.settings.lock().expect("settings lock");
             (
                 s.source_roots(&self.store),
@@ -889,11 +908,10 @@ impl DaemonShared {
                     s.ironwire.as_ref(),
                     s.ironwire_attested_bodies,
                 ),
+                self.routing_ledger()
+                    .map(|l| l as Arc<dyn crate::routing::RoutingLedger>),
             )
         };
-        let ledger = self
-            .routing_ledger()
-            .map(|l| l as Arc<dyn crate::routing::RoutingLedger>);
         // Never without a ledger. `all_sources` already builds no overlay in
         // that case, so this is belt and braces -- and it is the belt worth
         // having: it states, at the one place the daemon decides, that a
@@ -919,26 +937,47 @@ impl DaemonShared {
         self.routing
             .read()
             .ok()
-            .and_then(|held| held.as_ref().map(Arc::clone))
+            .and_then(|held| held.ledger.as_ref().map(Arc::clone))
     }
 
-    /// Rebuild the held ledger from a declaration, replacing whatever was
-    /// there.
-    ///
-    /// The rebuilt instance starts **cold** -- an empty snapshot until the
-    /// next refresh. That is correct and it is not an error: it is exactly
-    /// the "declared, nothing seen yet" state `status_value` reports, and
-    /// the same state a machine whose proxy was installed this morning is
-    /// in. It also resets the transition state, so the first refresh after
-    /// a declaration change logs the new ledger's data state rather than
-    /// comparing it against the old one's.
-    pub(crate) fn rebuild_routing(
-        &self,
-        declaration: Option<&super::settings::IronWireDeclaration>,
-    ) {
-        let rebuilt = super::settings::ironwire_ledger_for(declaration);
-        *self.routing.write().expect("routing lock") = rebuilt;
+    /// Rebuild only when the effective endpoint changes, preserving warm rows.
+    /// Caller holds settings; lock order is settings -> endpoint -> routing.
+    pub(crate) fn rebuild_effective_routing(&self, settings: &DaemonSettings) {
+        let owned = self
+            .private_inference_endpoint
+            .lock()
+            .expect("proxy endpoint lock");
+        let declaration = super::private_inference::effective_metadata_declaration(
+            settings.ironwire.as_ref(),
+            settings.private_inference
+                && !self.private_inference_terminating.load(Ordering::Acquire),
+            owned.as_ref(),
+        );
+        let derived = settings.ironwire.is_none() && declaration.is_some();
+        let mut held = self.routing.write().expect("routing lock");
+        if held.declaration == declaration {
+            held.derived = derived;
+            return;
+        }
+        let ledger = super::settings::ironwire_ledger_for(declaration.as_ref());
+        *held = RoutingSnapshot {
+            declaration,
+            ledger,
+            derived,
+        };
         self.routing_had_rows.store(false, Ordering::Relaxed);
+    }
+
+    fn withdraw_derived_routing(&self) {
+        let mut held = self.routing.write().expect("routing lock");
+        if held.derived {
+            *held = RoutingSnapshot {
+                declaration: None,
+                ledger: None,
+                derived: false,
+            };
+            self.routing_had_rows.store(false, Ordering::Relaxed);
+        }
     }
 
     /// Refresh the routing ledger, if the contributor declared one, and
@@ -948,6 +987,13 @@ impl DaemonShared {
     /// an error and carries its own short timeout, so awaiting it here
     /// cannot fail or stall the poll tick that calls this.
     pub(crate) async fn refresh_routing(&self) {
+        let derived = self.routing.read().is_ok_and(|held| held.derived);
+        if derived {
+            // The periodic pass previously refreshed before noticing proxy
+            // exit. Withdraw an observed-dead owner's reader before any new
+            // metadata request can present its token on the former port.
+            self.reconcile_private_inference().await;
+        }
         let Some(ledger) = self.routing_ledger() else {
             return;
         };
@@ -1115,26 +1161,25 @@ impl DaemonShared {
     /// health signal on its own: it says data exists, not that the proxy
     /// answers now. A proxy that died an hour ago still has rows.
     fn routing_value(&self) -> serde_json::Value {
-        let Some(ledger) = self.routing_ledger() else {
-            // No ledger is two situations, not one, and only the second is
-            // the contributor's to fix. The declaration is what separates
-            // them: it is what the contributor themselves set, and it is
-            // still on while the reader it asked for could not be built.
-            //
-            // The settings lock is taken and released before the routing
-            // lock is touched, because `set_settings` holds settings while
-            // it rebuilds routing and one order everywhere is what keeps
-            // that safe.
-            let declared = {
-                let settings = self.settings.lock().expect("settings lock");
-                settings
-                    .ironwire
+        let Ok(held) = self.routing.read() else {
+            return serde_json::json!({"state":ROUTING_UNKNOWN, "derived":false,
+                "last_refresh_at":null, "unreadable_rows":0});
+        };
+        let (declared, ledger, derived) = {
+            (
+                held.declaration
                     .as_ref()
                     .and_then(super::settings::IronWireDeclaration::port)
-                    .is_some()
-            };
+                    .is_some(),
+                held.ledger.as_ref().map(Arc::clone),
+                held.derived,
+            )
+        };
+        drop(held);
+        let Some(ledger) = ledger else {
             return serde_json::json!({
                 "state": if declared { ROUTING_TOKEN_UNREADABLE } else { ROUTING_NOT_DECLARED },
+                "derived": derived,
                 // No reader was built, so nothing has ever been checked.
                 "last_refresh_at": serde_json::Value::Null,
                 "unreadable_rows": 0,
@@ -1142,6 +1187,7 @@ impl DaemonShared {
         };
         serde_json::json!({
             "state": if ledger.has_rows() { ROUTING_ROWS_SEEN } else { ROUTING_AWAITING_ROWS },
+            "derived": derived,
             "last_refresh_at": ledger.last_refresh_at(),
             // Zero everywhere it is working. Non-zero is the only signal a
             // contributor gets that the proxy is serving rows this client
@@ -2081,11 +2127,8 @@ fn handle_list_audit(shared: &DaemonShared, req: &Request) -> Response {
 
 fn handle_set_settings(shared: &DaemonShared, req: &Request) -> Response {
     let mut settings = shared.settings.lock().expect("settings lock");
-    // Captured before the write so the ledger is rebuilt only when
-    // the declaration actually moved. Rebuilding on every settings
-    // write would blank a warm snapshot whenever a contributor
-    // touched an unrelated slider.
-    let declared_before = settings.ironwire.clone();
+    // Advance lifecycle consent only after this candidate is persisted.
+    // Routing separately retains its warm reader when its endpoint is unchanged.
     let private_inference_before = settings.private_inference;
     // `apply_settings_object` is the same validation
     // `tc_daemon_start_with_settings` (the C ABI's pre-start
@@ -2112,9 +2155,7 @@ fn handle_set_settings(shared: &DaemonShared, req: &Request) -> Response {
             // which reads as the feature being broken. Done after
             // the save so a declaration that takes effect is always
             // one that survives a restart too.
-            if settings.ironwire != declared_before {
-                shared.rebuild_routing(settings.ironwire.as_ref());
-            }
+            shared.rebuild_effective_routing(&settings);
             let mut value = redacted_settings(&settings);
             drop(settings);
             add_admission_setting(shared, &mut value);
@@ -2130,7 +2171,7 @@ fn handle_set_settings(shared: &DaemonShared, req: &Request) -> Response {
 /// Starting a proxy is an await, so the sync handler cannot do it, and
 /// leaving it to the poll tick would mean a contributor who just turned
 /// private inference on waited a minute to find out whether it worked --
-/// the same friction `rebuild_routing` exists to avoid for a typed port.
+/// the same friction `rebuild_effective_routing` exists to avoid for a typed port.
 /// The reported state is re-read after the reconcile so the answer describes
 /// what happened rather than what was true a moment before it.
 async fn handle_set_settings_async(shared: &DaemonShared, req: &Request) -> Response {
@@ -4752,7 +4793,7 @@ mod tests {
         );
 
         let s = shared();
-        *s.routing.write().unwrap() = Some(Arc::new(
+        s.routing.write().unwrap().ledger = Some(Arc::new(
             crate::routing::ironwire::IronWireLedger::new(8463, "t".to_string()),
         ));
         assert!(
@@ -4773,7 +4814,7 @@ mod tests {
         drop(listener);
 
         let s = shared();
-        *s.routing.write().unwrap() = Some(Arc::new(
+        s.routing.write().unwrap().ledger = Some(Arc::new(
             crate::routing::ironwire::IronWireLedger::new(port, "t".to_string()),
         ));
         s.refresh_routing().await;
@@ -4860,7 +4901,7 @@ mod tests {
                 path: claude_root.path().to_path_buf(),
             });
         }
-        *s.routing.write().unwrap() = Some(Arc::new(
+        s.routing.write().unwrap().ledger = Some(Arc::new(
             crate::routing::ironwire::IronWireLedger::new(port, "t".to_string()),
         ));
 
@@ -6884,6 +6925,229 @@ mod tests {
         );
         assert!(r.error.is_none(), "{:?}", r.error);
         assert_eq!(s.settings.lock().unwrap().ironwire, None);
+    }
+
+    #[tokio::test]
+    async fn private_inference_derives_metadata_only_and_withdraws_on_accepted_off() {
+        let s = shared();
+        s.adopt_runtime();
+        let home = tempfile::tempdir().unwrap();
+        s.install_private_inference_for_test(home.path().to_path_buf(), 0);
+        assert!(s.routing_ledger().is_none());
+        let result = handle_set_settings_async(
+            &s,
+            &req(
+                "set_settings",
+                serde_json::json!({"private_inference":true}),
+            ),
+        )
+        .await;
+        assert!(result.error.is_none(), "{:?}", result.error);
+        let first = s
+            .routing_ledger()
+            .expect("owned proxy supplies metadata reader");
+        let expected = super::super::settings::IronWireDeclaration::Watch {
+            port: s.private_inference_value()["port"].as_u64().unwrap() as u16,
+            token_dir: Some(home.path().canonicalize().unwrap()),
+        };
+        assert_eq!(s.routing.read().unwrap().declaration, Some(expected));
+        assert!(s.routing.read().unwrap().derived);
+        assert_eq!(s.routing_value()["derived"], true);
+        let persisted = DaemonSettings::load(&s.store).unwrap();
+        assert!(persisted.private_inference);
+        assert!(persisted.ironwire.is_none());
+        assert!(!persisted.ironwire_attested_bodies);
+        assert!(format!("{:?}", s.source_roots_with_routing()).contains("attested_bodies: false"));
+        assert!(
+            handle_set_settings(
+                &s,
+                &req(
+                    "set_settings",
+                    serde_json::json!({"private_inference":true})
+                )
+            )
+            .error
+            .is_none()
+        );
+        assert!(Arc::ptr_eq(&first, &s.routing_ledger().unwrap()));
+        // A stale body opt-in does not turn an automatic metadata declaration
+        // into permission to read the owned proxy's verbatim body store.
+        assert!(
+            handle_set_settings(
+                &s,
+                &req(
+                    "set_settings",
+                    serde_json::json!({"ironwire_attested_bodies":true})
+                )
+            )
+            .error
+            .is_none()
+        );
+        assert!(format!("{:?}", s.source_roots_with_routing()).contains("attested_bodies: false"));
+        let settings_path = s.store.daemon_path(crate::config::DAEMON_SETTINGS_FILE);
+        let saved = std::fs::read(&settings_path).unwrap();
+        std::fs::remove_file(&settings_path).unwrap();
+        std::fs::create_dir(&settings_path).unwrap();
+        let refused = handle_set_settings(
+            &s,
+            &req(
+                "set_settings",
+                serde_json::json!({"private_inference":false}),
+            ),
+        );
+        assert_eq!(refused.error.unwrap().message, "settings-write-failed");
+        assert!(s.settings.lock().unwrap().private_inference);
+        assert!(Arc::ptr_eq(&first, &s.routing_ledger().unwrap()));
+        std::fs::remove_dir(&settings_path).unwrap();
+        std::fs::write(&settings_path, saved).unwrap();
+        // Withdrawal happens in the accepted settings transaction, before any
+        // asynchronous lifecycle reconcile or listener cleanup can complete.
+        assert!(
+            handle_set_settings(
+                &s,
+                &req(
+                    "set_settings",
+                    serde_json::json!({"private_inference":false})
+                )
+            )
+            .error
+            .is_none()
+        );
+        assert!(s.routing_ledger().is_none());
+        assert!(!s.routing.read().unwrap().derived);
+        s.stop_private_inference().await;
+    }
+
+    #[tokio::test]
+    async fn private_inference_preserves_explicit_off_and_custom_watch_during_teardown() {
+        use super::super::settings::IronWireDeclaration;
+        for off in [true, false] {
+            let s = shared();
+            s.adopt_runtime();
+            let home = tempfile::tempdir().unwrap();
+            let custom = token_dir_holding("explicit-metadata-token");
+            let declaration = if off {
+                IronWireDeclaration::Off
+            } else {
+                IronWireDeclaration::Watch {
+                    port: 4321,
+                    token_dir: Some(custom.path().to_path_buf()),
+                }
+            };
+            assert!(
+                handle_set_settings(
+                    &s,
+                    &req("set_settings", serde_json::json!({"ironwire":declaration}))
+                )
+                .error
+                .is_none()
+            );
+            let before = s.routing_ledger();
+            s.install_private_inference_for_test(home.path().to_path_buf(), 0);
+            assert!(
+                handle_set_settings_async(
+                    &s,
+                    &req(
+                        "set_settings",
+                        serde_json::json!({"private_inference":true})
+                    )
+                )
+                .await
+                .error
+                .is_none()
+            );
+            assert_eq!(
+                s.routing.read().unwrap().declaration,
+                Some(declaration.clone())
+            );
+            assert!(!s.routing.read().unwrap().derived);
+            assert_eq!(s.routing_value()["derived"], false);
+            s.stop_private_inference().await;
+            assert_eq!(s.routing.read().unwrap().declaration, Some(declaration));
+            if let Some(before) = before {
+                assert!(Arc::ptr_eq(&before, &s.routing_ledger().unwrap()));
+            } else {
+                assert!(s.routing_ledger().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn poisoned_routing_reports_unknown_without_a_token_diagnosis() {
+        let s = shared();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = s.routing.write().unwrap();
+            panic!("controlled routing state panic");
+        }));
+        assert_eq!(
+            s.routing_value(),
+            serde_json::json!({"state":"unknown", "derived":false, "last_refresh_at":null, "unreadable_rows":0})
+        );
+    }
+
+    #[tokio::test]
+    async fn derived_routing_refresh_withdraws_an_observed_exited_proxy_first() {
+        let s = shared();
+        s.adopt_runtime();
+        let home = tempfile::tempdir().unwrap();
+        s.install_private_inference_for_test(home.path().to_path_buf(), 0);
+        assert!(
+            handle_set_settings_async(
+                &s,
+                &req(
+                    "set_settings",
+                    serde_json::json!({"private_inference":true})
+                )
+            )
+            .await
+            .error
+            .is_none()
+        );
+        assert!(s.routing_ledger().is_some());
+        s.private_inference
+            .lock()
+            .await
+            .as_mut()
+            .unwrap()
+            .end_owned_for_test()
+            .await;
+        // The shared status is deliberately stale, as it is between poll ticks.
+        assert_ne!(s.private_inference_value()["state"], "crashed");
+        s.refresh_routing().await;
+        assert_eq!(s.private_inference_value()["state"], "crashed");
+        assert!(s.routing_ledger().is_none());
+        assert_eq!(s.routing_value()["derived"], false);
+        s.stop_private_inference().await;
+    }
+
+    #[tokio::test]
+    async fn private_inference_foreign_owner_never_supplies_derived_metadata() {
+        // A future-loosening guard: before automatic derivation there was
+        // also no reader for a foreign owner.
+        let home = tempfile::tempdir().unwrap();
+        let owner = ironwire_proxy::embed::start(home.path(), Some(0))
+            .await
+            .unwrap();
+        let s = shared();
+        s.adopt_runtime();
+        s.install_private_inference_for_test(home.path().to_path_buf(), 0);
+        assert!(
+            handle_set_settings_async(
+                &s,
+                &req(
+                    "set_settings",
+                    serde_json::json!({"private_inference":true})
+                )
+            )
+            .await
+            .error
+            .is_none()
+        );
+        assert_eq!(s.private_inference_value()["state"], "running_elsewhere");
+        assert!(s.routing_ledger().is_none());
+        s.stop_private_inference().await;
+        assert!(!owner.is_finished());
+        owner.shutdown().await;
     }
 
     #[tokio::test]

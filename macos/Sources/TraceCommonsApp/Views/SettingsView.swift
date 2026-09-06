@@ -1130,6 +1130,11 @@ struct SettingsContent: View {
         // reach a fault colour whatever the daemon reports.
         let stateTone = tone(RoutingSurface.tone(forState: state, calls: model.routingCalls))
         VStack(alignment: .leading, spacing: TC.Space.xxs) {
+            if model.status.routing.derived {
+                Text(copy.derivedOrigin)
+                    .font(TC.Font_.body)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text(RoutingSurface.stateLine(state, copy: copy, calls: model.routingCalls))
                 .font(TC.Font_.body)
                 .foregroundStyle(stateTone.textColor)
@@ -1511,6 +1516,7 @@ struct SettingsContent: View {
                         set: { model.applyPrivateInference($0) }
                     )
                 )
+                .disabled(model.privateInferenceBusy || model.daemonSettings?.privateInference == nil)
                 .toggleStyle(.switch)
                 .tint(TC.green)
                 .font(TC.Font_.body)

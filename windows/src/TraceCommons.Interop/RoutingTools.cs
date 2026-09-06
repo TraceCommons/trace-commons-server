@@ -586,17 +586,16 @@ public static class RoutingTools
     }
 
     /// <summary>
-    /// The daemon's three states, in words. A state this build does not know
-    /// says what the off state says: it claims nothing.
+    /// The daemon's reported state, in shared words. An unfamiliar nonempty
+    /// label is unavailable, never evidence of an Off declaration.
     /// </summary>
     public static string StateLine(RoutingCopy copy, string state)
     {
         ArgumentNullException.ThrowIfNull(copy);
 
         // Decided across the ABI, for the reason on ToolWord. A sentence the
-        // ABI would not produce falls back to the off line, which is what an
-        // unknown state reads as anyway: it claims nothing.
-        return RoutingSurface.StateLine(state) ?? copy.StateOff;
+        // ABI would not produce falls back to unavailable, not a guessed state.
+        return RoutingSurface.StateLine(state) ?? copy.StateUnknown;
     }
 
     /// <summary>
@@ -740,6 +739,10 @@ public sealed class RoutingDeclarationSnapshot
 /// </summary>
 public sealed class RoutingStatusSnapshot
 {
+    /// <summary>The effective metadata reader comes from this app's owned service.</summary>
+    [JsonPropertyName("derived")]
+    public bool Derived { get; set; }
+
     /// <summary>
     /// <c>not_declared</c>, <c>awaiting_rows</c> or <c>rows_seen</c>. Empty
     /// when the daemon did not report the block at all, which reads as the

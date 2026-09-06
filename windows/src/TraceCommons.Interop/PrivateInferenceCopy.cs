@@ -89,10 +89,11 @@ public sealed record PrivateInferenceCopy
     [JsonPropertyName("quit_also_stops")]
     public string QuitAlsoStops { get; init; } = string.Empty;
 
-    /// <summary>
-    /// Every sentence, for the "nothing arrived blank" check. Not a rendering
-    /// order.
-    /// </summary>
+    /// <summary>A write could not be confirmed; persistence may still have happened.</summary>
+    [JsonPropertyName("write_unconfirmed")]
+    public string WriteUnconfirmed { get; init; } = string.Empty;
+
+    /// <summary>Every sentence for the complete-payload check, not a rendering order.</summary>
     public string[] Sentences =>
         new[]
         {
@@ -117,5 +118,6 @@ public sealed record PrivateInferenceCopy
             StateStartFailed,
             StateCrashed,
             QuitAlsoStops,
+            WriteUnconfirmed,
         };
 }

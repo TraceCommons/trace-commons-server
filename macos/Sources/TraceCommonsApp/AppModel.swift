@@ -187,19 +187,44 @@ final class AppModel: ObservableObject {
         )
     }
 
-    /// Answer the offer. Both answers are written to the daemon, so "Not
-    /// now" is remembered across relaunches and across shells.
+    @Published private(set) var privateInferenceBusy = false
+
+    /// Both answers are written to the daemon and remembered across shells.
     func answerPrivateInferenceOffer(accepted: Bool) {
-        perform("set_settings", work: { try $0.answerPrivateInferenceOffer(accepted: accepted) }) {
-            view in
-            self.publishIfChanged(\.daemonSettings, view)
-        }
+        submitPrivateInference { try $0.answerPrivateInferenceOffer(accepted: accepted) }
     }
 
-    /// Flip the switch on the settings card, and render from the echo.
+    /// Keep the last confirmed switch while one write is in flight.
     func applyPrivateInference(_ on: Bool) {
-        perform("set_settings", work: { try $0.setPrivateInference(on) }) { view in
-            self.publishIfChanged(\.daemonSettings, view)
+        submitPrivateInference { try $0.setPrivateInference(on) }
+    }
+
+    private func submitPrivateInference(_ work: @escaping (DaemonClient) throws -> DaemonSettingsView) {
+        guard !privateInferenceBusy else {
+            objectWillChange.send()
+            return
+        }
+        guard let client else {
+            lastActionError = privateInferenceCopy?.writeUnconfirmed
+            objectWillChange.send()
+            return
+        }
+        privateInferenceBusy = true
+        Task.detached(priority: .userInitiated) {
+            let outcome = Result { try work(client) }
+            await MainActor.run {
+                self.privateInferenceBusy = false
+                switch outcome {
+                case .success(let settings):
+                    if self.lastActionError == self.privateInferenceCopy?.writeUnconfirmed { self.lastActionError = nil }
+                    self.publishIfChanged(\.daemonSettings, settings)
+                case .failure:
+                    self.lastActionError = self.privateInferenceCopy?.writeUnconfirmed
+                }
+                // Repaint the derived binding even when a failed write left
+                // its confirmed value unchanged.
+                self.objectWillChange.send()
+            }
         }
     }
 
@@ -1120,6 +1145,7 @@ final class AppModel: ObservableObject {
     func setClientForTesting(_ client: DaemonClient) {
         self.client = client
     }
+    func setDaemonSettingsForTesting(_ settings: DaemonSettingsView) { publishIfChanged(\.daemonSettings, settings) }
     func setStartupForTesting(_ startup: Startup) { self.startup = startup }
 
     func setStatusForTesting(_ status: DaemonStatus) {

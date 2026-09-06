@@ -767,9 +767,14 @@ curl -s --get https://cloud-api.near.ai/v1/attestation/report \
     .model_attestations[]
     | select(.model_name == $m)
     | select(.signing_algo == "ed25519")
+    | (.intel_quote | ascii_downcase) as $q
+    # The quote header must be v4 TDX before any offset in it means what we
+    # think: bytes 0..2 are the version (LE 4 -> "0400") and bytes 4..8 the
+    # TEE type (LE 0x81 -> "81000000"). Hex chars [0:4] and [8:16].
+    | select($q[0:4] == "0400" and $q[8:16] == "81000000")
     # report_data lives INSIDE the quote, at byte offset 568, length 64.
     # In hex characters that is [1136 : 1264].
-    | select(.intel_quote[1136:1264] == (.signing_address + $n))
+    | select($q[1136:1264] == (.signing_address + $n))
     | .signing_address'
 ```
 
@@ -1110,8 +1115,8 @@ what was current when it was written.
 | Image | `ghcr.io/tracecommons/trace-commons-witness@sha256:052165938c552e1d3ab68e141de4bc39d86f11761875fbd096a1454cd76d3345` |
 | Mode | `full-pipeline` (NEAR AI classifier) |
 | Signing address | `0x655a17fcf6d0b9069e1b1dd07a7f5535d0c76798` |
-| Instance `compose_hash` | `454992a4c0ef366ce7049303d48937b5f5d560d3412935b27f6a09e15cab10e4` |
-| Measurement | `mrtd:f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077+mrconfigid:01454992a4c0ef366ce7049303d48937b5f5d560d3412935b27f6a09e15cab10e4000000000000000000000000000000` |
+| Instance `compose_hash` | `e848cac038d7a3181b0a9dbbd7ba63fbec3a2bed6aa6e58ad9309992eb9756eb` |
+| Measurement | `mrtd:f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077+mrconfigid:01e848cac038d7a3181b0a9dbbd7ba63fbec3a2bed6aa6e58ad9309992eb9756eb000000000000000000000000000000` |
 | Policy version | `ironclaw-deterministic-secret-path-v3+privacy-filter-near-ai-v1` |
 | `public_logs` / `public_sysinfo` / `public_tcbinfo` | `false` / `false` / `true` |
 | `allowed_envs` | `["TRACE_NEAR_AI_PRIVACY_API_KEY"]` |

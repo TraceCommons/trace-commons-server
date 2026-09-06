@@ -2069,9 +2069,9 @@ mod daily_cap_tests {
 // written to replace.
 pub use trace_commons_contributor::routing_copy::{
     IRONWIRE_APPLIES_AT_ONCE, IRONWIRE_APPLY, IRONWIRE_CHECK_UNAVAILABLE, IRONWIRE_CHECKING,
-    IRONWIRE_CONNECT, IRONWIRE_FOLDER_NOTE, IRONWIRE_FOLDER_TITLE, IRONWIRE_INTRO,
-    IRONWIRE_LOOK_AGAIN, IRONWIRE_OVERRIDE_TITLE, IRONWIRE_PORT_NOTE, IRONWIRE_PORT_TITLE,
-    IRONWIRE_PROBE_REACHABLE, IRONWIRE_STATE_OFF, IRONWIRE_STATE_READING,
+    IRONWIRE_CONNECT, IRONWIRE_DERIVED_ORIGIN, IRONWIRE_FOLDER_NOTE, IRONWIRE_FOLDER_TITLE,
+    IRONWIRE_INTRO, IRONWIRE_LOOK_AGAIN, IRONWIRE_OVERRIDE_TITLE, IRONWIRE_PORT_NOTE,
+    IRONWIRE_PORT_TITLE, IRONWIRE_PROBE_REACHABLE, IRONWIRE_STATE_OFF, IRONWIRE_STATE_READING,
     IRONWIRE_STATE_TOKEN_UNREADABLE, IRONWIRE_STATE_WAITING, IRONWIRE_TOGGLE, StateTone,
     TOOL_CLAUDE, TOOL_CLINE, TOOL_CODEX, TOOL_DIRECT, TOOL_GEMINI, TOOL_NOT_USED, TOOL_PRIVATE,
     TOOL_UNKNOWN, TOOLS_HEADING, ToolTone, ToolWiring, ironwire_discovery_line,
@@ -2100,9 +2100,11 @@ pub use trace_commons_contributor::private_inference_copy::{
     OFFER_TITLE as PRIVATE_INFERENCE_OFFER_TITLE, OFFER_WHAT as PRIVATE_INFERENCE_OFFER_WHAT,
     PrivateInferenceTone, SETTINGS_APPLIES_AT_ONCE as PRIVATE_INFERENCE_APPLIES_AT_ONCE,
     SETTINGS_TITLE as PRIVATE_INFERENCE_TITLE, SETTINGS_TOGGLE as PRIVATE_INFERENCE_TOGGLE,
-    STATE_OFF as PRIVATE_INFERENCE_STATE_OFF, serving_line as private_inference_serving_line,
-    should_offer as private_inference_should_offer, state_line as private_inference_state_line,
-    state_tone as private_inference_state_tone,
+    STATE_OFF as PRIVATE_INFERENCE_STATE_OFF, STATE_UNKNOWN as PRIVATE_INFERENCE_STATE_UNKNOWN,
+    WRITE_UNCONFIRMED as PRIVATE_INFERENCE_WRITE_UNCONFIRMED,
+    serving_line as private_inference_serving_line, should_offer as private_inference_should_offer,
+    state_line as private_inference_state_line, state_tone as private_inference_state_tone,
+    write_confirmed as private_inference_write_confirmed,
 };
 
 // --- The redaction witness ---------------------------------------------

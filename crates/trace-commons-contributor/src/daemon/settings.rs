@@ -145,8 +145,9 @@ pub struct DaemonSettings {
     #[serde(default)]
     pub cline_source: Option<SourceDeclaration>,
 
-    /// A local inference proxy, when the contributor declared one. Absent
-    /// means off: see [`IronWireDeclaration`].
+    /// An explicit local proxy declaration. Off refuses metadata; Watch
+    /// keeps its endpoint. Absent permits the daemon to derive metadata only
+    /// from explicitly enabled hosting it owns; see [`IronWireDeclaration`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ironwire: Option<IronWireDeclaration>,
 
@@ -182,7 +183,9 @@ pub struct DaemonSettings {
     /// a different fact from the contributor asking us to.
     ///
     /// Turning this on does not repoint any agent. Which tools route through
-    /// IronWire stays a per-tool declaration.
+    /// IronWire stays a per-tool declaration. With no explicit `ironwire`
+    /// declaration, the owned proxy supplies metadata routing only; body
+    /// collection remains a separate opt-in requiring an explicit Watch.
     ///
     /// `#[serde(default)]` so a settings file written before this field
     /// existed loads with it off. An upgrade must never start a proxy on a
@@ -273,7 +276,9 @@ impl SourceDeclaration {
 ///
 /// Deliberately NOT the same tri-state semantics as [`SourceDeclaration`].
 /// There, `None` means "never asked" and falls back to the conventional
-/// per-user location. Here `None` means **off**, with no fallback.
+/// per-user location. Here `None` supplies no endpoint and never triggers
+/// discovery. The daemon may separately derive metadata from its own proxy
+/// after accepted `private_inference` opt-in; explicit Off always refuses it.
 ///
 /// A session root has a conventional location to fall back to. A local service
 /// does not: connecting to `127.0.0.1:8463` because nobody said otherwise is a

@@ -434,9 +434,9 @@ int32_t     tc_routing_tool_tone(const char* source_mode, int32_t wiring);
  * anything-else onto them was written out again in each shell, and three
  * copies of a branch can disagree while three copies of a string cannot.
  *
- * A state this build has never heard of -- and a NULL or non-UTF-8 state --
- * reads as the off line, which claims nothing. It never falls through to
- * any of the three "on" sentences.
+ * Unfamiliar nonempty states read as unavailable, not Off or a token error.
+ * NULL, non-UTF-8 and empty input preserve the legacy empty-state behavior.
+ * None falls through to an "on" sentence.
  *
  * "token_unreadable" is one of those three: the proxy is declared, and the
  * reader could not be built at all. It used to arrive here as the unknown
@@ -651,6 +651,9 @@ char*       tc_private_inference_serving_line(int32_t port);
  * for an interruption.
  */
 int32_t     tc_private_inference_should_offer(int32_t answered, int32_t on);
+/* Write acknowledgement: -1 = absent, 0 = false, 1 = true for each input.
+ * An absent request is a marker-only decline. Invalid values return 0. */
+int32_t     tc_private_inference_write_confirmed(int32_t requested_on, int32_t echoed_seen, int32_t echoed_on);
 
 /* The settings screen's session-source row for one tool, assembled.
  *
