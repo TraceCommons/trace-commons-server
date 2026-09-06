@@ -55,7 +55,7 @@ use sha2::{Digest, Sha256};
 
 use super::AttestationReport;
 use super::quote::Collateral;
-use super::receipt::{ReceiptAlgo, ReceiptPayload};
+use super::receipt::{ReceiptAlgo, ReceiptPayload, ReceiptSignatureKind};
 
 /// Missing-control name when no NEAR AI base URL is configured.
 pub const BASE_URL_CONTROL: &str = "near_ai_base_url";
@@ -402,6 +402,11 @@ impl AttestationClient for HttpAttestationClient {
             signature: parsed.signature,
             signing_address: parsed.signing_address,
             signing_algo: ReceiptAlgo::Ecdsa,
+            // This client asks for `signing_algo=ecdsa`, and the ECDSA
+            // signature endpoint names no `signature_kind`. Unrecognised is
+            // the honest reading of a receipt that declared none; it is not a
+            // key source, and nothing here routes on it.
+            signature_kind: ReceiptSignatureKind::Unrecognised,
         })
     }
 }

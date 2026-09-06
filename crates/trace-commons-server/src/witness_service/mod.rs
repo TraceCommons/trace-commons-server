@@ -2121,6 +2121,7 @@ mod tests {
             signature: hex::encode(provider.sign(receipt_text.as_bytes()).as_ref()),
             signing_address: provider_key.clone(),
             signing_algo: crate::near_attestation::receipt::ReceiptAlgo::Ed25519,
+            signature_kind: crate::near_attestation::receipt::ReceiptSignatureKind::ProviderTee,
             text: receipt_text.clone(),
         };
         let mut request = contribution_request("built a useful fixture");
@@ -2282,6 +2283,7 @@ mod tests {
             signature: attacker.sign_eip191(receipt_text.as_bytes()).unwrap(),
             signing_address: attacker.address(),
             signing_algo: crate::near_attestation::receipt::ReceiptAlgo::Ecdsa,
+            signature_kind: crate::near_attestation::receipt::ReceiptSignatureKind::Unrecognised,
             text: receipt_text,
         });
         assert!(

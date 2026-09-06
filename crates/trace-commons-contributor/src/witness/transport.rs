@@ -452,14 +452,38 @@ pub fn witness_request_body(
     );
     document.insert("granted_uses".to_string(), serde_json::json!(granted.uses));
     if let Some(receipt) = receipt {
+        let mut body = serde_json::Map::new();
+        body.insert("text".to_string(), serde_json::json!(receipt.text));
+        body.insert(
+            "signature".to_string(),
+            serde_json::json!(receipt.signature),
+        );
+        body.insert(
+            "signing_address".to_string(),
+            serde_json::json!(receipt.signing_address),
+        );
+        body.insert(
+            "signing_algo".to_string(),
+            serde_json::json!(receipt.signing_algo.as_wire()),
+        );
+        // Which attested key the provider says signed it. The witness routes
+        // on this: a `gateway` receipt (what the Responses API returns, and
+        // therefore what every Codex session produces) is checked against the
+        // gateway's attested key, a `provider_tee` one against the serving
+        // model's. Omitting it would send every receipt to one source.
+        //
+        // **Omitted, not sent as null, when the provider named no kind we
+        // recognise.** That is also what keeps this compatible with a witness
+        // that predates the field: such a witness refuses unknown fields, so
+        // a receipt with no kind to declare still reaches it in the shape it
+        // knows. A receipt that *does* declare one needs a witness that
+        // understands it -- deploy the witness before the client.
+        if let Some(kind) = receipt.signature_kind.as_wire() {
+            body.insert("signature_kind".to_string(), serde_json::json!(kind));
+        }
         document.insert(
             "inference_receipt".to_string(),
-            serde_json::json!({
-                "text": receipt.text,
-                "signature": receipt.signature,
-                "signing_address": receipt.signing_address,
-                "signing_algo": receipt.signing_algo.as_wire(),
-            }),
+            serde_json::Value::Object(body),
         );
     }
     serde_json::to_vec(&serde_json::Value::Object(document))
@@ -842,7 +866,7 @@ mod tests {
     use axum::routing::{get, post};
     use std::collections::HashMap;
     use std::sync::Mutex;
-    use trace_commons_attestation::receipt::ReceiptAlgo;
+    use trace_commons_attestation::receipt::{ReceiptAlgo, ReceiptSignatureKind};
 
     /// What a local witness saw.
     ///
@@ -1269,6 +1293,7 @@ mod tests {
             text,
             signing_address: hex::encode(provider.public_key().as_ref()),
             signing_algo: ReceiptAlgo::Ed25519,
+            signature_kind: trace_commons_attestation::receipt::ReceiptSignatureKind::ProviderTee,
         };
         let (mut response, pinned) = signed_fixture(envelope_bytes());
         let witness = test_signer("witness-review-test-only");
@@ -1854,6 +1879,7 @@ mod tests {
             signature: "0xcccc3333".to_string(),
             signing_address: "0xdddd444444444444444444444444444444444444".to_string(),
             signing_algo: ReceiptAlgo::Ecdsa,
+            signature_kind: ReceiptSignatureKind::Unrecognised,
         }
     }
 
@@ -1868,11 +1894,51 @@ mod tests {
             signature: "cccc3333".to_string(),
             signing_address: "dddd4444".to_string(),
             signing_algo: ReceiptAlgo::Ed25519,
+            signature_kind: ReceiptSignatureKind::ProviderTee,
         };
         let body = witness_request_body(&raw_with_secret(), &granted(), Some(&receipt))
             .expect("the fixture contribution serialises");
         let document: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(document["inference_receipt"]["signing_algo"], "ed25519");
+    }
+
+    /// The signature kind travels with the receipt too. The witness routes on
+    /// it -- a `gateway` receipt (what the Responses API returns, and so what
+    /// every Codex session produces) against the gateway's attested key, a
+    /// `provider_tee` one against the serving model's -- so a client that
+    /// omitted it would send every receipt to one key source.
+    #[test]
+    fn the_offered_receipt_carries_its_signature_kind_to_the_witness() {
+        for (kind, wire) in [
+            (ReceiptSignatureKind::Gateway, "gateway"),
+            (ReceiptSignatureKind::ProviderTee, "provider_tee"),
+        ] {
+            let mut receipt = offered_receipt();
+            receipt.signature_kind = kind;
+            let body = witness_request_body(&raw_with_secret(), &granted(), Some(&receipt))
+                .expect("the fixture contribution serialises");
+            let document: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(document["inference_receipt"]["signature_kind"], wire);
+        }
+    }
+
+    /// A receipt whose provider named no kind we recognise sends no
+    /// `signature_kind` at all -- omitted, never `null`, and never a guessed
+    /// default. That is also what keeps such a receipt readable by a witness
+    /// that predates the field, which refuses unknown ones.
+    #[test]
+    fn a_receipt_with_no_recognised_kind_sends_no_signature_kind_field() {
+        let receipt = offered_receipt();
+        assert_eq!(receipt.signature_kind, ReceiptSignatureKind::Unrecognised);
+        let body = witness_request_body(&raw_with_secret(), &granted(), Some(&receipt))
+            .expect("the fixture contribution serialises");
+        let document: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            document["inference_receipt"]
+                .get("signature_kind")
+                .is_none(),
+            "an unrecognised kind is omitted, not sent as null or as a default"
+        );
     }
 
     /// The receipt reaches the witness, in the field the witness reads, with

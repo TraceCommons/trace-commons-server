@@ -66,7 +66,7 @@ use trace_commons_protocol::trace_contribution::{
     ConsentMetadata, ConsentScope, RawTraceContribution, ResidualPiiRisk, TraceAllowedUse,
 };
 
-use crate::near_attestation::receipt::{ReceiptAlgo, ReceiptPayload};
+use crate::near_attestation::receipt::{ReceiptAlgo, ReceiptPayload, ReceiptSignatureKind};
 use crate::redaction_witness::certificate::WitnessCertificate;
 
 use super::surface::{
@@ -275,6 +275,26 @@ struct InferenceReceiptBody {
     /// is absent, inner `None` is null.
     #[serde(default, deserialize_with = "deserialize_present")]
     signing_algo: Option<Option<String>>,
+    /// Which attested key the provider says signed it: `gateway` for a
+    /// Responses-API receipt, `provider_tee` for a Chat-Completions one. The
+    /// two are signed by different attested keys, and this is what selects
+    /// which one the pins check the signer against.
+    ///
+    /// Optional and absent-tolerant for the same reason `signing_algo` is:
+    /// every receipt sent before this field existed carried no kind, and a
+    /// witness that required it would refuse every existing client. Absent
+    /// reads as *unrecognised*, not as a default kind -- there is no safe
+    /// default here, since guessing one would check a signer against a key
+    /// set the receipt never claimed.
+    ///
+    /// An unrecognised *value* is likewise not a malformed request. It is
+    /// carried through and refused later, folded into
+    /// `witness_inference_receipt_unverified` with every other receipt
+    /// failure: a distinct 400 would tell a prober which kinds this witness
+    /// knows, which is the oracle the folded label exists to deny. An
+    /// explicit `null` is still malformed, matching `signing_algo`.
+    #[serde(default, deserialize_with = "deserialize_present")]
+    signature_kind: Option<Option<String>>,
 }
 
 /// Distinguishes an absent field from a present-but-`null` one: plain
@@ -297,11 +317,17 @@ impl TryFrom<InferenceReceiptBody> for ReceiptPayload {
             Some(None) => return Err(malformed()),
             Some(Some(s)) => ReceiptAlgo::from_wire(&s).ok_or_else(malformed)?,
         };
+        let signature_kind = match body.signature_kind {
+            None => ReceiptSignatureKind::Unrecognised,
+            Some(None) => return Err(malformed()),
+            Some(Some(s)) => ReceiptSignatureKind::from_wire(&s),
+        };
         Ok(ReceiptPayload {
             text: body.text,
             signature: body.signature,
             signing_address: body.signing_address,
             signing_algo,
+            signature_kind,
         })
     }
 }
@@ -1887,6 +1913,61 @@ mod tests {
                 assert_eq!(refusal.code, "witness_request_malformed");
             }
             Ok(_) => panic!("an explicit null signing_algo is a refusal, never ECDSA"),
+        }
+    }
+
+    /// The wire `signature_kind` becomes the discriminator the pins route on.
+    ///
+    /// Absent is *unrecognised*, not a default kind: guessing one would check
+    /// a signer against a key set the receipt never claimed. An unrecognised
+    /// value is likewise carried rather than rejected here, so its refusal
+    /// folds into `witness_inference_receipt_unverified` instead of becoming
+    /// a 400 that tells a prober which kinds this witness knows.
+    #[test]
+    fn the_wire_signature_kind_becomes_the_routing_discriminator() {
+        let body = |kind: serde_json::Value| {
+            let mut map = serde_json::json!({
+                "text": "a:b", "signature": "cc", "signing_address": "dd",
+                "signing_algo": "ed25519"
+            });
+            map["signature_kind"] = kind;
+            serde_json::from_value::<InferenceReceiptBody>(map).unwrap()
+        };
+
+        let absent: InferenceReceiptBody = serde_json::from_value(serde_json::json!({
+            "text": "a:b", "signature": "cc", "signing_address": "dd", "signing_algo": "ed25519"
+        }))
+        .unwrap();
+        assert_eq!(
+            ReceiptPayload::try_from(absent)
+                .ok()
+                .expect("an absent signature_kind is accepted")
+                .signature_kind,
+            ReceiptSignatureKind::Unrecognised,
+            "absent is unrecognised, never a default kind"
+        );
+
+        for (wire, expected) in [
+            ("gateway", ReceiptSignatureKind::Gateway),
+            ("provider_tee", ReceiptSignatureKind::ProviderTee),
+            ("something_new", ReceiptSignatureKind::Unrecognised),
+        ] {
+            assert_eq!(
+                ReceiptPayload::try_from(body(serde_json::json!(wire)))
+                    .ok()
+                    .expect("a string kind is accepted")
+                    .signature_kind,
+                expected
+            );
+        }
+
+        // An explicit `null` is malformed, matching `signing_algo`.
+        match ReceiptPayload::try_from(body(serde_json::Value::Null)) {
+            Err(refusal) => {
+                assert_eq!(refusal.status, StatusCode::BAD_REQUEST);
+                assert_eq!(refusal.code, "witness_request_malformed");
+            }
+            Ok(_) => panic!("an explicit null signature_kind is a refusal"),
         }
     }
 }

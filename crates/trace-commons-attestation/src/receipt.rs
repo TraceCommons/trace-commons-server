@@ -98,6 +98,74 @@ impl ReceiptAlgo {
     }
 }
 
+/// Which attested key signed a receipt -- the *source* of the signer, not the
+/// algorithm.
+///
+/// NEAR AI issues two legitimate kinds of receipt for the **same hosted
+/// model**, and which one arrives is decided by the protocol the inference
+/// call used rather than by the model:
+///
+/// | request protocol | `signature_kind` | signer |
+/// |---|---|---|
+/// | Chat Completions (`/v1/chat/completions`) | `provider_tee` | the per-model ed25519 key in the report's `model_attestations` |
+/// | Responses API (`/v1/responses`) | `gateway` | the ed25519 key in the report's `gateway_attestation` |
+///
+/// Both were captured live against `Qwen/Qwen3.6-35B-A3B-FP8`. This matters
+/// operationally rather than academically: the Codex CLI speaks the Responses
+/// API exclusively -- it dropped `wire_api = "chat"` -- so a deployment whose
+/// contributors use Codex sees only `gateway` receipts, and a verifier that
+/// checks `model_attestations` alone refuses every one of them.
+///
+/// Each kind has **exactly one** correct key source. A `gateway` receipt
+/// checked against a model key, or a `provider_tee` receipt checked against
+/// the gateway key, must not verify: accepting either would let a key
+/// attested for one role vouch for the other.
+///
+/// [`Self::Unrecognised`] is the explicit fail-closed arm. It covers a value
+/// this crate has not seen *and* the absence of the field, and it is not a
+/// licence to try every key: an unrecognised kind names no source, so a
+/// receipt carrying one can be checked against nothing and is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiptSignatureKind {
+    /// Signed by the gateway's own attested ed25519 key. The Responses API
+    /// form.
+    Gateway,
+    /// Signed by the serving model's per-model attested ed25519 key. The Chat
+    /// Completions form.
+    ProviderTee,
+    /// Something else, or nothing at all. Refused wherever a key source has to
+    /// be chosen.
+    Unrecognised,
+}
+
+impl ReceiptSignatureKind {
+    /// The spelling NEAR AI uses in the `signature_kind` field, or `None` for
+    /// [`Self::Unrecognised`], which has no spelling to send.
+    #[must_use]
+    pub fn as_wire(self) -> Option<&'static str> {
+        match self {
+            Self::Gateway => Some("gateway"),
+            Self::ProviderTee => Some("provider_tee"),
+            Self::Unrecognised => None,
+        }
+    }
+
+    /// Parse the wire spelling. Exact match, case not folded, for the reason
+    /// [`ReceiptAlgo::from_wire`] gives.
+    ///
+    /// Anything else is [`Self::Unrecognised`] rather than an error, so every
+    /// caller has to handle the refusing arm explicitly rather than an error
+    /// type one of them could map to a default.
+    #[must_use]
+    pub fn from_wire(s: &str) -> Self {
+        match s {
+            "gateway" => Self::Gateway,
+            "provider_tee" => Self::ProviderTee,
+            _ => Self::Unrecognised,
+        }
+    }
+}
+
 /// A receipt as the provider returns it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReceiptPayload {
@@ -110,6 +178,11 @@ pub struct ReceiptPayload {
     /// Which scheme `signature` and `signing_address` are in. See
     /// [`ReceiptAlgo`] for why this is explicit rather than inferred.
     pub signing_algo: ReceiptAlgo,
+    /// Which attested key the provider says signed it. See
+    /// [`ReceiptSignatureKind`]: this decides which key source the signer is
+    /// checked against, and it is read off the wire rather than guessed from
+    /// the shape of `text` or the protocol we think we used.
+    pub signature_kind: ReceiptSignatureKind,
 }
 
 /// What a verified receipt establishes.
@@ -130,6 +203,16 @@ pub struct ReceiptVerdict {
     /// two-part form, which binds no model at all.
     pub model: Option<String>,
     pub signing_algo: ReceiptAlgo,
+    /// Carried through from the payload unchanged.
+    ///
+    /// A signature verifies against the key that made it and says nothing
+    /// about which role that key holds, so this is the provider's *claim*
+    /// about the signer's source -- the claim a caller resolves to a key set,
+    /// never a fact the signature established. What makes it safe to route on
+    /// is that each kind resolves to exactly one attested key set: a claim of
+    /// the wrong kind sends the signer to a set it is not in, and the
+    /// comparison fails.
+    pub signature_kind: ReceiptSignatureKind,
 }
 
 /// Why a receipt was refused.
@@ -261,6 +344,7 @@ pub fn verify_receipt(
         signing_address,
         model: bound_model.map(str::to_string),
         signing_algo: payload.signing_algo,
+        signature_kind: payload.signature_kind,
     })
 }
 
@@ -398,6 +482,13 @@ pub enum AttestedKeyError {
     /// The report carries no ed25519 attestation for the model asked about.
     #[error("attestation report carries no ed25519 attestation for this model")]
     ModelNotAttested,
+    /// The receipt named a `signature_kind` this crate does not recognise, or
+    /// named none at all, so no attested key source could be chosen for it.
+    ///
+    /// Refused rather than answered by trying every source: see
+    /// [`attested_keys_for_receipt`].
+    #[error("receipt signature kind names no attested key source")]
+    SignatureKindUnrecognised,
 }
 
 /// Byte offset of `report_data` inside a v4 TDX quote: the 48-byte quote
@@ -586,6 +677,97 @@ pub fn model_ed25519_keys(
     Ok(keys)
 }
 
+/// The ed25519 signing key a report attests **for the gateway itself**.
+///
+/// This is the key that signs a `gateway`-kind receipt -- the form the
+/// Responses API (`/v1/responses`) returns, and therefore the only form a
+/// Codex-driven session ever produces. It signs no `provider_tee` receipt,
+/// exactly as a model key signs no `gateway` one; see
+/// [`ReceiptSignatureKind`].
+///
+/// Same binding discipline as [`model_ed25519_keys`], applied to the
+/// `gateway_attestation` object: `report_data == signing_address || nonce` for
+/// the nonce this caller sent. Unlike a model entry, the gateway attestation
+/// carries a `report_data` field as well as an `intel_quote`, and
+/// [`attested_ed25519_key`] refuses a disagreement between them rather than
+/// picking a winner.
+///
+/// One key, not a set: a report carries exactly one `gateway_attestation`. It
+/// is returned as a `Vec` by [`attested_keys_for_receipt`] only so that both
+/// kinds resolve to the same shape.
+///
+/// # Errors
+///
+/// [`AttestedKeyError::Malformed`] when the report is not JSON or carries no
+/// `gateway_attestation`, and the binding errors of [`attested_ed25519_key`]
+/// when the object is present but does not bind.
+pub fn gateway_ed25519_key(
+    report_json: &str,
+    expected_nonce: &str,
+) -> Result<String, AttestedKeyError> {
+    let document: serde_json::Value =
+        serde_json::from_str(report_json).map_err(|_| AttestedKeyError::Malformed)?;
+    let gateway = document
+        .get("gateway_attestation")
+        .ok_or(AttestedKeyError::Malformed)?;
+    attested_ed25519_key(gateway, expected_nonce)
+}
+
+/// The attested key set a receipt's signer must be checked against, chosen by
+/// the receipt's own [`ReceiptSignatureKind`].
+///
+/// This is the router the two kinds need, and the reason it exists is that
+/// **the same hosted model** signs with a different key depending on the
+/// protocol the call used. Reading only `model_attestations` -- which is what
+/// shipped -- refuses every legitimate Responses-API receipt, and Codex speaks
+/// nothing else.
+///
+/// One report answers both: a single `GET /attestation/report?model=..&
+/// signing_algo=ed25519&nonce=..` returns `gateway_attestation` *and*
+/// `model_attestations`, so routing costs no extra fetch.
+///
+/// # Each kind has exactly one source
+///
+/// - [`ReceiptSignatureKind::Gateway`] resolves to [`gateway_ed25519_key`]
+///   and to nothing else. `model` is not consulted.
+/// - [`ReceiptSignatureKind::ProviderTee`] resolves to [`model_ed25519_keys`]
+///   for the receipt's own model, and to nothing else.
+/// - [`ReceiptSignatureKind::Unrecognised`] resolves to nothing and is
+///   refused.
+///
+/// There is deliberately no arm that tries both. A `gateway` receipt that
+/// verified against a model key, or the reverse, would mean a key attested for
+/// one role could vouch for the other -- which is the property the two
+/// separate attestations exist to deny.
+///
+/// # Errors
+///
+/// [`AttestedKeyError::SignatureKindUnrecognised`] for a kind that names no
+/// source, including the receipt that carried no kind at all;
+/// [`AttestedKeyError::ModelNotAttested`] for a `provider_tee` receipt that
+/// binds no model, since there is then no entry to look up; and otherwise
+/// whatever the chosen reader returns.
+pub fn attested_keys_for_receipt(
+    kind: ReceiptSignatureKind,
+    report_json: &str,
+    expected_nonce: &str,
+    model: Option<&str>,
+) -> Result<Vec<String>, AttestedKeyError> {
+    match kind {
+        ReceiptSignatureKind::Gateway => {
+            Ok(vec![gateway_ed25519_key(report_json, expected_nonce)?])
+        }
+        ReceiptSignatureKind::ProviderTee => {
+            // A `provider_tee` receipt with no model names no entry. Refused
+            // rather than answered with some other model's keys, which is the
+            // only other thing this could do.
+            let model = model.ok_or(AttestedKeyError::ModelNotAttested)?;
+            model_ed25519_keys(report_json, expected_nonce, model)
+        }
+        ReceiptSignatureKind::Unrecognised => Err(AttestedKeyError::SignatureKindUnrecognised),
+    }
+}
+
 /// Whether a verified receipt's signer is one of a model's attested keys.
 ///
 /// The set form of [`signer_is_attested`], with the same guard against an
@@ -697,6 +879,7 @@ mod tests {
             signature: sign(&k, text, VEncoding::Ethereum),
             signing_address: address_string(&k),
             signing_algo: ReceiptAlgo::Ecdsa,
+            signature_kind: ReceiptSignatureKind::Unrecognised,
         }
     }
 
@@ -855,6 +1038,7 @@ mod tests {
             signature: sign(&impostor, &text, VEncoding::Ethereum),
             signing_address: claimed,
             signing_algo: ReceiptAlgo::Ecdsa,
+            signature_kind: ReceiptSignatureKind::Unrecognised,
         };
         let err = verify(&payload).expect_err("must be refused");
         assert_eq!(err, ReceiptError::SignerMismatch);
@@ -942,6 +1126,7 @@ mod tests {
                 signature,
                 signing_address: address_string(&k),
                 signing_algo: ReceiptAlgo::Ecdsa,
+                signature_kind: ReceiptSignatureKind::Unrecognised,
             };
             assert!(verify(&payload).is_ok());
         }
@@ -1061,6 +1246,7 @@ mod tests {
             signature: LIVE_ED25519_SIGNATURE.to_string(),
             signing_address: LIVE_ED25519_KEY.to_string(),
             signing_algo: ReceiptAlgo::Ed25519,
+            signature_kind: ReceiptSignatureKind::Gateway,
         }
     }
 
@@ -1217,6 +1403,7 @@ mod tests {
             signature: hex::encode(signature.as_ref()),
             signing_address: hex::encode(key_pair.public_key().as_ref()).to_ascii_uppercase(),
             signing_algo: ReceiptAlgo::Ed25519,
+            signature_kind: ReceiptSignatureKind::Gateway,
         }
     }
 
@@ -1514,12 +1701,16 @@ mod tests {
     fn live_receipt(json: &str) -> ReceiptPayload {
         let v: serde_json::Value = serde_json::from_str(json).expect("fixture is JSON");
         let s = |k: &str| v[k].as_str().expect("a captured field").to_string();
-        assert_eq!(v["signature_kind"], "provider_tee");
         ReceiptPayload {
             text: s("text"),
             signature: s("signature"),
             signing_address: s("signing_address"),
             signing_algo: ReceiptAlgo::from_wire(&s("signing_algo")).expect("a known algo"),
+            // Off the fixture, never asserted to a constant here: which kind a
+            // capture carries is the thing under test, and a helper that
+            // hard-coded `provider_tee` would make the gateway fixture below
+            // impossible to express.
+            signature_kind: ReceiptSignatureKind::from_wire(&s("signature_kind")),
         }
     }
 
@@ -1718,6 +1909,226 @@ mod tests {
                 AttestedKeyError::Malformed,
                 "an unreadable quote must refuse, not fall back to an echo"
             );
+        }
+    }
+
+    // ---- Both signature kinds -------------------------------------------
+    //
+    // The correction this section pins: NEAR AI issues two legitimate kinds
+    // of receipt for the *same* hosted model, and the protocol decides which.
+    // A Chat Completions call gets `provider_tee`, signed by the model key; a
+    // Responses API call gets `gateway`, signed by the gateway key. Codex
+    // speaks only the Responses API, so a verifier that reads
+    // `model_attestations` alone refuses every Codex-driven receipt.
+    //
+    // Both fixtures below are live bytes. The gateway receipt is the capture
+    // whose signer is the same `cb6fc58f..` gateway key these reports attest;
+    // it is a real signature over its real text, which is why
+    // `verify_ed25519_signature` is asserted on it rather than asserted
+    // around.
+    // ---------------------------------------------------------------------
+
+    const LIVE_RECEIPT_GATEWAY: &str =
+        include_str!("../tests/fixtures/near_ai_receipt_gateway_ed25519.json");
+
+    /// The two fixtures really are the two kinds, with two different signers.
+    /// Everything below is only meaningful if this holds.
+    #[test]
+    fn the_two_live_receipts_are_two_kinds_signed_by_two_keys() {
+        let gateway = live_receipt(LIVE_RECEIPT_GATEWAY);
+        let provider = live_receipt(LIVE_RECEIPT_A);
+        assert_eq!(gateway.signature_kind, ReceiptSignatureKind::Gateway);
+        assert_eq!(provider.signature_kind, ReceiptSignatureKind::ProviderTee);
+        assert_ne!(gateway.signing_address, provider.signing_address);
+        // A real signature over its own text, under the key it names.
+        verify_ed25519_signature(&gateway).expect("the live gateway receipt verifies");
+        verify_ed25519_signature(&provider).expect("the live provider_tee receipt verifies");
+    }
+
+    /// A `gateway` receipt routes to the gateway key and is attested by it.
+    #[test]
+    fn a_gateway_receipt_verifies_against_the_gateway_key() {
+        let receipt = live_receipt(LIVE_RECEIPT_GATEWAY);
+        let nonce = live_nonce(LIVE_REPORT_A);
+        let keys = attested_keys_for_receipt(receipt.signature_kind, LIVE_REPORT_A, &nonce, None)
+            .expect("the report attests the gateway");
+        assert!(signer_is_attested_for_model(
+            &receipt.signing_address,
+            &keys
+        ));
+    }
+
+    /// ...and is refused against the model keys. This is the half that must
+    /// not be reachable: a gateway-signed receipt admitted under a model key
+    /// would mean either attested key could vouch for the other's role.
+    #[test]
+    fn a_gateway_receipt_is_refused_against_the_model_keys() {
+        let receipt = live_receipt(LIVE_RECEIPT_GATEWAY);
+        let provider = live_receipt(LIVE_RECEIPT_A);
+        let model = bound_model(&provider);
+        let nonce = live_nonce(LIVE_REPORT_A);
+        let model_keys =
+            model_ed25519_keys(LIVE_REPORT_A, &nonce, model).expect("the model is attested");
+        assert!(!signer_is_attested_for_model(
+            &receipt.signing_address,
+            &model_keys
+        ));
+        // And routing it as `provider_tee` -- the shipped behaviour -- lands
+        // it in exactly that set, which is why the shipped code refused it.
+        let mis_routed = attested_keys_for_receipt(
+            ReceiptSignatureKind::ProviderTee,
+            LIVE_REPORT_A,
+            &nonce,
+            Some(model),
+        )
+        .expect("the model is attested");
+        assert!(!signer_is_attested_for_model(
+            &receipt.signing_address,
+            &mis_routed
+        ));
+    }
+
+    /// A `provider_tee` receipt routes to its own model's keys and is
+    /// attested by them.
+    #[test]
+    fn a_provider_tee_receipt_verifies_against_its_model_key() {
+        let receipt = live_receipt(LIVE_RECEIPT_A);
+        let nonce = live_nonce(LIVE_REPORT_A);
+        let keys = attested_keys_for_receipt(
+            receipt.signature_kind,
+            LIVE_REPORT_A,
+            &nonce,
+            Some(bound_model(&receipt)),
+        )
+        .expect("the model is attested");
+        assert!(signer_is_attested_for_model(
+            &receipt.signing_address,
+            &keys
+        ));
+    }
+
+    /// ...and is refused against the gateway key. The mirror of the case
+    /// above, and the reason the router has no "try both" arm.
+    #[test]
+    fn a_provider_tee_receipt_is_refused_against_the_gateway_key() {
+        let receipt = live_receipt(LIVE_RECEIPT_A);
+        let nonce = live_nonce(LIVE_REPORT_A);
+        let gateway = attested_keys_for_receipt(
+            ReceiptSignatureKind::Gateway,
+            LIVE_REPORT_A,
+            &nonce,
+            Some(bound_model(&receipt)),
+        )
+        .expect("the report attests the gateway");
+        assert!(!signer_is_attested_for_model(
+            &receipt.signing_address,
+            &gateway
+        ));
+    }
+
+    /// The `model` argument is ignored on the gateway arm rather than being a
+    /// second thing that has to be right: the same key comes back whatever is
+    /// passed, including a model this report attests nothing for.
+    #[test]
+    fn the_gateway_arm_does_not_consult_the_model() {
+        let nonce = live_nonce(LIVE_REPORT_A);
+        let plain =
+            attested_keys_for_receipt(ReceiptSignatureKind::Gateway, LIVE_REPORT_A, &nonce, None)
+                .expect("attested");
+        for model in [Some("Qwen/Qwen3.6-35B-A3B-FP8"), Some("Nobody/Nothing")] {
+            assert_eq!(
+                attested_keys_for_receipt(
+                    ReceiptSignatureKind::Gateway,
+                    LIVE_REPORT_A,
+                    &nonce,
+                    model
+                )
+                .expect("attested"),
+                plain
+            );
+        }
+    }
+
+    /// An unrecognised kind -- a value this crate has not seen, and the
+    /// absence of the field -- names no key source and is refused. It is not
+    /// answered by trying every key.
+    #[test]
+    fn an_unknown_signature_kind_is_refused() {
+        assert_eq!(
+            ReceiptSignatureKind::from_wire("provider_tee_v2"),
+            ReceiptSignatureKind::Unrecognised
+        );
+        assert_eq!(
+            ReceiptSignatureKind::from_wire(""),
+            ReceiptSignatureKind::Unrecognised
+        );
+        // Case is not folded, for the reason `ReceiptAlgo::from_wire` gives.
+        assert_eq!(
+            ReceiptSignatureKind::from_wire("Gateway"),
+            ReceiptSignatureKind::Unrecognised
+        );
+        let nonce = live_nonce(LIVE_REPORT_A);
+        assert_eq!(
+            attested_keys_for_receipt(
+                ReceiptSignatureKind::Unrecognised,
+                LIVE_REPORT_A,
+                &nonce,
+                Some("Qwen/Qwen3.6-35B-A3B-FP8"),
+            )
+            .unwrap_err(),
+            AttestedKeyError::SignatureKindUnrecognised
+        );
+    }
+
+    /// A `provider_tee` receipt binding no model names no entry to look up,
+    /// and is refused rather than answered with some other model's keys.
+    #[test]
+    fn a_provider_tee_receipt_binding_no_model_is_refused() {
+        let nonce = live_nonce(LIVE_REPORT_A);
+        assert_eq!(
+            attested_keys_for_receipt(
+                ReceiptSignatureKind::ProviderTee,
+                LIVE_REPORT_A,
+                &nonce,
+                None
+            )
+            .unwrap_err(),
+            AttestedKeyError::ModelNotAttested
+        );
+    }
+
+    /// The gateway arm carries the same nonce binding as the model arm. A
+    /// report read for a nonce this caller did not send is refused, so a
+    /// replayed report cannot attest a gateway signer either.
+    #[test]
+    fn the_gateway_arm_refuses_a_report_bound_to_another_nonce() {
+        assert_eq!(
+            attested_keys_for_receipt(
+                ReceiptSignatureKind::Gateway,
+                LIVE_REPORT_A,
+                &live_nonce(LIVE_REPORT_B),
+                None
+            )
+            .unwrap_err(),
+            AttestedKeyError::NonceMismatch
+        );
+    }
+
+    /// The kind reaches a caller through the verdict, unchanged. A witness
+    /// routes on `verdict.signature_kind`, so a `verify_receipt` that dropped
+    /// or rewrote it would silently send every receipt to one key source.
+    #[test]
+    fn the_verdict_carries_the_kind_through_unchanged() {
+        for kind in [
+            ReceiptSignatureKind::Gateway,
+            ReceiptSignatureKind::ProviderTee,
+            ReceiptSignatureKind::Unrecognised,
+        ] {
+            let mut payload = self_signed_ed25519_receipt(REQUEST_BODY, RESPONSE_BODY);
+            payload.signature_kind = kind;
+            let verdict = verify_receipt(&payload, REQUEST_BODY, RESPONSE_BODY, MODEL)
+                .expect("the self-signed receipt verifies");
+            assert_eq!(verdict.signature_kind, kind);
         }
     }
 }
