@@ -967,7 +967,7 @@ public sealed class ContributorSettingsViewModel : INotifyPropertyChanged
                 .ConfigureAwait(true);
 
             Notice = response.IsError
-                ? "That project setting couldn't be changed."
+                ? WatchCopy.WriteFailed
                 : string.Empty;
             if (!response.IsError)
             {
@@ -1869,16 +1869,16 @@ public sealed class ProjectSettingViewModel : INotifyPropertyChanged
         // make.
         "auto_upload" when !UnresolvedBucketCopy.MayOfferAutoUpload(IsUnresolvedBucket)
             => "Asks you first",
-        "auto_upload" => "Contributed without asking",
+        "auto_upload" => WatchCopy.Armed,
         _ => "Asks you first",
     };
 
-    public string ActionText => _mode switch
-    {
-        "auto_upload" => WatchCopy.AskMeFirst,
-        "ignore" => "Ask again",
-        _ => "Ignore",
-    };
+    /// <summary>
+    /// The button's words, from the shared table so onboarding's list and this
+    /// one do not name a single transition two ways. Empty only for a mode with
+    /// no transition, where <see cref="CanToggle"/> is already false.
+    /// </summary>
+    public string ActionText => WatchCopy.ActionFor(_mode) ?? WatchCopy.IgnoreAction;
 
     public bool CanToggle => ProjectManualMode.Next(_mode) is not null;
 
