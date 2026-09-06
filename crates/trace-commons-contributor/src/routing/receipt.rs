@@ -666,8 +666,12 @@ mod tests {
         );
     }
 
-    /// The fetch asks for the scheme whose signer is bound into the gateway's
-    /// TDX quote. The ECDSA signer appears in no attestation report.
+    /// The fetch asks for the scheme whose signer is bound into a TDX quote
+    /// -- the gateway's or the serving model's, per the receipt's
+    /// `signature_kind`. The ECDSA signer has no such binding: `signing_algo`
+    /// defaults to ECDSA on the report endpoint, but the ECDSA attestations
+    /// it returns list the model enclave's address rather than the signer an
+    /// ECDSA receipt recovers to.
     #[test]
     fn the_receipt_url_asks_for_ed25519() {
         let url = receipt_url(

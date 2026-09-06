@@ -441,11 +441,33 @@ outbound one and what that means for you.
 
 Branch protection on `main` requires:
 
-- All CI checks green (`cargo fmt --check`, three `cargo check` variants,
-  `cargo clippy`, `cargo test`, `pilot-bootstrap-smoke`).
+- **Thirteen** required status checks green, and they must be green on a
+  branch that is up to date with `main`:
+
+  | | |
+  |---|---|
+  | `cargo fmt --check` | `cargo clippy` |
+  | `cargo check (default features)` | `cargo test (default features)` |
+  | `cargo check (near-ai-scorer)` | `pilot-bootstrap smoke` |
+  | `cargo check (local-gpu-models, non-CUDA)` | `macOS app tests` |
+  | `cargo check (permissive crates, standalone)` | `windows named-pipe ACL` |
+  | `windows contributor app` | `windows contributor crate tests` |
+  | `linux-shell desktop integration (weston + portal)` | |
+
+  `.github/workflows/ci.yml` holds more jobs than this (twenty as of
+  2026-09-06); the other seven run on every PR but do not block the merge.
+  All three desktop shells and the standalone permissive-crate build are on
+  the required list, so a change that only builds in the workspace's unified
+  feature set will not merge.
 - A pull request (no direct pushes).
 - Linear history (squash or rebase, no merge commits).
 - Any review conversations resolved before merge.
+
+`main` is behind a **merge queue** (`main merge queue`, active). A PR merges
+by entering the queue, not by a direct click, and the queue re-runs the
+required checks against `main` as it is at that moment. A queued PR that
+never receives its required checks times out of the queue rather than
+merging.
 
 Self-merge is permitted; reviewer approval is not currently required (the
 project is still small). When this changes, the requirement will land here

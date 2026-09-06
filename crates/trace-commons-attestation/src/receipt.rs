@@ -57,11 +57,23 @@ use sha2::{Digest as _, Sha256};
 
 /// Which signature scheme a receipt carries.
 ///
-/// NEAR AI issues both. Only the ed25519 signer is bound into the gateway's
-/// TDX quote (`report_data == signing_address || nonce`); the ECDSA signer
-/// appears in no attestation report. So `Ed25519` is the form that lets a
-/// verified receipt mean "signed inside an attested enclave", and `Ecdsa`
-/// remains for receipts already issued and for callers that have not moved.
+/// NEAR AI issues both. Only the ed25519 signer is bound into a TDX quote --
+/// the gateway's or the serving model's, depending on the receipt's
+/// `signature_kind`; see [`ReceiptSignatureKind`]. The binding is
+/// `report_data == signing_address || nonce` inside that quote, read at the
+/// fixed v4 TDX offset rather than from a JSON field, because a
+/// `model_attestations` entry carries no `report_data` field at all.
+///
+/// The ECDSA signer has no such binding available. Not because the report
+/// omits ECDSA -- `signing_algo` is a query parameter of the report endpoint
+/// and ECDSA is its *default* -- but because the ECDSA attestations that
+/// query returns list the model enclave's own address, not the ECDSA signer
+/// a receipt recovers to. Measured live 2026-09-05: attested `0xe5d0fec4..`,
+/// receipt signer `0x614bc66f..`.
+///
+/// So `Ed25519` is the form that lets a verified receipt mean "signed inside
+/// an attested enclave", and `Ecdsa` remains for receipts already issued and
+/// for callers that have not moved.
 ///
 /// Discriminated by the explicit wire field, never guessed from the length
 /// of `signing_address`: a 20-byte address and a 32-byte key are

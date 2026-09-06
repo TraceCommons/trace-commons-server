@@ -2,11 +2,17 @@
 //!
 //! `GET {base}/attestation/report?model=..&signing_algo=ed25519&nonce=..`
 //! returns, among much else, a `gateway_attestation` and a
-//! `model_attestations` array. Each is an attestation object whose
-//! `report_data` is `signing_address || request_nonce`. That concatenation,
-//! inside a TDX quote, is what binds a key to a nonce this client chose -- so
-//! a key read from an attestation whose `report_data` carries OUR nonce is one
-//! that was attested for us, now, rather than one copied from an old report.
+//! `model_attestations` array. Each is an attestation object binding a key to
+//! a nonce this client chose: inside its TDX quote, `report_data` is
+//! `signing_address || request_nonce`. A key read from an attestation whose
+//! `report_data` carries OUR nonce is one that was attested for us, now,
+//! rather than one copied from an old report.
+//!
+//! `report_data` is read out of `intel_quote` at the fixed v4 TDX offset, not
+//! from a JSON field: a `model_attestations` entry **has no `report_data`
+//! field**. Only `gateway_attestation` carries one, as an echo of its own
+//! quote, and it is checked against the quote rather than trusted instead of
+//! it. See [`trace_commons_attestation::receipt::attested_ed25519_key`].
 //!
 //! # Which key signs a receipt: both, and the protocol decides
 //!
@@ -115,10 +121,12 @@ pub fn attestation_report_url(
 
 /// The gateway's ed25519 signing key, if the report binds it to `expected_nonce`.
 ///
-/// This is **not** the key a receipt is signed by -- see the module docs. It
-/// remains here because it is correct for what it names, and because the same
-/// binding discipline applied to a different attestation object is what
-/// [`model_ed25519_keys`] does.
+/// This is the key a `gateway` receipt is signed by -- the Responses API form
+/// -- and it is **not** the key a `provider_tee` receipt is signed by. See the
+/// module docs: the receipt's own `signature_kind` picks between this and
+/// [`model_ed25519_keys`], and neither key is ever tried against the other
+/// kind. Both apply the same binding discipline to a different attestation
+/// object.
 ///
 /// The parsing and the binding check live in
 /// [`trace_commons_attestation::receipt::attested_ed25519_key`], so a gateway

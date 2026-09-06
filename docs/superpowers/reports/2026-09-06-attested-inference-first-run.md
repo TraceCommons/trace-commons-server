@@ -172,9 +172,14 @@ its own quote already says. On a model attestation the binding is inside
 holding `signing_address || request_nonce` exactly. A verifier that requires a
 `report_data` field refuses every real model attestation.
 
-What stands unchanged from the findings above: the gateway key signs no
-receipt; the signer is per model, so one pinned key cannot be made correct by
+What stands unchanged from the findings above: the signer is per model for
+the receipts this run captured, so one pinned key cannot be made correct by
 changing its value; and the deployed gateway pin refused every real receipt.
+
+*[Corrected again, 2026-09-06 — see "Second correction" at the end: "the
+gateway key signs no receipt" is false. It signs every Responses API
+receipt. It signed none of the ones captured here because every call in this
+run went over Chat Completions.]*
 
 Both verification paths were rewritten against the ed25519 model attestation,
 and the gateway pin variable was retired — the witness now refuses to start if
@@ -185,3 +190,47 @@ so this specific mistake cannot recur silently.
 The dormancy warning in `docs/operator/attested-inference.md` stays: this
 correction fixes the verification, and does **not** mean a hosted exchange has
 completed end to end. The remaining legs listed above were still not reached.
+
+## Second correction, same day
+
+The correction above is right about `signing_algo` and about where the
+binding lives. One sentence in it is wrong.
+
+**"The gateway key signs no receipt" is false.** NEAR AI issues two kinds of
+receipt for the same hosted model, and the *request protocol* decides which:
+
+| request protocol | `signature_kind` | signer |
+|---|---|---|
+| Chat Completions, `POST /v1/chat/completions` | `provider_tee` | the per-model ed25519 key in `model_attestations` |
+| Responses API, `POST /v1/responses` | `gateway` | the shared ed25519 key in `gateway_attestation` |
+
+Both were captured live against `Qwen/Qwen3.6-35B-A3B-FP8`. Every call in
+this run went over Chat Completions, so every receipt it saw was
+`provider_tee` — which is why the gateway key appeared to sign nothing.
+
+This matters for the harness this report recommends. **The Codex CLI speaks
+the Responses API exclusively**, having dropped `wire_api = "chat"`, so a
+Codex-driven rerun of this harness produces `gateway` receipts throughout,
+and a verifier consulting `model_attestations` alone refuses all of them. A
+Responses exchange's receipt is also retrieved by the **full `resp_`-prefixed
+identifier**; stripping the prefix returns 404.
+
+Both verification paths now route on the receipt's own `signature_kind` and
+check each kind against its own attested key source, never the other. The
+witness pins them separately —
+`TRACE_COMMONS_WITNESS_MODEL_KEY_PINS` and
+`TRACE_COMMONS_WITNESS_GATEWAY_RECEIPT_KEY_PINS`, both replacing the retired
+`TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN`, whose presence now refuses the boot.
+Enabling them is a three-deployment rollout; step 1, the witness deployed
+with both unset, is done in production. `deploy/witness/README.md` has the
+derivation and the ordering.
+
+One consequence worth recording here rather than only in the runbook: a
+gateway receipt's signed text is the two-part `{requestHash}:{responseHash}`
+and names **no model**, so it attests the bytes and not the model that served
+them. Anything keying credit, scoring or eligibility off a declared model
+must not read a gateway receipt as evidence of that model.
+
+What this correction does **not** change: the dormancy warning in
+`docs/operator/attested-inference.md` stays. The remaining legs listed above
+were still not reached.
