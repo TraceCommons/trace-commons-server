@@ -102,7 +102,7 @@ pub const STATE_UNKNOWN: &str =
 
 /// The switch records a request; retained ownership reports actual cleanup.
 pub const STATE_STOPPING: &str =
-    "Stopping. Calls already in progress are finishing before this app releases its listener.";
+    "Stopping. Waiting for any calls in progress and cleanup to finish.";
 
 /// `running`.
 pub const STATE_RUNNING: &str = "On. Calls sent to this computer are being answered.";
