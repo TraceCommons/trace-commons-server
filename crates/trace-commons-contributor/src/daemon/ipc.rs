@@ -421,6 +421,40 @@ pub struct DaemonShared {
     /// "has rows". Compared against on every refresh so a transition is
     /// reported once, not on every poll -- see [`Self::routing_transition`].
     routing_had_rows: AtomicBool,
+    /// The one IronWire this daemon may host, when a home could be resolved
+    /// for it at all.
+    ///
+    /// A `tokio` mutex rather than a `std` one because starting and stopping
+    /// a proxy are both awaits, and the guard is therefore held across them.
+    /// `None` is the machine where neither `$IRONWIRE_HOME` nor a home
+    /// directory resolves -- private inference cannot be offered there, and
+    /// asking for it is a refusal rather than a panic.
+    private_inference: tokio::sync::Mutex<Option<super::private_inference::PrivateInference>>,
+    /// The runtime a hosted proxy's tasks must be spawned onto.
+    ///
+    /// `embed::start` spawns the axum server and IronWire's housekeeping
+    /// with plain `tokio::spawn`, so whichever runtime is in context when it
+    /// runs owns the proxy for its whole life. On the poll tick that is the
+    /// daemon runtime and this changes nothing -- but `handle_local`, the
+    /// path `tc_call` and the in-process CLI use, answers by running the
+    /// dispatcher on a throwaway current-thread runtime inside a scoped
+    /// thread. That runtime is dropped the instant the scope returns, and a
+    /// proxy started on it dies there while the response says `running` with
+    /// a port on it.
+    ///
+    /// So the daemon's own runtime is recorded here, by `adopt_runtime`,
+    /// which `start_embedded` calls while it is standing on it. A
+    /// `DaemonShared` built by a test or a one-shot CLI command that never
+    /// started a daemon has none, and falls back to the ambient runtime --
+    /// which for those callers is the only one there is.
+    proxy_runtime: std::sync::OnceLock<tokio::runtime::Handle>,
+    /// The last state the instance above reported.
+    ///
+    /// Kept beside it, under a `std` mutex, because `get_settings` and
+    /// `status` are synchronous: they must answer without awaiting, and
+    /// without racing a start that is halfway through. The reconcile pass is
+    /// the only writer, and it writes this immediately after every `apply`.
+    private_inference_state: Mutex<super::private_inference::PrivateInferenceState>,
 }
 
 /// `status.routing.state`: the contributor never declared a proxy.
@@ -528,7 +562,132 @@ impl DaemonShared {
             previews: Arc::new(PreviewScheduler::default()),
             routing,
             routing_had_rows: AtomicBool::new(false),
+            // Constructed, never started. Nothing binds until the reconcile
+            // pass reads `private_inference` out of settings and finds it
+            // on -- a daemon that has never been asked hosts nothing.
+            private_inference: tokio::sync::Mutex::new(
+                super::private_inference::ironwire_home()
+                    .map(super::private_inference::PrivateInference::new),
+            ),
+            proxy_runtime: std::sync::OnceLock::new(),
+            private_inference_state: Mutex::new(
+                super::private_inference::PrivateInferenceState::Off,
+            ),
         })
+    }
+
+    /// Bring the hosted IronWire in line with the `private_inference`
+    /// setting, and notice a proxy that ended on its own.
+    ///
+    /// Idempotent, and safe to call on every poll tick: with the switch off
+    /// and nothing held it does no work, and with a proxy running it only
+    /// asks whether the task has finished.
+    ///
+    /// A proxy that will not start is a reported state, never an error out
+    /// of here: private inference failing must not stop the watch, the
+    /// upload pass, or the daemon.
+    /// Record the runtime this daemon is running on, so a proxy started
+    /// from any path lives on it.
+    ///
+    /// Called from `start_embedded`, which is `async` and therefore always
+    /// executing on the real daemon runtime in both entry points -- the
+    /// standalone binary and the embedded one. Idempotent: a second call is
+    /// a no-op, because the first runtime to claim this is the one that
+    /// outlives every request.
+    pub(crate) fn adopt_runtime(&self) {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let _ = self.proxy_runtime.set(handle);
+        }
+    }
+
+    /// Whether a runtime has been claimed for hosted proxies.
+    #[cfg(test)]
+    pub(crate) fn has_adopted_runtime(&self) -> bool {
+        self.proxy_runtime.get().is_some()
+    }
+
+    pub(crate) async fn reconcile_private_inference(&self) {
+        let on = self
+            .settings
+            .lock()
+            .expect("settings lock")
+            .private_inference;
+        let mut held = self.private_inference.lock().await;
+        let Some(host) = held.as_mut() else {
+            // No home resolves on this machine, so there is nowhere to put
+            // a ledger, a token, or a pointer. Saying so is better than
+            // reporting `Off` beside a switch the contributor turned on.
+            let reported = if on {
+                super::private_inference::PrivateInferenceState::Failed {
+                    label: super::private_inference::LABEL_START_FAILED,
+                }
+            } else {
+                super::private_inference::PrivateInferenceState::Off
+            };
+            *self
+                .private_inference_state
+                .lock()
+                .expect("private inference state lock") = reported;
+            return;
+        };
+        host.set_runtime(self.proxy_runtime.get().cloned());
+        host.apply(on).await;
+        *self
+            .private_inference_state
+            .lock()
+            .expect("private inference state lock") = host.state();
+    }
+
+    /// Stop the hosted IronWire, if this daemon started one.
+    ///
+    /// Awaited on the way out of the supervise loop so a daemon that is
+    /// shutting down releases the port, the pointer and the home lock
+    /// rather than leaving them for the next start to trip over.
+    pub(crate) async fn stop_private_inference(&self) {
+        let mut held = self.private_inference.lock().await;
+        if let Some(host) = held.as_mut() {
+            host.set_runtime(self.proxy_runtime.get().cloned());
+            host.apply(false).await;
+        }
+        *self
+            .private_inference_state
+            .lock()
+            .expect("private inference state lock") =
+            super::private_inference::PrivateInferenceState::Off;
+    }
+
+    /// Replace the held private-inference instance with one rooted at
+    /// `home` on an ephemeral port.
+    ///
+    /// Test-only, and the reason it exists: the production instance is
+    /// rooted at `$IRONWIRE_HOME` or the real home directory, on whatever
+    /// port IronWire's own configuration names. A test that exercised that
+    /// instance would bind a developer's actual IronWire port and collide
+    /// with a parallel test doing the same. Mutating `$IRONWIRE_HOME`
+    /// instead would be process-global and race every other test in the
+    /// binary.
+    #[cfg(test)]
+    pub(crate) fn install_private_inference_for_test(&self, home: std::path::PathBuf, port: u16) {
+        *self.private_inference.blocking_lock() = Some(
+            super::private_inference::PrivateInference::with_port(home, port),
+        );
+    }
+
+    /// The `private_inference_state` object `get_settings` and `status`
+    /// both report: a lowercase label, and the port when there is one.
+    ///
+    /// Reported separately from the `private_inference` boolean beside it
+    /// because the two are different facts. The boolean is what the
+    /// contributor asked for; this is what actually happened, and a shell
+    /// that renders the boolean alone would show a proxy as on while it was
+    /// refusing to start.
+    fn private_inference_value(&self) -> serde_json::Value {
+        let state = self
+            .private_inference_state
+            .lock()
+            .expect("private inference state lock")
+            .clone();
+        serde_json::json!({ "state": state.label(), "port": state.port() })
     }
 
     /// Source roots with the daemon's live routing ledger attached.
@@ -714,6 +873,9 @@ impl DaemonShared {
         // this reads the routing lock, and taking locks in one order
         // everywhere is what keeps that safe.
         let routing = self.routing_value();
+        // Taken before the locks below for the same reason as `routing`:
+        // one lock order everywhere.
+        let private_inference = self.private_inference_value();
         let queue = self.queue.lock().expect("queue lock");
         let health = self.health.lock().expect("health lock");
         let cfg = self.store.load_config().ok().flatten();
@@ -748,6 +910,10 @@ impl DaemonShared {
             // faults; none of these three is one, so like `daily_budget`
             // this sits beside it rather than inside it.
             "routing": routing,
+            // Also additive, and deliberately not folded into `routing`:
+            // routing is about reading a proxy's ledger, this is about
+            // whether this daemon is hosting one.
+            "private_inference_state": private_inference,
         })
     }
 
@@ -1321,6 +1487,10 @@ pub fn handle_request(shared: &DaemonShared, req: &Request) -> Response {
 }
 
 fn add_admission_setting(shared: &DaemonShared, value: &mut serde_json::Value) {
+    // What the hosted proxy is actually doing, beside the `private_inference`
+    // boolean that says what was asked for. See
+    // `DaemonShared::private_inference_value`.
+    value["private_inference_state"] = shared.private_inference_value();
     value["admission_evidence_required"] = match shared.store.load_config() {
         Ok(cfg) => serde_json::json!(
             cfg.and_then(|c| c.witness)
@@ -1765,6 +1935,27 @@ fn handle_set_settings(shared: &DaemonShared, req: &Request) -> Response {
     }
 }
 
+/// `set_settings`, plus the one thing it cannot do synchronously: start or
+/// stop the hosted IronWire.
+///
+/// Starting a proxy is an await, so the sync handler cannot do it, and
+/// leaving it to the poll tick would mean a contributor who just turned
+/// private inference on waited a minute to find out whether it worked --
+/// the same friction `rebuild_routing` exists to avoid for a typed port.
+/// The reported state is re-read after the reconcile so the answer describes
+/// what happened rather than what was true a moment before it.
+async fn handle_set_settings_async(shared: &DaemonShared, req: &Request) -> Response {
+    let mut response = handle_set_settings(shared, req);
+    if response.error.is_some() {
+        return response;
+    }
+    shared.reconcile_private_inference().await;
+    if let Some(result) = response.result.as_mut() {
+        result["private_inference_state"] = shared.private_inference_value();
+    }
+    response
+}
+
 /// The complete dispatcher: answers the async methods (`"approve"`,
 /// `"preview"`, `"preview_body"`, `"preview_turns"`, `"probe_routing"`,
 /// `"probe_routed_tools"`,
@@ -1787,6 +1978,7 @@ pub async fn handle_request_async(shared: &DaemonShared, req: &Request) -> Respo
         "near_account_capabilities" => {
             super::account_onboarding::handle_capabilities(shared, req).await
         }
+        "set_settings" => handle_set_settings_async(shared, req).await,
         "witness_preview_request" => handle_witness_preview_request(shared, req).await,
         "approve" => handle_approve(shared, req).await,
         "preview" => handle_preview(shared, req).await,
@@ -6503,6 +6695,191 @@ mod tests {
         );
         assert!(r.error.is_none(), "{:?}", r.error);
         assert_eq!(s.settings.lock().unwrap().ironwire, None);
+    }
+
+    /// The switch is a settable key, it persists, and it is off until
+    /// somebody sets it. An upgrade must never start a proxy because a
+    /// settings file predates the key.
+    #[test]
+    fn set_settings_accepts_private_inference_and_persists_it() {
+        let s = shared();
+        assert!(
+            !s.settings.lock().unwrap().private_inference,
+            "the switch must be off before anyone asks"
+        );
+
+        let r = handle_request(
+            &s,
+            &req(
+                "set_settings",
+                serde_json::json!({"private_inference": true}),
+            ),
+        );
+        assert!(r.error.is_none(), "{:?}", r.error);
+        assert!(s.settings.lock().unwrap().private_inference);
+
+        let reloaded = super::super::settings::DaemonSettings::load(&s.store).unwrap();
+        assert!(
+            reloaded.private_inference,
+            "a restart must not silently revert the switch"
+        );
+
+        let r = handle_request(
+            &s,
+            &req(
+                "set_settings",
+                serde_json::json!({"private_inference": false}),
+            ),
+        );
+        assert!(r.error.is_none(), "{:?}", r.error);
+        assert!(!s.settings.lock().unwrap().private_inference);
+    }
+
+    /// Ask 127.0.0.1:`port` for IronWire's health endpoint using nothing
+    /// but the standard library.
+    ///
+    /// Deliberately synchronous and tokio-free. The defect this guards
+    /// against is a proxy started on a runtime that is dropped the moment
+    /// the call returns, so the probe must not itself construct, enter, or
+    /// keep alive any runtime -- it has to ask the operating system whether
+    /// something is really listening once every runtime in the story is
+    /// gone.
+    fn health_answers(port: u16) -> bool {
+        use std::io::{Read, Write};
+        let Ok(mut conn) = std::net::TcpStream::connect(("127.0.0.1", port)) else {
+            return false;
+        };
+        let _ = conn.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+        if conn
+            .write_all(
+                b"GET /_ironwire/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+            )
+            .is_err()
+        {
+            return false;
+        }
+        let mut buf = Vec::new();
+        let _ = conn.read_to_end(&mut buf);
+        String::from_utf8_lossy(&buf).starts_with("HTTP/1.1 200")
+    }
+
+    /// The switch flipped through the synchronous path leaves a proxy that
+    /// is still serving after the call returns.
+    ///
+    /// `handle_local` is the path `tc_call` uses -- the FFI both desktop
+    /// apps are built on -- and the CLI's in-process path. It answers by
+    /// running the real dispatcher on a throwaway current-thread runtime
+    /// inside a scoped thread, and that runtime is dropped the instant the
+    /// scope returns. A proxy whose server task was spawned onto it dies
+    /// there, while the response the contributor sees says `running` with a
+    /// port on it: the green light over a dead proxy that
+    /// `running_no_backends` exists to prevent, arriving by a different
+    /// road.
+    ///
+    /// So this asserts the port *after* the call has returned, from a
+    /// thread with no runtime on it at all.
+    #[test]
+    fn a_switch_flipped_through_the_sync_path_leaves_a_serving_proxy() {
+        // The daemon runtime, standing in for the one `start_embedded` runs
+        // on: multi-thread, and alive for the whole test because the daemon
+        // outlives every request it answers. `adopt_runtime` is called from
+        // inside it exactly as `start_embedded` does.
+        let daemon_runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a daemon runtime");
+
+        let s = shared();
+        daemon_runtime.block_on(async { s.adopt_runtime() });
+
+        let home = tempfile::tempdir().expect("a temp home");
+        s.install_private_inference_for_test(home.path().to_path_buf(), 0);
+
+        // Called from the test thread, which is inside no runtime -- the
+        // position an FFI caller is in.
+        let r = handle_local(
+            &s,
+            "set_settings",
+            serde_json::json!({"private_inference": true}),
+        );
+        assert!(r.error.is_none(), "{:?}", r.error);
+        let reported = r.result.expect("set_settings answers")["private_inference_state"].clone();
+        let label = reported["state"].as_str().unwrap_or_default().to_string();
+        assert!(
+            label == "running" || label == "running_no_backends",
+            "the sync path must actually start the proxy, got {reported}"
+        );
+        let port = u16::try_from(reported["port"].as_u64().expect("a bound port")).expect("a port");
+
+        assert!(
+            health_answers(port),
+            "the proxy must still answer after handle_local returned; \
+             reporting {label} on port {port} while the runtime that owned \
+             it has been dropped is a green light over a dead proxy"
+        );
+
+        let off = handle_local(
+            &s,
+            "set_settings",
+            serde_json::json!({"private_inference": false}),
+        );
+        assert!(off.error.is_none(), "{:?}", off.error);
+        assert!(
+            !health_answers(port),
+            "turning it off through the same path must release the port"
+        );
+    }
+
+    /// A settings file that predates the key loads with private inference
+    /// off. This is the whole safety property of the default.
+    #[test]
+    fn a_settings_file_without_the_key_loads_with_private_inference_off() {
+        let s = shared();
+        let body = serde_json::json!({
+            "schema_version": super::super::settings::DAEMON_SETTINGS_SCHEMA,
+            "poll_interval_secs": 60,
+            "quiescence_secs": 1800,
+            "digest_interval_secs": 14_400,
+            "queue_ttl_days": 14,
+            "growth_factor": 2.0,
+            "growth_min_new_bytes": 65_536,
+            "max_reuploads": 3,
+            "max_uploads_per_day": 50,
+            "max_bytes_per_day": 209_715_200u64,
+            "max_queue_entries": 500,
+            "history_poll_secs": 1800,
+            "canary_interval_secs": 3600,
+            "local_notifications": false,
+        });
+        s.store
+            .write_daemon_file(
+                crate::config::DAEMON_SETTINGS_FILE,
+                serde_json::to_string(&body).unwrap().as_bytes(),
+            )
+            .unwrap();
+        let loaded = super::super::settings::DaemonSettings::load(&s.store).unwrap();
+        assert!(!loaded.private_inference);
+    }
+
+    /// Both settings surfaces report what the hosted proxy is actually
+    /// doing, not only what was asked for. A shell that had to infer the
+    /// state from the boolean would show a proxy as on while it refused to
+    /// start.
+    #[test]
+    fn the_reported_state_is_off_before_anything_is_asked() {
+        let s = shared();
+        let settings = handle_request(&s, &req("get_settings", serde_json::json!({})))
+            .result
+            .expect("get_settings answers");
+        assert_eq!(
+            settings["private_inference_state"],
+            serde_json::json!({ "state": "off", "port": null })
+        );
+        let status = s.status_value();
+        assert_eq!(
+            status["private_inference_state"],
+            serde_json::json!({ "state": "off", "port": null })
+        );
     }
 
     #[test]
