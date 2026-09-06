@@ -83,10 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             quitCoordinator.isStopping
             || QuitConfirmation.granted(
                 computeDetail: compute?.copy?.quitDetail,
-                privateInferenceDetail: PrivateInferenceSurface.quitDetail(
-                    on: model?.daemonSettings?.privateInferenceOn ?? false,
-                    copy: model?.privateInferenceCopy
-                )
+                privateInferenceDetail: model?.privateInferenceQuitDetail
             )
         let decision = quitCoordinator.request(confirmed: confirmed, deadlineSeconds: 17, stop: { [weak self] in
             guard let compute = self?.compute else { return true }

@@ -14,10 +14,10 @@ namespace TraceCommons.Interop;
 /// </summary>
 public enum PrivateInferenceTone
 {
-    /// <summary>Nothing is running and nothing is claimed.</summary>
+    /// <summary>No readiness or shutdown confirmation is claimed.</summary>
     Neutral,
 
-    /// <summary>On, and this app is not the one answering.</summary>
+    /// <summary>Ownership or cleanup is held; readiness is not claimed.</summary>
     Held,
 
     /// <summary>
@@ -119,7 +119,7 @@ public static class PrivateInferenceSurface
     }
 
     /// <summary>
-    /// The sentence for one state. Falls back to the payload's own off
+    /// The sentence for one state. Falls back to the payload's unavailable
     /// sentence when the Rust caught a panic -- the one that claims nothing,
     /// never the one that says it is running.
     /// </summary>
@@ -128,7 +128,7 @@ public static class PrivateInferenceSurface
         ArgumentNullException.ThrowIfNull(copy);
         return NativeMethods.TakeOwnedString(
                 NativeMethods.tc_private_inference_state_line(state.Label))
-            ?? copy.StateOff;
+            ?? copy.StateUnknown;
     }
 
     /// <summary>The tone that sentence is painted in.</summary>
@@ -136,7 +136,7 @@ public static class PrivateInferenceSurface
         FromAbiTone(NativeMethods.tc_private_inference_state_tone(state.Label));
 
     /// <summary>
-    /// Where it is answering, or the empty string when there is no port. An
+    /// The reported local port, or the empty string when there is no port. An
     /// empty string is drawn as no line rather than as a blank one.
     /// </summary>
     public static string ServingLine(PrivateInferenceState state) =>
@@ -203,8 +203,8 @@ public static class PrivateInferenceSurface
     /// on, or null. Null when it is off: a contributor who never turned it on
     /// should not be warned about losing it.
     /// </summary>
-    public static string? QuitDetail(bool on, PrivateInferenceCopy? copy) =>
-        on && copy is not null ? copy.QuitAlsoStops : null;
+    public static string? QuitDetail(bool on, PrivateInferenceState state, PrivateInferenceCopy? copy) =>
+        NativeMethods.tc_private_inference_quit_needs_notice(on ? 1 : 0, state.Label) != 0 && copy is not null ? copy.QuitAlsoStops : null;
 
     /// <summary>
     /// The ABI value, spelled out rather than cast.

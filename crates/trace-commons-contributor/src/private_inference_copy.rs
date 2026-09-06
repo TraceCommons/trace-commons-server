@@ -3,7 +3,7 @@
 //! `private_inference` starts a listener on this machine that answers the
 //! model calls a contributor's tools make. Task 2 shipped the switch and the
 //! state it reports; this module is every sentence printed about either, so
-//! that the offer, the settings row and the seven state lines are written
+//! that the offer, the settings row and the state lines are written
 //! once rather than three times.
 //!
 //! # What crosses the boundary
@@ -94,8 +94,18 @@ pub const SETTINGS_APPLIES_AT_ONCE: &str =
     "Changes here apply straight away, and the line below says what happened.";
 
 /// `off`.
-pub const STATE_OFF: &str = "Off. Nothing on this computer is listening, and your tools reach a model \
-     the way they did before.";
+pub const STATE_OFF: &str = "Off. This app is not answering model calls.";
+
+/// A settings response without this status may come from an older daemon.
+pub const STATE_UNREPORTED: &str = "This daemon does not report model-call status.";
+
+/// An unrecognized daemon state is not evidence of shutdown.
+pub const STATE_UNKNOWN: &str =
+    "The current state is unavailable. Check again before relying on this app to answer calls.";
+
+/// The switch records a request; retained ownership reports actual cleanup.
+pub const STATE_STOPPING: &str =
+    "Stopping. Waiting for any calls in progress and cleanup to finish.";
 
 /// `running`.
 pub const STATE_RUNNING: &str = "On. Calls sent to this computer are being answered.";
@@ -117,8 +127,8 @@ pub const STATE_RUNNING_NO_BACKENDS: &str = "On, but nothing is set up here for 
 /// stopped. Saying "left alone" rather than "already on" matters: a
 /// contributor reading "already on" would go looking in this app's settings
 /// for something this app does not control.
-pub const STATE_RUNNING_ELSEWHERE: &str = "Something else on this computer is already answering these calls. This \
-     app started nothing and stopped nothing.";
+pub const STATE_RUNNING_ELSEWHERE: &str = "Another program is using this computer's model-call setup. This \
+     app started nothing and stopped nothing; whether calls can get through is not confirmed.";
 
 /// `port_in_use`.
 pub const STATE_PORT_IN_USE: &str = "Not on. Something else on this computer is holding the number this needs. \
@@ -145,10 +155,10 @@ pub const STATE_CRASHED: &str = "Not on. It started and then stopped on its own,
 /// listener inside the same process it now stops that too. A shell appends
 /// this to its own confirmation only when the switch is on -- a contributor
 /// who never turned it on should not be warned about losing it.
-pub const QUIT_ALSO_STOPS: &str = "It also stops answering model calls on this computer, so a tool pointed \
-     here will get no answer until you open this app again.";
+pub const QUIT_ALSO_STOPS: &str = "Quitting also ends any model calls still handled by this app. Tools pointed \
+     here cannot get answers until this app is open and answering.";
 
-/// Where the listener is answering, assembled here rather than exported as a
+/// The reported local port, without claiming readiness, assembled rather than exported as a
 /// template with a hole in it.
 ///
 /// A port outside 1..=65535 -- including the `0` a caller passes when there is
@@ -158,7 +168,7 @@ pub const QUIT_ALSO_STOPS: &str = "It also stops answering model calls on this c
 #[must_use]
 pub fn serving_line(port: Option<u16>) -> String {
     match port {
-        Some(port) if port != 0 => format!("Answering on this computer, at number {port}."),
+        Some(port) if port != 0 => format!("Reported local listener number: {port}."),
         _ => String::new(),
     }
 }
@@ -179,9 +189,9 @@ pub fn serving_line(port: Option<u16>) -> String {
 /// for the dangerous one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrivateInferenceTone {
-    /// Nothing is running and nothing is claimed.
+    /// No readiness or shutdown confirmation is claimed.
     Neutral,
-    /// On, and this app is not the one answering.
+    /// Ownership or cleanup is held; readiness is not claimed.
     Held,
     /// On, answering, and with somewhere to pass calls on to. The only value
     /// that may be painted as working.
@@ -196,20 +206,21 @@ pub enum PrivateInferenceTone {
 
 /// The sentence for one state label, as reported by `private_inference_state`.
 ///
-/// A label this build has never heard of says what off says: it claims
-/// nothing, and in particular never falls through to one of the three "on"
-/// sentences. A shell running against a newer daemon that learned a state is
-/// then silent about it rather than confidently wrong.
+/// Missing status is unreported; unfamiliar nonempty states are unavailable.
+/// They must not claim that a listener has stopped or can answer calls.
 #[must_use]
 pub fn state_line(label: &str) -> &'static str {
     match label {
+        "" => STATE_UNREPORTED,
+        LABEL_OFF => STATE_OFF,
+        LABEL_STOPPING => STATE_STOPPING,
         LABEL_RUNNING => STATE_RUNNING,
         LABEL_RUNNING_NO_BACKENDS => STATE_RUNNING_NO_BACKENDS,
         LABEL_RUNNING_ELSEWHERE => STATE_RUNNING_ELSEWHERE,
         LABEL_PORT_IN_USE => STATE_PORT_IN_USE,
         LABEL_START_FAILED => STATE_START_FAILED,
         LABEL_CRASHED => STATE_CRASHED,
-        _ => STATE_OFF,
+        _ => STATE_UNKNOWN,
     }
 }
 
@@ -228,7 +239,7 @@ pub fn state_tone(label: &str) -> PrivateInferenceTone {
     match label {
         LABEL_RUNNING => PrivateInferenceTone::Clear,
         LABEL_RUNNING_NO_BACKENDS => PrivateInferenceTone::Attention,
-        LABEL_RUNNING_ELSEWHERE => PrivateInferenceTone::Held,
+        LABEL_RUNNING_ELSEWHERE | LABEL_STOPPING => PrivateInferenceTone::Held,
         LABEL_PORT_IN_USE | LABEL_START_FAILED | LABEL_CRASHED => PrivateInferenceTone::Refused,
         _ => PrivateInferenceTone::Neutral,
     }
@@ -273,6 +284,17 @@ pub fn should_offer(answered: bool, on: bool) -> bool {
     !answered && !on
 }
 
+/// Whether quitting may end this app's model-call work. Requested off does
+/// not prove cleanup completed; foreign ownership is never this app's work.
+#[must_use]
+pub fn quit_needs_notice(requested_on: bool, label: &str) -> bool {
+    match label {
+        LABEL_OFF | LABEL_RUNNING_ELSEWHERE => false,
+        LABEL_RUNNING | LABEL_RUNNING_NO_BACKENDS | LABEL_STOPPING => true,
+        _ => requested_on,
+    }
+}
+
 /// Every fixed string on this surface, in one payload.
 ///
 /// Shaped for the C ABI: `tc_private_inference_copy` serialises this and hands
@@ -298,6 +320,9 @@ pub struct PrivateInferenceCopy {
     pub settings_toggle: &'static str,
     pub settings_applies_at_once: &'static str,
     pub state_off: &'static str,
+    pub state_unknown: &'static str,
+    pub state_unreported: &'static str,
+    pub state_stopping: &'static str,
     pub state_running: &'static str,
     pub state_running_no_backends: &'static str,
     pub state_running_elsewhere: &'static str,
@@ -322,6 +347,9 @@ pub fn private_inference_copy() -> PrivateInferenceCopy {
         settings_toggle: SETTINGS_TOGGLE,
         settings_applies_at_once: SETTINGS_APPLIES_AT_ONCE,
         state_off: STATE_OFF,
+        state_unknown: STATE_UNKNOWN,
+        state_unreported: STATE_UNREPORTED,
+        state_stopping: STATE_STOPPING,
         state_running: STATE_RUNNING,
         state_running_no_backends: STATE_RUNNING_NO_BACKENDS,
         state_running_elsewhere: STATE_RUNNING_ELSEWHERE,
@@ -339,10 +367,10 @@ pub fn private_inference_copy() -> PrivateInferenceCopy {
 ///
 /// Imported rather than respelled: a label spelled twice is two labels that
 /// have not disagreed yet, and the failure mode of a typo here is a state that
-/// silently renders as off.
+/// silently renders as unavailable.
 pub use crate::daemon::private_inference::{
     LABEL_CRASHED, LABEL_OFF, LABEL_PORT_IN_USE, LABEL_RUNNING, LABEL_RUNNING_ELSEWHERE,
-    LABEL_RUNNING_NO_BACKENDS, LABEL_START_FAILED,
+    LABEL_RUNNING_NO_BACKENDS, LABEL_START_FAILED, LABEL_STOPPING,
 };
 
 #[cfg(test)]
@@ -439,10 +467,73 @@ mod tests {
     /// through to an on-sentence.
     #[test]
     fn an_unknown_label_claims_nothing() {
-        for label in ["", "something_later", LABEL_OFF] {
-            assert_eq!(state_line(label), STATE_OFF, "{label}");
+        for label in ["something_later", "RUNNING"] {
+            assert_eq!(state_line(label), STATE_UNKNOWN, "{label}");
             assert_eq!(state_tone(label), PrivateInferenceTone::Neutral, "{label}");
         }
+    }
+
+    #[test]
+    fn stopping_and_foreign_ownership_do_not_claim_readiness() {
+        assert_eq!(state_line(""), STATE_UNREPORTED);
+        assert_ne!(state_line(""), STATE_OFF);
+        assert_eq!(state_line(LABEL_OFF), STATE_OFF);
+        assert_eq!(state_line(LABEL_STOPPING), STATE_STOPPING);
+        assert_eq!(state_tone(LABEL_STOPPING), PrivateInferenceTone::Held);
+        assert!(!STATE_OFF.contains("Nothing on this computer"));
+        assert!(!STATE_RUNNING_ELSEWHERE.contains("already answering"));
+        assert!(!serving_line(Some(8463)).contains("Answering"));
+    }
+
+    #[test]
+    fn emitted_daemon_states_have_copy_and_owned_work_warns_at_quit() {
+        use crate::daemon::private_inference::PrivateInferenceState as State;
+        let states = [
+            State::Off,
+            State::Stopping { port: None },
+            State::Stopping { port: Some(8463) },
+            State::Running { port: 8463 },
+            State::RunningWithoutBackends { port: 8463 },
+            State::RunningElsewhere { port: 8463 },
+            State::Failed {
+                label: LABEL_PORT_IN_USE,
+            },
+            State::Failed {
+                label: LABEL_START_FAILED,
+            },
+            State::Failed {
+                label: LABEL_CRASHED,
+            },
+        ];
+        for state in states {
+            // Exhaustive over actual producer variants: adding a lifecycle
+            // variant requires deciding its copy and quit semantics here.
+            let (line, tone, owned) = match &state {
+                State::Off => (STATE_OFF, PrivateInferenceTone::Neutral, false),
+                State::Stopping { .. } => (STATE_STOPPING, PrivateInferenceTone::Held, true),
+                State::Running { .. } => (STATE_RUNNING, PrivateInferenceTone::Clear, true),
+                State::RunningWithoutBackends { .. } => (
+                    STATE_RUNNING_NO_BACKENDS,
+                    PrivateInferenceTone::Attention,
+                    true,
+                ),
+                State::RunningElsewhere { .. } => {
+                    (STATE_RUNNING_ELSEWHERE, PrivateInferenceTone::Held, false)
+                }
+                State::Failed { label } => {
+                    (state_line(label), PrivateInferenceTone::Refused, false)
+                }
+            };
+            assert_eq!(state_line(state.label()), line);
+            assert_ne!(line, STATE_UNKNOWN);
+            assert_ne!(line, STATE_UNREPORTED);
+            assert_eq!(state_tone(state.label()), tone);
+            assert_eq!(quit_needs_notice(false, state.label()), owned);
+        }
+        assert!(!quit_needs_notice(true, LABEL_RUNNING_ELSEWHERE));
+        assert!(!quit_needs_notice(true, LABEL_OFF));
+        assert!(quit_needs_notice(true, "future_state"));
+        assert!(!quit_needs_notice(false, "future_state"));
     }
 
     /// The offer is asked once, whichever way it was answered, and is not put
@@ -476,7 +567,7 @@ mod tests {
         let fields = payload.as_object().expect("a JSON object");
         assert_eq!(
             fields.len(),
-            18,
+            21,
             "the payload's field count changed -- update the shells' decoders \
              and the tests that pin the set"
         );

@@ -27,7 +27,7 @@ public enum TCPrivateInference {
 
     /// The sentence for one `private_inference_state` label.
     ///
-    /// A label this build has never heard of reads as the off sentence,
+    /// An unfamiliar nonempty label reads as unavailable,
     /// which claims nothing. The Rust decides that, not this shell.
     public static func stateLine(state: String) -> String? {
         guard let raw = state.withCString({ tc_private_inference_state_line($0) }) else {
@@ -61,6 +61,10 @@ public enum TCPrivateInference {
     /// The branch crosses, not only the words. Three shells each deciding
     /// when to interrupt somebody is three chances to re-ask a contributor
     /// who already said no.
+    public static func quitNeedsNotice(on: Bool, state: String) -> Bool {
+        state.withCString { tc_private_inference_quit_needs_notice(on ? 1 : 0, $0) != 0 }
+    }
+
     public static func shouldOffer(answered: Bool, on: Bool) -> Bool {
         tc_private_inference_should_offer(answered ? 1 : 0, on ? 1 : 0) != 0
     }

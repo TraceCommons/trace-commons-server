@@ -1582,13 +1582,25 @@ on `get_settings`, `set_settings` and `status`. It is an object,
 
 | `state` | meaning | `port` |
 |---|---|---|
-| `off` | the switch is off and nothing is bound | `null` |
+| `off` | this daemon owns no running proxy | `null` |
 | `running` | this daemon's proxy is serving and has a backend registered | the bound port |
 | `running_no_backends` | this daemon's proxy is serving but no backend is configured, so nothing will route through it | the bound port |
-| `running_elsewhere` | an IronWire this daemon did not start owns the home and is answering; nothing was bound and nothing was stopped | the existing instance's port |
+| `running_elsewhere` | another process owns the home; this daemon started and stopped nothing, and readiness is not implied by ownership | the existing instance's published or requested port |
 | `port_in_use` | something that is not this daemon's proxy holds the port | `null` |
 | `start_failed` | the proxy refused to start for any other reason | `null` |
 | `crashed` | a proxy this daemon started ended without being asked to | `null` |
+| `stopping` | retained shutdown is awaiting outstanding startup, calls or cleanup; the requested switch may already be off | last owned port, or `null` before binding |
+
+Turning hosting off persists the request before stopping the owned proxy. The
+reply may report `stopping` while requests drain; it does not mean the listener,
+pointer, or home lock has been released. A new on request waits for that cleanup
+before another listener can start. Daemon termination prevents any later restart
+and waits up to five seconds for cleanup, including waiting for a startup already
+in progress. On expiry the retained cleanup continues while the runtime lives;
+process exit or runtime destruction can interrupt remaining streams. Closing or
+dropping the embedded daemon requests cleanup without blocking synchronously.
+Drop-based cleanup requires unwinding; a `panic=abort` build terminates the
+process instead and cannot finish in-flight requests.
 
 `running_no_backends` is deliberately not `running`: the proxy answers its
 health endpoint and no inference can pass through it, so a client that
@@ -1596,6 +1608,28 @@ rendered it as running would show a green light over a proxy that cannot
 work. `crashed` is sticky until the switch is turned off and on again,
 rather than restarting every poll tick, so a proxy that cannot stay up is
 visible instead of flickering.
+
+The shells distinguish an absent or empty status from a nonempty state label
+this build does not recognize. The former says the daemon does not report
+model-call status (including older daemons); the latter says the state is
+unavailable. Neither proves `off`. `stopping` uses the Held tone until the
+retained-shutdown producer confirms cleanup; a port alone is metadata, not
+proof that calls can be answered.
+
+The companion C ABI copy payload (`tc_private_inference_copy`, not a daemon
+settings key) supplies these 21 fixed string fields:
+
+- `offer_title`, `offer_what`, `offer_exposure`, `offer_no_repoint`,
+  `offer_accept`, `offer_decline`, `offer_asked_once`;
+- `settings_title`, `settings_toggle`, `settings_applies_at_once`;
+- `state_off`, `state_unreported`, `state_unknown`, `state_stopping`,
+  `state_running`, `state_running_no_backends`, `state_running_elsewhere`,
+  `state_port_in_use`, `state_start_failed`, `state_crashed`;
+- `quit_also_stops`.
+
+State sentences and tones are chosen by the shared Rust table rather than by
+shell-authored branching. Copy-field inventory parity is checked separately
+from successful decoding of required fields.
 
 `private_inference_offer_seen` takes a boolean, and it is **not a fourth
 answer**: it records that the question was put, never what the answer was.

@@ -2218,15 +2218,40 @@ pub extern "C" fn tc_private_inference_copy() -> *mut c_char {
     })
 }
 
+/// Whether quitting may interrupt owned model-call work, including draining.
+/// Unknown/invalid status and caught panics conservatively retain requested_on.
+///
+/// # Safety
+/// `state`, if non-null, must point to a valid, NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tc_private_inference_quit_needs_notice(
+    requested_on: i32,
+    state: *const c_char,
+) -> i32 {
+    guard(|| {
+        let label = if state.is_null() {
+            ""
+        } else {
+            unsafe { borrow_str(state) }.unwrap_or("")
+        };
+        Ok(i32::from(
+            trace_commons_contributor::private_inference_copy::quit_needs_notice(
+                requested_on != 0,
+                label,
+            ),
+        ))
+    })
+    .unwrap_or(i32::from(requested_on != 0))
+}
+
 /// The sentence for one `private_inference_state` label.
 ///
 /// `state` is the `state` field of `get_settings`/`status`'s
 /// `private_inference_state` object: `off`, `running`, `running_no_backends`,
-/// `running_elsewhere`, `port_in_use`, `start_failed` or `crashed`.
+/// `running_elsewhere`, `stopping`, `port_in_use`, `start_failed` or `crashed`.
 ///
-/// A label this build has never heard of -- and a NULL or non-UTF-8 `state`
-/// -- reads as the off sentence, which claims nothing. It never falls through
-/// to one of the three "on" sentences.
+/// An empty, NULL or non-UTF-8 label reports that no usable status was provided.
+/// An unfamiliar nonempty label reads as unavailable. Neither implies off.
 ///
 /// Returns an owned string; free it with [`tc_string_free`]. NULL only on a
 /// caught panic.
@@ -2286,7 +2311,7 @@ pub unsafe extern "C" fn tc_private_inference_state_tone(state: *const c_char) -
     .unwrap_or(TC_PRIVATE_INFERENCE_TONE_NEUTRAL)
 }
 
-/// The "where it is answering" sentence, assembled.
+/// The reported local port, assembled without a readiness claim.
 ///
 /// `port` is the `port` field of `private_inference_state`. A value outside
 /// 1..=65535 -- including the `0` a caller passes for the JSON `null` -- gives

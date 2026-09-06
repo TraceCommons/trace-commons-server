@@ -19,15 +19,16 @@ use trace_commons_contributor_ffi::{
     tc_daemon_start, tc_daemon_start_with_settings, tc_daemon_stop, tc_discover_sources, tc_handle,
     tc_handle_free, tc_invite_issuer_host, tc_last_error, tc_preview, tc_preview_body,
     tc_preview_open, tc_preview_search, tc_preview_summary_json, tc_preview_turns_json,
-    tc_private_inference_copy, tc_private_inference_serving_line,
-    tc_private_inference_should_offer, tc_private_inference_state_line,
-    tc_private_inference_state_tone, tc_routing_copy, tc_routing_discovery_line,
-    tc_routing_last_checked, tc_routing_state_line, tc_routing_state_tone, tc_routing_token_line,
-    tc_routing_tool_tone, tc_routing_tool_word, tc_routing_unreachable_line,
-    tc_scrub_detector_names, tc_search_original, tc_source_check_line, tc_string_free,
-    tc_subscribe, tc_unsubscribe, tc_witness_clear, tc_witness_configure, tc_witness_copy,
-    tc_witness_last_result_json, tc_witness_last_result_line, tc_witness_last_result_tone,
-    tc_witness_state_line, tc_witness_state_tone, tc_witness_status_json, tc_witness_trust_state,
+    tc_private_inference_copy, tc_private_inference_quit_needs_notice,
+    tc_private_inference_serving_line, tc_private_inference_should_offer,
+    tc_private_inference_state_line, tc_private_inference_state_tone, tc_routing_copy,
+    tc_routing_discovery_line, tc_routing_last_checked, tc_routing_state_line,
+    tc_routing_state_tone, tc_routing_token_line, tc_routing_tool_tone, tc_routing_tool_word,
+    tc_routing_unreachable_line, tc_scrub_detector_names, tc_search_original, tc_source_check_line,
+    tc_string_free, tc_subscribe, tc_unsubscribe, tc_witness_clear, tc_witness_configure,
+    tc_witness_copy, tc_witness_last_result_json, tc_witness_last_result_line,
+    tc_witness_last_result_tone, tc_witness_state_line, tc_witness_state_tone,
+    tc_witness_status_json, tc_witness_trust_state,
 };
 
 fn cstr(p: &Path) -> CString {
@@ -3303,6 +3304,23 @@ fn a_malformed_pin_is_readable_so_a_contributor_can_repair_it() {
     assert_eq!(label, "witness-pin-malformed");
 }
 
+#[test]
+fn private_inference_quit_notice_tracks_actual_owned_work() {
+    let call = |on, state: &str| {
+        let state = cstr_str(state);
+        unsafe { tc_private_inference_quit_needs_notice(on, state.as_ptr()) }
+    };
+    assert_eq!(call(0, "stopping"), 1);
+    assert_eq!(call(1, "off"), 0);
+    assert_eq!(call(1, "running_elsewhere"), 0);
+    assert_eq!(call(0, "running_no_backends"), 1);
+    assert_eq!(call(1, "future"), 1);
+    assert_eq!(
+        unsafe { tc_private_inference_quit_needs_notice(0, std::ptr::null()) },
+        0
+    );
+}
+
 // --- the private-inference surface ---------------------------------------
 
 /// Every sentence the offer needs arrives in one payload, finished.
@@ -3360,6 +3378,7 @@ fn the_private_inference_branch_tables_cross_the_abi() {
 
     for state in [
         "off",
+        "stopping",
         "running",
         "running_no_backends",
         "running_elsewhere",
@@ -3410,7 +3429,7 @@ fn the_private_inference_branch_tables_cross_the_abi() {
     );
     assert_eq!(
         take_owned(unsafe { tc_private_inference_state_line(std::ptr::null()) }),
-        copy::STATE_OFF
+        copy::STATE_UNREPORTED
     );
 }
 

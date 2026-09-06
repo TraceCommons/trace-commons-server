@@ -125,9 +125,11 @@ public class PrivateInferenceTests
             copy.StateStartFailed, PrivateInferenceSurface.StateLine(State("start_failed"), copy));
         Assert.Equal(copy.StateCrashed, PrivateInferenceSurface.StateLine(State("crashed"), copy));
         Assert.Equal(
-            copy.StateOff,
+            copy.StateUnknown,
             PrivateInferenceSurface.StateLine(State("a_state_from_a_later_daemon"), copy));
-        Assert.Equal(copy.StateOff, PrivateInferenceSurface.StateLine(State(string.Empty), copy));
+        Assert.Equal(copy.StateUnreported, PrivateInferenceSurface.StateLine(State(string.Empty), copy));
+        Assert.Equal(copy.StateStopping, PrivateInferenceSurface.StateLine(State("stopping"), copy));
+        Assert.Equal(PrivateInferenceTone.Held, PrivateInferenceSurface.Tone(State("stopping")));
     }
 
     /// <summary>
@@ -292,9 +294,12 @@ public class PrivateInferenceTests
     public void TheQuitSentenceIsOnlyAddedWhenTheSwitchIsOn()
     {
         PrivateInferenceCopy copy = Copy();
-        Assert.Null(PrivateInferenceSurface.QuitDetail(on: false, copy));
-        Assert.Null(PrivateInferenceSurface.QuitDetail(on: true, null));
-        Assert.Equal(copy.QuitAlsoStops, PrivateInferenceSurface.QuitDetail(on: true, copy));
+        Assert.Null(PrivateInferenceSurface.QuitDetail(on: false, State(string.Empty), copy));
+        Assert.Null(PrivateInferenceSurface.QuitDetail(on: true, State(string.Empty), null));
+        Assert.Equal(copy.QuitAlsoStops, PrivateInferenceSurface.QuitDetail(on: true, State(string.Empty), copy));
+        Assert.Equal(copy.QuitAlsoStops, PrivateInferenceSurface.QuitDetail(false, State("stopping"), copy));
+        Assert.Null(PrivateInferenceSurface.QuitDetail(true, State("running_elsewhere"), copy));
+        Assert.Null(PrivateInferenceSurface.QuitDetail(true, State("off"), copy));
     }
 
     /// <summary>

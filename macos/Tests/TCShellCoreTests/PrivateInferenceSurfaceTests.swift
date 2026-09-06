@@ -14,7 +14,7 @@ final class PrivateInferenceSurfaceTests: XCTestCase {
          "offer_no_repoint":"NO-REPOINT","offer_accept":"ACCEPT",
          "offer_decline":"DECLINE","offer_asked_once":"ONCE",
          "settings_title":"S-TITLE","settings_toggle":"S-TOGGLE",
-         "settings_applies_at_once":"S-AT-ONCE","state_off":"S-OFF",
+         "settings_applies_at_once":"S-AT-ONCE","state_off":"S-OFF","state_unknown":"S-UNKNOWN","state_unreported":"S-UNREPORTED","state_stopping":"S-STOPPING",
          "state_running":"S-RUNNING","state_running_no_backends":"S-NO-BACKENDS",
          "state_running_elsewhere":"S-ELSEWHERE","state_port_in_use":"S-PORT",
          "state_start_failed":"S-FAILED","state_crashed":"S-CRASHED",
@@ -36,7 +36,7 @@ final class PrivateInferenceSurfaceTests: XCTestCase {
         offer: @escaping @Sendable (Bool, Bool) -> Bool = { !$0 && !$1 }
     ) -> PrivateInferenceCalls {
         PrivateInferenceCalls(
-            stateLine: line, stateTone: tone, servingLine: serving, shouldOffer: offer)
+            stateLine: line, stateTone: tone, servingLine: serving, shouldOffer: offer, quitNeedsNotice: { on, _ in on })
     }
 
     func testAPayloadMissingASentenceIsRefusedRatherThanRenderedBlank() {
@@ -56,12 +56,12 @@ final class PrivateInferenceSurfaceTests: XCTestCase {
 
     /// A caught panic on the far side falls back to the sentence that claims
     /// nothing -- never to one that says it is running.
-    func testASilentExportFallsBackToTheOffSentence() {
+    func testASilentExportFallsBackToTheUnavailableSentence() {
         let state = PrivateInferenceState(label: "running", port: 8463)
         XCTAssertEqual(
             PrivateInferenceSurface.stateLine(
                 state, copy: copy(), calls: calls(line: { _ in nil })),
-            copy().stateOff)
+            copy().stateUnknown)
     }
 
     /// The ABI decoder is spelled out, and anything unknown is neutral --
@@ -132,7 +132,7 @@ final class PrivateInferenceSurfaceTests: XCTestCase {
     }
 
     /// A daemon that never heard of the field reads as the empty label,
-    /// which the shared table answers with the off sentence -- never as a
+    /// which the shared table answers as unavailable -- never as a
     /// missing state a screen would draw as nothing at all.
     func testAnAbsentStateObjectReadsAsTheEmptyLabel() {
         XCTAssertEqual(PrivateInferenceState.parse(nil).label, "")
@@ -145,8 +145,8 @@ final class PrivateInferenceSurfaceTests: XCTestCase {
     /// The quit sentence is added only while the switch is on, and it is the
     /// payload's words rather than this shell's.
     func testTheQuitSentenceIsOnlyAddedWhenTheSwitchIsOn() {
-        XCTAssertNil(PrivateInferenceSurface.quitDetail(on: false, copy: copy()))
-        XCTAssertNil(PrivateInferenceSurface.quitDetail(on: true, copy: nil))
-        XCTAssertEqual(PrivateInferenceSurface.quitDetail(on: true, copy: copy()), "QUIT")
+        XCTAssertNil(PrivateInferenceSurface.quitDetail(on: false, state: .init(label: "", port: nil), copy: copy(), calls: calls()))
+        XCTAssertNil(PrivateInferenceSurface.quitDetail(on: true, state: .init(label: "", port: nil), copy: nil, calls: calls()))
+        XCTAssertEqual(PrivateInferenceSurface.quitDetail(on: true, state: .init(label: "", port: nil), copy: copy(), calls: calls()), "QUIT")
     }
 }
