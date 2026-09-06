@@ -1035,8 +1035,8 @@ what was current when it was written.
 | Image | `ghcr.io/tracecommons/trace-commons-witness@sha256:052165938c552e1d3ab68e141de4bc39d86f11761875fbd096a1454cd76d3345` |
 | Mode | `full-pipeline` (NEAR AI classifier) |
 | Signing address | `0x655a17fcf6d0b9069e1b1dd07a7f5535d0c76798` |
-| Instance `compose_hash` | `454992a4c0ef366ce7049303d48937b5f5d560d3412935b27f6a09e15cab10e4` |
-| Measurement | `mrtd:f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077+mrconfigid:01454992a4c0ef366ce7049303d48937b5f5d560d3412935b27f6a09e15cab10e4000000000000000000000000000000` |
+| Instance `compose_hash` | `e848cac038d7a3181b0a9dbbd7ba63fbec3a2bed6aa6e58ad9309992eb9756eb` |
+| Measurement | `mrtd:f06dfda6dce1cf904d4e2bab1dc370634cf95cefa2ceb2de2eee127c9382698090d7a4a13e14c536ec6c9c3c8fa87077+mrconfigid:01e848cac038d7a3181b0a9dbbd7ba63fbec3a2bed6aa6e58ad9309992eb9756eb000000000000000000000000000000` |
 | Policy version | `ironclaw-deterministic-secret-path-v3+privacy-filter-near-ai-v1` |
 | `public_logs` / `public_sysinfo` / `public_tcbinfo` | `false` / `false` / `true` |
 | `allowed_envs` | `["TRACE_NEAR_AI_PRIVACY_API_KEY"]` |
