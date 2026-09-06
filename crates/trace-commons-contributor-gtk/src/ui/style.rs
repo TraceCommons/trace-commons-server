@@ -504,6 +504,57 @@ pub fn section(title: &str) -> gtk::Box {
     row
 }
 
+/// Body copy: the wrapped, left-aligned paragraph face used throughout the
+/// declaration cards. The site's default running text.
+pub fn body(text: impl AsRef<str>) -> gtk::Label {
+    let label = gtk::Label::builder()
+        .label(text.as_ref())
+        .xalign(0.0)
+        .wrap(true)
+        .build();
+    label.add_css_class("tc-body");
+    label
+}
+
+/// Build a [`body`] label and append it to `parent` in one step.
+pub fn append_body(parent: &gtk::Box, text: impl AsRef<str>) {
+    parent.append(&body(text));
+}
+
+/// Caveat copy: the same wrapped paragraph face, toned down for a footnote
+/// or condition rather than the card's primary sentence.
+pub fn caveat(text: impl AsRef<str>) -> gtk::Label {
+    let label = gtk::Label::builder()
+        .label(text.as_ref())
+        .xalign(0.0)
+        .wrap(true)
+        .build();
+    label.add_css_class("tc-caveat");
+    label
+}
+
+/// Build a [`caveat`] label and append it to `parent` in one step.
+pub fn append_caveat(parent: &gtk::Box, text: impl AsRef<str>) {
+    parent.append(&caveat(text));
+}
+
+/// Meta copy: the same wrapped paragraph face, for secondary or
+/// small-print facts.
+pub fn meta(text: impl AsRef<str>) -> gtk::Label {
+    let label = gtk::Label::builder()
+        .label(text.as_ref())
+        .xalign(0.0)
+        .wrap(true)
+        .build();
+    label.add_css_class("tc-meta");
+    label
+}
+
+/// Build a [`meta`] label and append it to `parent` in one step.
+pub fn append_meta(parent: &gtk::Box, text: impl AsRef<str>) {
+    parent.append(&meta(text));
+}
+
 /// A card face: surface, 8px radius, one hairline, no shadow.
 ///
 /// The site's `0 18px 48px` card shadow is a web idiom; inside an

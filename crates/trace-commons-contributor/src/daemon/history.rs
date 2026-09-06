@@ -403,9 +403,7 @@ mod tests {
     use crate::config::tests_support::temp_store;
     use trace_commons_protocol::trace_contribution::ConsentScope;
 
-    fn at(s: &str) -> DateTime<Utc> {
-        s.parse().unwrap()
-    }
+    use crate::daemon::test_support::at;
 
     fn receipt(id: Uuid, hash: &str, status: &str, when: &str) -> Receipt {
         Receipt {

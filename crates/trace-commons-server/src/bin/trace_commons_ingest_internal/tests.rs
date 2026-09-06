@@ -90476,3 +90476,179 @@ async fn near_provisioning_default_disabled_returns_uniform_denial() {
 }
 #[path = "admission_pg_tests.rs"]
 mod admission_pg_tests;
+
+/// The nineteen `validate_*_reason` / `validate_*_purpose` wrappers all reduce
+/// to this, so the trim / reject-empty / reject-over-1024 contract and the two
+/// message templates are pinned here once rather than at each wrapper.
+#[test]
+fn validate_free_text_field_trims_rejects_empty_and_caps_at_1024() {
+    assert_eq!(
+        validate_free_text_field("  spaced out  ", "widget run", "reason").expect("accepted"),
+        "spaced out",
+        "surrounding whitespace is trimmed off the accepted value",
+    );
+
+    let (status, Json(error)) =
+        validate_free_text_field("   ", "widget run", "reason").expect_err("blank is rejected");
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error.error, "widget run requires a non-empty reason");
+
+    let at_cap = "x".repeat(1024);
+    assert_eq!(
+        validate_free_text_field(&at_cap, "widget run", "reason").expect("1024 is accepted"),
+        at_cap,
+        "1024 bytes is the last accepted length, not the first rejected one",
+    );
+
+    let over_cap = "x".repeat(1025);
+    let (status, Json(error)) =
+        validate_free_text_field(&over_cap, "widget run", "purpose").expect_err("1025 is rejected");
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error.error, "widget run purpose is too long");
+
+    // The length bound is applied after trimming, so padding cannot push an
+    // otherwise-legal value over the cap.
+    let padded = format!("  {at_cap}  ");
+    assert!(
+        validate_free_text_field(&padded, "widget run", "reason").is_ok(),
+        "the cap applies to the trimmed value",
+    );
+}
+
+#[test]
+fn free_text_wrappers_preserve_error_labels_and_hash_only_approval() {
+    type Validator = fn(&str) -> ApiResult<String>;
+    let cases: &[(Validator, &str, &str, bool)] = &[
+        (
+            validate_credit_cycle_scheduler_reason,
+            "credit cycle scheduler requires a non-empty reason",
+            "credit cycle scheduler reason is too long",
+            false,
+        ),
+        (
+            validate_credit_settlement_scheduler_reason,
+            "credit settlement scheduler requires a non-empty reason",
+            "credit settlement scheduler reason is too long",
+            false,
+        ),
+        (
+            validate_credit_cycle_worker_reason,
+            "credit cycle worker run requires a non-empty reason",
+            "credit cycle worker run reason is too long",
+            false,
+        ),
+        (
+            validate_credit_settlement_issuer_approval_reason,
+            "issuer approval requires a non-empty reason",
+            "issuer approval reason is too long",
+            true,
+        ),
+        (
+            validate_ranking_calibration_dataset_conflict_quarantine_reason,
+            "ranking calibration dataset conflict quarantine requires a non-empty reason",
+            "ranking calibration dataset conflict quarantine reason is too long",
+            false,
+        ),
+        (
+            validate_ranking_calibration_run_reason,
+            "ranking calibration run requires a non-empty reason",
+            "ranking calibration run reason is too long",
+            false,
+        ),
+        (
+            validate_ranking_model_promotion_reason,
+            "ranking model promotion requires a non-empty reason",
+            "ranking model promotion reason is too long",
+            false,
+        ),
+        (
+            validate_ranking_feature_run_reason,
+            "ranking feature runs require a non-empty reason",
+            "ranking feature run reason is too long",
+            false,
+        ),
+        (
+            validate_ranking_prediction_credit_reason,
+            "ranking prediction credit jobs require a non-empty reason",
+            "ranking prediction credit reason is too long",
+            false,
+        ),
+        (
+            validate_ranking_worker_run_recovery_reason,
+            "ranking worker run recovery requires a non-empty reason",
+            "ranking worker run recovery reason is too long",
+            false,
+        ),
+        (
+            validate_export_job_recovery_reason,
+            "export job recovery requires a non-empty reason",
+            "export job recovery reason is too long",
+            false,
+        ),
+        (
+            validate_export_job_retry_reason,
+            "export job retry requires a non-empty reason",
+            "export job retry reason is too long",
+            false,
+        ),
+        (
+            validate_near_credit_outbox_scheduler_purpose,
+            "NEAR credit outbox scheduler requires a non-empty purpose",
+            "NEAR credit outbox scheduler purpose is too long",
+            false,
+        ),
+        (
+            validate_vector_index_scheduler_purpose,
+            "vector index scheduler requires a non-empty purpose",
+            "vector index scheduler purpose is too long",
+            false,
+        ),
+        (
+            validate_retention_maintenance_scheduler_purpose,
+            "retention maintenance scheduler requires a non-empty purpose",
+            "retention maintenance scheduler purpose is too long",
+            false,
+        ),
+        (
+            validate_benchmark_registry_scheduler_purpose,
+            "benchmark registry scheduler requires a non-empty purpose",
+            "benchmark registry scheduler purpose is too long",
+            false,
+        ),
+        (
+            validate_benchmark_pipeline_scheduler_reason,
+            "benchmark pipeline scheduler requires a non-empty reason",
+            "benchmark pipeline scheduler reason is too long",
+            false,
+        ),
+        (
+            validate_revocation_propagation_scheduler_purpose,
+            "revocation propagation scheduler requires a non-empty purpose",
+            "revocation propagation scheduler purpose is too long",
+            false,
+        ),
+        (
+            validate_process_evaluation_ranking_label_external_ref,
+            "process evaluation ranking label requires a non-empty external_ref",
+            "process evaluation ranking label external_ref is too long",
+            false,
+        ),
+    ];
+    for (validate, empty_label, long_label, hash_only) in cases {
+        let (status, Json(error)) = validate(" ").expect_err("empty rejected");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(&error.error, empty_label);
+        let (status, Json(error)) = validate(&"é".repeat(513)).expect_err("byte cap enforced");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(&error.error, long_label);
+        let accepted = validate("  accepted  ").expect("trimmed input accepted");
+        assert_eq!(
+            accepted,
+            if *hash_only {
+                "sha256:070c160a6299c5438070b1aa737b14fc2992ed49579c14264884886a5876f971"
+            } else {
+                "accepted"
+            }
+        );
+    }
+}

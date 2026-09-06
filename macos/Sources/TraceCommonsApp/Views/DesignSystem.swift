@@ -196,6 +196,33 @@ enum TC {
         static let checkbox: CGFloat = 13
     }
 
+    /// The status item. The menu bar is 22pt tall and the system's own
+    /// glyphs sit at 15-16pt inside it, so there is no room to set a digit
+    /// row under the mark; the count is a capsule over the mark's top
+    /// right corner instead, and these are its measures.
+    enum MenuBar {
+        /// Spec §1.3: the mark at 15pt, template variant.
+        static let mark: CGFloat = 15
+        /// The badge's height, and the smallest a digit can be and still be
+        /// read against the menu bar at 1x.
+        static let badgeHeight: CGFloat = 10
+        /// Side padding inside the capsule, beyond the digits' own width.
+        static let badgeInset: CGFloat = 2.5
+        /// The clear ring between the badge and the bracket it overlaps,
+        /// so the capsule reads as a thing on the mark rather than a growth
+        /// of it.
+        static let badgeHalo: CGFloat = 1
+        /// How far the badge rises above the mark's top edge. The label is
+        /// padded by this on both edges so the mark stays centred, and
+        /// 15 + 3 + 3 is the most that fits the 22pt bar.
+        static let badgeOverhang: CGFloat = 3
+        /// How far back over the mark the badge's leading edge sits. The
+        /// user's bracket ends at 28/64 of the mark (6.5pt at 15) and the
+        /// agent's begins at 36/64 (8.4pt) but only below the badge, so a
+        /// leading edge at 15 - 6 = 9pt touches neither.
+        static let badgeOverlap: CGFloat = 6
+    }
+
     // MARK: - Type
 
     /// A fixed scale, all of it relative to system text styles.
@@ -206,12 +233,15 @@ enum TC {
     /// labels are heavy, uppercase and tracked, which is the site's
     /// `.eyebrow` / `th` / `.kpi .label` treatment (12px, weight 800,
     /// uppercase) rendered in SF instead of Inter.
-    /// Where a macOS text style's default size already equals the size the
-    /// mockups state, the text style is used, so the scale still answers to
-    /// Dynamic Type. macOS `title2` is 17, `title3` 15, `headline`/`body` 13,
-    /// `callout` 12, `subheadline` 11, `footnote`/`caption`/`caption2` 10.
-    /// Where the mockups ask for a size no text style carries -- 20, 18, 16,
-    /// 12.5, 10.5 -- an exact size is given instead.
+    /// Every face is a text style, so the whole scale answers to the
+    /// system text size. macOS `title` is 22, `title2` 17, `title3` 15,
+    /// `headline`/`body` 13, `callout` 12, `subheadline` 11,
+    /// `footnote`/`caption`/`caption2` 10. Where the mockups ask for a size
+    /// no text style carries -- 20, 18, 16, 12.5, 10.5 -- the nearest style
+    /// is used and the delta is noted on the face. Those five used to be
+    /// `Font.system(size:)`, which is fixed: a person who had turned text
+    /// size up got larger prose beside stat figures, button labels and
+    /// footnotes that stayed exactly where they were.
     enum Font_ {
         /// Spec `title.screen`, 15/700. Content-header titles: "Waiting",
         /// "History", "Settings".
@@ -225,31 +255,35 @@ enum TC {
         static let sectionTitle = Font.title2.weight(.bold)
         /// Spec `title.card`, 13/600. The name of the thing a card is about.
         static let cardTitle = Font.headline
-        /// Spec `metric.value`, 20/700. Stat-card numbers.
-        static let metricValue = Font.system(size: 20, weight: .bold)
-        /// Spec `metric.value.mono`, 18/700 mono. Credit figures.
-        static let metricValueMono = Font.system(size: 18, weight: .bold, design: .monospaced)
-        /// Spec `heading.alert`, 16/700. "2 matches".
-        static let headingAlert = Font.system(size: 16, weight: .bold)
+        /// Spec `metric.value`, 20/700. Stat-card numbers. `title` (22): a
+        /// step above `sectionTitle`, which is what the spec's 20 was for.
+        static let metricValue = Font.title.weight(.bold)
+        /// Spec `metric.value.mono`, 18/700 mono. Credit figures. `title2`
+        /// (17); pair with `.monospacedDigit()` at the call site as before.
+        static let metricValueMono = Font.system(.title2, design: .monospaced).weight(.bold)
+        /// Spec `heading.alert`, 16/700. "2 matches". `title3` (15).
+        static let headingAlert = Font.title3.weight(.bold)
         /// Spec `body`, 13/400. The opening prompt -- the text that actually
         /// identifies a session to the person who wrote it. Was `callout`
         /// (12pt).
         static let body = Font.body
-        /// Spec `body.dense`, 12.5/600. The undo bar's headline.
-        static let bodyDense = Font.system(size: 12.5, weight: .semibold)
-        /// Spec `body.dense` at 400. Disclosure rows.
-        static let disclosure = Font.system(size: 12.5)
+        /// Spec `body.dense`, 12.5/600. The undo bar's headline. `callout`
+        /// (12).
+        static let bodyDense = Font.callout.weight(.semibold)
+        /// Spec `body.dense` at 400. Disclosure rows. `callout` (12).
+        static let disclosure = Font.callout
         /// Spec `label.control`, 12/500. Secondary buttons.
-        static let labelControl = Font.system(size: 12, weight: .medium)
+        static let labelControl = Font.callout.weight(.medium)
         /// Spec `label.control.primary`, 12/600. Filled buttons.
-        static let labelControlPrimary = Font.system(size: 12, weight: .semibold)
+        static let labelControlPrimary = Font.callout.weight(.semibold)
         /// Spec `caption`, 11/400. Attribution, timestamps, agent names,
         /// supporting sentences. Was `callout` (12pt).
         static let meta = Font.subheadline
         /// Spec `caption`, 11/400, under the spec's own name.
         static let caption = Font.subheadline
-        /// Spec `caption.small`, 10.5/400. The read-gate footnote.
-        static let captionSmall = Font.system(size: 10.5)
+        /// Spec `caption.small`, 10.5/400. The read-gate footnote. `caption2`
+        /// (10).
+        static let captionSmall = Font.caption2
         /// Spec `eyebrow`, 10/800 uppercase, tracked. Field labels on the
         /// manifest strip. See `Tracking.eyebrow`.
         static let fieldLabel = Font.caption2.weight(.heavy)
@@ -257,6 +291,10 @@ enum TC {
         /// anything else countable. Was `footnote`-sized mono (10pt).
         static let ledger = Font.system(.callout, design: .monospaced)
             .weight(.medium)
+        /// The status item's count, drawn against an opaque 10pt capsule. Rounded
+        /// and bold because at this size a hairline digit disappears when
+        /// it is drawn in reverse.
+        static let menuBarBadge = Font.system(size: 8, weight: .bold, design: .rounded)
         /// Spec `mono.chip`, 11/500 mono. Status-pill text.
         static let monoChip = Font.system(.subheadline, design: .monospaced)
             .weight(.medium)

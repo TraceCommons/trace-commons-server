@@ -158,7 +158,9 @@ pub fn source_check_line(tool: SourceTool, source_mode: &str) -> String {
     let name = tool.name();
     match source_mode {
         "watch" => format!("{name} sessions folder set"),
-        "off" => format!("{name} marked not used, so nothing is opened for it"),
+        "off" => format!(
+            "{name} marked not used, so nothing is opened for it. Previously queued sessions are not removed"
+        ),
         _ if undeclared_scans_conventional(tool.adapter_name()) => {
             format!("{name} sessions read from the usual place")
         }
@@ -166,9 +168,94 @@ pub fn source_check_line(tool: SourceTool, source_mode: &str) -> String {
     }
 }
 
+/// Shared copy and source-policy metadata for editable native settings rows.
+#[derive(serde::Serialize)]
+pub struct SourceSettingsCopy {
+    pub heading: &'static str,
+    pub explanation: &'static str,
+    pub save_failed: &'static str,
+    pub consent_save_failed: &'static str,
+    pub unavailable: &'static str,
+    pub selected_folder: &'static str,
+    pub no_candidate: &'static str,
+    pub watch_candidate: &'static str,
+    pub choose_folder: &'static str,
+    pub retry: &'static str,
+    pub tools: std::collections::BTreeMap<&'static str, SourceSettingsToolCopy>,
+}
+
+#[derive(serde::Serialize)]
+pub struct SourceSettingsToolCopy {
+    pub key: &'static str,
+    pub decline: String,
+    pub unset_scans_conventional: bool,
+}
+
+#[must_use]
+pub fn source_settings_copy() -> SourceSettingsCopy {
+    let tools = [
+        ("claude", SourceTool::Claude),
+        ("codex", SourceTool::Codex),
+        ("gemini", SourceTool::Gemini),
+        ("cline", SourceTool::Cline),
+    ]
+    .into_iter()
+    .map(|(key, tool)| {
+        (
+            tool.adapter_name(),
+            SourceSettingsToolCopy {
+                key,
+                decline: format!("I don't use {}", tool.name()),
+                unset_scans_conventional: undeclared_scans_conventional(tool.adapter_name()),
+            },
+        )
+    })
+    .collect();
+    SourceSettingsCopy {
+        heading: "Watched folders",
+        explanation: "Source settings control future discovery. Turning a source off does not remove sessions already queued.",
+        save_failed: "Couldn't confirm that folder change. The last available settings are shown; retry to check the current state.",
+        consent_save_failed: "Couldn't confirm that permission change. The last available permissions are shown; retry to check the current state.",
+        unavailable: "Current folder settings aren't available.",
+        selected_folder: "Selected folder",
+        no_candidate: "No standard location found — choose a folder, or decline",
+        watch_candidate: "Watch this folder",
+        choose_folder: "Choose a different folder…",
+        retry: "Retry",
+        tools,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_metadata_uses_adapter_policy_and_retains_queue_effects() {
+        let copy = source_settings_copy();
+        assert_eq!(copy.tools.len(), 4);
+        for (adapter, tool) in &copy.tools {
+            assert_eq!(
+                tool.unset_scans_conventional,
+                undeclared_scans_conventional(adapter)
+            );
+            let source = SourceTool::from_key(tool.key).expect("known source");
+            assert!(
+                source_check_line(source, "off")
+                    .contains("Previously queued sessions are not removed")
+            );
+            assert_eq!(tool.decline, format!("I don't use {}", source.name()));
+        }
+        let payload = serde_json::to_value(copy).unwrap();
+        assert_eq!(
+            payload["tools"]["claude-code"]["unset_scans_conventional"],
+            true
+        );
+        assert_eq!(
+            payload["tools"]["gemini-cli"]["unset_scans_conventional"],
+            false
+        );
+    }
 
     /// The defect, pinned per mode. `off` and `unset` were one sentence;
     /// they are three facts and they get three sentences.
@@ -184,11 +271,11 @@ mod tests {
         );
         assert_eq!(
             source_check_line(SourceTool::Claude, "off"),
-            "Claude Code marked not used, so nothing is opened for it"
+            "Claude Code marked not used, so nothing is opened for it. Previously queued sessions are not removed"
         );
         assert_eq!(
             source_check_line(SourceTool::Codex, "off"),
-            "Codex marked not used, so nothing is opened for it"
+            "Codex marked not used, so nothing is opened for it. Previously queued sessions are not removed"
         );
         // Gemini CLI and Cline construct no adapter when undeclared, so the
         // scan sentence would be false for them in the fail-open direction.
@@ -206,7 +293,7 @@ mod tests {
         );
         assert_eq!(
             source_check_line(SourceTool::Cline, "off"),
-            "Cline marked not used, so nothing is opened for it"
+            "Cline marked not used, so nothing is opened for it. Previously queued sessions are not removed"
         );
     }
 
