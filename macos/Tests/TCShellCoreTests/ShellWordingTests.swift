@@ -40,11 +40,11 @@ final class ShellWordingTests: XCTestCase {
         "TCShellCore/ContributorVerdict.swift": 4,
         "TCShellCore/CorrectionCopy.swift": 4,
         "TCShellCore/DailyBudgetCopy.swift": 6,
-        "TCShellCore/DigestCopy.swift": 3,
+        "TCShellCore/DigestCopy.swift": 1,
         "TCShellCore/MenuBarStatus.swift": 4,
         "TCShellCore/OriginalSearchOutcome.swift": 4,
         "TCShellCore/ProjectArmingCopy.swift": 4,
-        "TCShellCore/ProjectIgnoreCopy.swift": 10,
+        "TCShellCore/ProjectIgnoreCopy.swift": 9,
         "TCShellCore/ProjectRow.swift": 3,
         "TCShellCore/RedactionLabels.swift": 3,
         "TCShellCore/RedactionMarks.swift": 2,
@@ -59,7 +59,7 @@ final class ShellWordingTests: XCTestCase {
         "TraceCommonsApp/AppDelegate.swift": 1,
         "TraceCommonsApp/AppModel.swift": 8,
         "TraceCommonsApp/HealthCopy.swift": 32,
-        "TraceCommonsApp/Notifier.swift": 3,
+        "TraceCommonsApp/Notifier.swift": 2,
         "TraceCommonsApp/SelfTest.swift": 15,
 
         // The SwiftUI views, which carry their own labels and help text.
@@ -165,6 +165,31 @@ final class ShellWordingTests: XCTestCase {
                 + "a rename in the Rust will not reach.\n\n" + failures.joined(separator: "\n"))
     }
 
+    /// A literal nested inside an interpolation does not end the literal
+    /// that holds it.
+    ///
+    /// The line is `ConsentScopesView.swift`'s continue button, verbatim. A
+    /// walker that steps over `\(` as a plain two-character escape runs on
+    /// into the expression, meets the `"` that opens `"permission"`, and
+    /// reads it as the close of the outer literal -- one sentence becomes
+    /// several garbled fragments, and how many depends on how the quotes
+    /// happen to pair up. It is one sentence.
+    func testALiteralNestedInAnInterpolationDoesNotSplitTheSentence() {
+        let source = """
+            Button("Continue with \\(total) \\(total == 1 ? "permission" : "permissions")") {
+            """
+        XCTAssertEqual(ShellSources.authoredWording(in: source), ["Continue with  "])
+    }
+
+    /// The interpolation is skipped by balance, not by counting parentheses
+    /// in the text, so a `)` written inside one does not end it early.
+    func testAParenthesisInsideAnInterpolationDoesNotEndItEarly() {
+        let source = """
+            Text("Sent to \\(names.joined(separator: ", ")) already")
+            """
+        XCTAssertEqual(ShellSources.authoredWording(in: source), ["Sent to  already"])
+    }
+
     /// The surfaces the Rust already owns hold no wording at all, and hold
     /// no baseline entry either.
     func testTheRustOwnedSurfacesAreNotGivenAWordingAllowance() {
@@ -225,11 +250,22 @@ private enum ShellSources {
     /// guard gives: prose about the wire may quote it, and nothing in a
     /// comment is rendered.
     ///
-    /// Known and accepted limitation: an interpolation is folded away with
-    /// its escape, so `"\(n) sessions"` is read as `"n) sessions"`. That is
-    /// deterministic, and the baseline is measured with it, so it ratchets
-    /// correctly -- it is not a claim that interpolated sentences are not
-    /// wording.
+    /// An interpolation is skipped whole, parenthesis-balanced, so
+    /// `"\(n) sessions"` is read as `" sessions"`. Balancing matters rather
+    /// than costing two characters for the escape: an interpolation may hold
+    /// a string literal of its own -- `"Continue with \(n) \(n == 1 ?
+    /// "permission" : "permissions")"` is real code on this shell -- and a
+    /// walker that steps over `\(` and keeps going meets that inner quote and
+    /// reads it as the end of the outer literal, splitting one sentence into
+    /// garbled fragments whose count depends on quote parity.
+    ///
+    /// Known and accepted limitation, one level in: the interpolation's own
+    /// contents are dropped rather than counted, so prose written inside one
+    /// -- `\(isOn ? "Watching this folder" : "Paused")` -- is not seen by
+    /// this guard. That is deterministic, and the baseline is measured with
+    /// it, so it ratchets correctly; it is not a claim that such a sentence
+    /// is not wording. Counting it means parsing the expression, which is a
+    /// different tool.
     static func authoredWording(in source: String) -> [String] {
         let chars = Array(source)
         var literals: [(text: String, line: String)] = []
@@ -273,6 +309,7 @@ private enum ShellSources {
                 while i + 2 < chars.count
                     && !(chars[i] == "\"" && chars[i + 1] == "\"" && chars[i + 2] == "\"")
                 {
+                    if isInterpolation(chars, i) { i = endOfInterpolation(chars, i); continue }
                     if chars[i] == "\\" { i += 2; continue }
                     text.append(chars[i] == "\n" ? " " : chars[i])
                     i += 1
@@ -287,6 +324,7 @@ private enum ShellSources {
                 i += 1
                 var text = ""
                 while i < chars.count && chars[i] != "\"" {
+                    if isInterpolation(chars, i) { i = endOfInterpolation(chars, i); continue }
                     if chars[i] == "\\" { i += 2; continue }
                     text.append(chars[i])
                     i += 1
@@ -309,6 +347,51 @@ private enum ShellSources {
             .filter { literal in !developerFacing.contains { literal.line.contains($0) } }
             .map(\.text)
             .filter(readsAsASentence)
+    }
+
+    /// `\(` at `i`, the opening of a string interpolation.
+    static func isInterpolation(_ chars: [Character], _ i: Int) -> Bool {
+        chars[i] == "\\" && i + 1 < chars.count && chars[i + 1] == "("
+    }
+
+    /// The index just past the `)` that closes the interpolation opening at
+    /// `start`. Parentheses are balanced and a string literal inside the
+    /// expression is stepped over whole, so neither a `)` nor a `"` written
+    /// inside the interpolation can be mistaken for the end of it.
+    static func endOfInterpolation(_ chars: [Character], _ start: Int) -> Int {
+        var i = start + 2
+        var depth = 1
+        while i < chars.count && depth > 0 {
+            if chars[i] == "\"" { i = endOfNestedLiteral(chars, i); continue }
+            if chars[i] == "(" { depth += 1 }
+            if chars[i] == ")" { depth -= 1 }
+            i += 1
+        }
+        return i
+    }
+
+    /// The index just past the literal opening at `start`, which may itself
+    /// hold an interpolation holding a literal. Only the extent is wanted --
+    /// the text is dropped, because it is inside an interpolation.
+    static func endOfNestedLiteral(_ chars: [Character], _ start: Int) -> Int {
+        if start + 2 < chars.count && chars[start + 1] == "\"" && chars[start + 2] == "\"" {
+            var i = start + 3
+            while i + 2 < chars.count
+                && !(chars[i] == "\"" && chars[i + 1] == "\"" && chars[i + 2] == "\"")
+            {
+                if isInterpolation(chars, i) { i = endOfInterpolation(chars, i); continue }
+                if chars[i] == "\\" { i += 2; continue }
+                i += 1
+            }
+            return min(i + 3, chars.count)
+        }
+        var i = start + 1
+        while i < chars.count && chars[i] != "\"" {
+            if isInterpolation(chars, i) { i = endOfInterpolation(chars, i); continue }
+            if chars[i] == "\\" { i += 2; continue }
+            i += 1
+        }
+        return min(i + 1, chars.count)
     }
 
     /// True where the literal reads as a sentence somebody wrote for a
