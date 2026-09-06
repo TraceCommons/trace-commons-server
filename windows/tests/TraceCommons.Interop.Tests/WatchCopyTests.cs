@@ -147,7 +147,7 @@ public class WatchCopyTests
     [Theory]
     [InlineData("ask", "Ignore")]
     [InlineData("ignore", "Ask again")]
-    [InlineData("auto_upload", "Ask me first")]
+    [InlineData("auto_upload", "Ask again")]
     public void TheButtonNamesTheTransitionOnceForBothSurfaces(string mode, string expected)
     {
         Assert.Equal(expected, WatchCopy.ActionFor(mode));

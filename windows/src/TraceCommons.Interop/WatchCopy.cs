@@ -61,8 +61,8 @@ public static class WatchCopy
     public const string Armed = "Contributed without asking";
 
     /// <summary>
-    /// What the row's button says for a project that is ignored: the action is
-    /// to start being asked again. Settings' word, shared for the reason
+    /// What the row's button says when an ignored or armed project returns
+    /// to manual review: the action is to start being asked again. Settings' word, shared for the reason
     /// <see cref="AskMeFirst"/> is shared -- two screens driving one field must
     /// not name one transition two ways.
     /// </summary>
@@ -173,10 +173,8 @@ public static class WatchCopy
     /// </summary>
     public static string? ActionFor(string? mode) => ProjectManualMode.Next(mode) switch
     {
-        null => null,
         "ignore" => IgnoreAction,
-        _ => string.Equals(mode, "ignore", StringComparison.Ordinal)
-            ? RestoreAction
-            : AskMeFirst,
+        "ask" => RestoreAction,
+        _ => null,
     };
 }
