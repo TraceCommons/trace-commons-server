@@ -322,6 +322,9 @@ internal static class NativeMethods
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int tc_private_inference_should_offer(int answered, int on);
 
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int tc_private_inference_quit_needs_notice(int requestedOn, [MarshalAs(UnmanagedType.LPUTF8Str)] string state);
+
     /// <summary>
     /// The routing surface's "that file could not be used" sentence, already
     /// assembled. <paramref name="tokenPath"/> may be NULL, which is the

@@ -424,6 +424,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// have declined months ago.
     /// </summary>
     private bool _privateInferenceKnown;
+    private PrivateInferenceState _privateInferenceState = new(string.Empty, null);
 
     /// <summary>
     /// Whether the offer belongs in front of the contributor right now. False
@@ -464,7 +465,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     /// <summary>The quit confirmation's extra line, or null.</summary>
     public string? PrivateInferenceQuitDetail =>
-        PrivateInferenceSurface.QuitDetail(_privateInferenceOn, _privateInferenceCopy);
+        PrivateInferenceSurface.QuitDetail(_privateInferenceOn, _privateInferenceState, _privateInferenceCopy);
 
     /// <summary>
     /// Takes what the daemon last reported about the switch and the answer.
@@ -485,6 +486,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (settings is not null)
         {
             _privateInferenceKnown = true;
+            _privateInferenceState = PrivateInferenceState.From(settings.PrivateInferenceReport);
+            Raise(nameof(PrivateInferenceQuitDetail));
         }
 
         if (answered == _privateInferenceAnswered && on == _privateInferenceOn)

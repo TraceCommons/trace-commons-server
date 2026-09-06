@@ -584,14 +584,20 @@ char*       tc_routing_last_checked(const char* when);
  */
 char*       tc_private_inference_copy(void);
 
+/* Whether quitting may interrupt owned model-call work, including stopping.
+ * requested_on is boolean (0/nonzero). Off and foreign ownership return 0;
+ * owned running/stopping return 1. Unknown/invalid status or panic retains
+ * requested_on conservatively. state may be NULL, else a NUL-terminated string.
+ */
+int32_t     tc_private_inference_quit_needs_notice(int32_t requested_on, const char* state);
+
 /* The sentence for one private_inference_state label.
  *
  * state is "off", "running", "running_no_backends", "running_elsewhere",
- * "port_in_use", "start_failed" or "crashed".
+ * "stopping", "port_in_use", "start_failed" or "crashed".
  *
- * A label this build has never heard of -- and a NULL or non-UTF-8 state --
- * reads as the off sentence, which claims nothing. It never falls through to
- * one of the three "on" sentences.
+ * An empty, NULL or non-UTF-8 label reports that no usable status was provided.
+ * An unfamiliar nonempty label reads as unavailable. Neither implies off.
  *
  * Returns an owned string; free it with tc_string_free. NULL only on a caught
  * panic.
@@ -602,8 +608,8 @@ char*       tc_private_inference_state_line(const char* state);
  * of the TC_PRIVATE_INFERENCE_TONE_* values.
  *
  * Takes what the sentence takes, so the two stay in step by construction. A
- * SHELL MUST NOT RECOVER THIS BY READING THE RENDERED SENTENCE: three of the
- * seven sentences begin with the same two words.
+ * SHELL MUST NOT RECOVER THIS BY READING THE RENDERED SENTENCE: port_in_use and
+ * start_failed both begin "Not on." but have distinct recoveries.
  *
  * Answers TC_PRIVATE_INFERENCE_TONE_NEUTRAL for a label this build has never
  * heard of, for a NULL or non-UTF-8 state, and on a caught panic. There is no
@@ -611,7 +617,7 @@ char*       tc_private_inference_state_line(const char* state);
  */
 int32_t     tc_private_inference_state_tone(const char* state);
 
-/* The "where it is answering" sentence, assembled.
+/* The reported local port, assembled without a readiness claim.
  *
  * port is private_inference_state's port field. A value outside 1..65535 --
  * including the 0 a caller passes for JSON null -- gives the EMPTY STRING

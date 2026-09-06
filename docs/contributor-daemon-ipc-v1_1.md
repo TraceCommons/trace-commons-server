@@ -1582,8 +1582,8 @@ on `get_settings`, `set_settings` and `status`. It is an object,
 
 | `state` | meaning | `port` |
 |---|---|---|
-| `off` | the switch is off and nothing is bound | `null` |
-| `stopping` | startup or an owned proxy is still draining and releasing resources | the previously bound port, or `null` while startup is unfinished |
+| `off` | the switch is off, this daemon owns no proxy and nothing is bound | `null` |
+| `stopping` | retained shutdown is awaiting outstanding startup, calls or cleanup; the requested switch may already be off | last owned port, or `null` before binding |
 | `running` | this daemon's proxy is serving and has a backend registered | the bound port |
 | `running_no_backends` | this daemon's proxy is serving but no backend is configured, so nothing will route through it | the bound port |
 | `running_elsewhere` | a loopback discovery pointer responds, or the exclusive home lock is held; nothing was bound or stopped, and readiness is not established | the published port, or requested port when the lock owner has not published one |
@@ -1627,6 +1627,28 @@ signal, Off does not claim cleanup succeeded. A newly accepted off/on cycle may
 retry through IronWire's exclusive home lock; only a successful start clears
 that uncertainty. If the prior owner still holds the lock, the failure remains
 visible and no second proxy is started.
+
+The shells distinguish an absent or empty status from a nonempty state label
+this build does not recognize. The former says the daemon does not report
+model-call status (including older daemons); the latter says the state is
+unavailable. Neither proves `off`. `stopping` uses the Held tone until the
+retained-shutdown producer confirms cleanup; a port alone is metadata, not
+proof that calls can be answered.
+
+The companion C ABI copy payload (`tc_private_inference_copy`, not a daemon
+settings key) supplies these 21 fixed string fields:
+
+- `offer_title`, `offer_what`, `offer_exposure`, `offer_no_repoint`,
+  `offer_accept`, `offer_decline`, `offer_asked_once`;
+- `settings_title`, `settings_toggle`, `settings_applies_at_once`;
+- `state_off`, `state_unreported`, `state_unknown`, `state_stopping`,
+  `state_running`, `state_running_no_backends`, `state_running_elsewhere`,
+  `state_port_in_use`, `state_start_failed`, `state_crashed`;
+- `quit_also_stops`.
+
+State sentences and tones are chosen by the shared Rust table rather than by
+shell-authored branching. Copy-field inventory parity is checked separately
+from successful decoding of required fields.
 
 `private_inference_offer_seen` takes a boolean, and it is **not a fourth
 answer**: it records that the question was put, never what the answer was.

@@ -17,6 +17,9 @@ public struct PrivateInferenceCopy: Decodable, Equatable, Sendable {
     public let settingsTitle: String
     public let settingsToggle: String
     public let settingsAppliesAtOnce: String
+    public let stateUnreported: String
+    public let stateUnknown: String
+    public let stateStopping: String
     public let stateOff: String
     public let stateRunning: String
     public let stateRunningNoBackends: String
@@ -41,6 +44,9 @@ public struct PrivateInferenceCopy: Decodable, Equatable, Sendable {
         case settingsTitle = "settings_title"
         case settingsToggle = "settings_toggle"
         case settingsAppliesAtOnce = "settings_applies_at_once"
+        case stateUnreported = "state_unreported"
+        case stateUnknown = "state_unknown"
+        case stateStopping = "state_stopping"
         case stateOff = "state_off"
         case stateRunning = "state_running"
         case stateRunningNoBackends = "state_running_no_backends"
@@ -106,8 +112,8 @@ public struct PrivateInferenceState: Equatable, Sendable {
     /// From `get_settings`/`status`'s `private_inference_state` object.
     ///
     /// A daemon that has never heard of the field sends nothing, and that
-    /// reads as the empty label -- which the shared table answers with the
-    /// off sentence. Never `nil`: a settings screen with no state at all
+    /// reads as the empty label -- which the shared table answers as unreported,
+    /// separately from an unfamiliar nonempty state. Never `nil`: a settings screen with no state at all
     /// would show the switch and nothing beneath it, which is the shape that
     /// says "on" over a listener that refused to start.
     public static func parse(_ object: [String: Any]?) -> PrivateInferenceState {
@@ -126,17 +132,20 @@ public struct PrivateInferenceCalls: Sendable {
     public let stateTone: @Sendable (String) -> Int32
     public let servingLine: @Sendable (UInt16?) -> String?
     public let shouldOffer: @Sendable (Bool, Bool) -> Bool
+    public let quitNeedsNotice: @Sendable (Bool, String) -> Bool
 
     public init(
         stateLine: @escaping @Sendable (String) -> String?,
         stateTone: @escaping @Sendable (String) -> Int32,
         servingLine: @escaping @Sendable (UInt16?) -> String?,
-        shouldOffer: @escaping @Sendable (Bool, Bool) -> Bool
+        shouldOffer: @escaping @Sendable (Bool, Bool) -> Bool,
+        quitNeedsNotice: @escaping @Sendable (Bool, String) -> Bool
     ) {
         self.stateLine = stateLine
         self.stateTone = stateTone
         self.servingLine = servingLine
         self.shouldOffer = shouldOffer
+        self.quitNeedsNotice = quitNeedsNotice
     }
 }
 
@@ -151,7 +160,7 @@ public enum PrivateInferenceSurface {
     /// The `set_settings` key recording that the question was put.
     public static let offerSeenKey = "private_inference_offer_seen"
 
-    /// The sentence under the switch. Falls back to the payload's own off
+    /// The sentence under the switch. Falls back to the payload's unavailable
     /// sentence when the Rust caught a panic -- the sentence that claims
     /// nothing, never the one that says it is running.
     public static func stateLine(
@@ -159,7 +168,7 @@ public enum PrivateInferenceSurface {
         copy: PrivateInferenceCopy,
         calls: PrivateInferenceCalls
     ) -> String {
-        calls.stateLine(state.label) ?? copy.stateOff
+        calls.stateLine(state.label) ?? copy.stateUnknown
     }
 
     /// The tone that sentence is painted in.
@@ -170,7 +179,7 @@ public enum PrivateInferenceSurface {
         PrivateInferenceTone.fromABI(calls.stateTone(state.label))
     }
 
-    /// Where it is answering, or nothing at all. An empty string is drawn as
+    /// The reported local port, or nothing at all. An empty string is drawn as
     /// no line rather than as a blank one.
     public static func servingLine(
         _ state: PrivateInferenceState,
@@ -221,8 +230,8 @@ public enum PrivateInferenceSurface {
     /// be warned about losing it. The words are the payload's, never this
     /// shell's -- the rest of that dialog is Swift-authored, and this
     /// sentence deliberately is not.
-    public static func quitDetail(on: Bool, copy: PrivateInferenceCopy?) -> String? {
-        guard on, let copy else { return nil }
+    public static func quitDetail(on: Bool, state: PrivateInferenceState, copy: PrivateInferenceCopy?, calls: PrivateInferenceCalls) -> String? {
+        guard calls.quitNeedsNotice(on, state.label), let copy else { return nil }
         return copy.quitAlsoStops
     }
 }
