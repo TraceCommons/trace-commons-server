@@ -285,8 +285,10 @@ contributor looks for evidence that their work went somewhere.
 ## What arms Contribute
 
 The preview sheet is the only surface in this shell that can approve anything.
-Contribute is armed by `TraceCommons.Interop.ReadGate`, which now requires one
-thing: a pinned preview for the approval to bind to.
+Contribute is armed by `TraceCommons.Interop.ReadGate`, which now requires two
+things: a pinned preview for the approval to bind to, and the consent
+sentences themselves (`ReadGate.CanArm`). A build that cannot read the claim
+must not take an approval against it.
 
 It used to require two more — the redacted transcript having been on screen,
 and an acknowledgement the contributor ticked themselves. Both came out as
@@ -294,11 +296,13 @@ friction. The macOS and Linux queues offer a per-row `Submit` that approves
 with no preview opened at all, so the gate never stood between anybody and a
 blind approval; it only charged a click to the contributor who chose to look.
 
-What the checkbox asserted did not come out. `ReadGate.Statement` says it as
-plain text above the buttons, on every preview, and the macOS and Linux sheets
-print the same sentence character for character — asserted here in
-`tests/TraceCommons.Interop.Tests/PreviewTests.cs`, in the macOS
-`ReadGateTests`, and by a Rust test that reads all three sources.
+What the checkbox asserted did not come out. All three shells now read that
+sentence from one place — `crates/trace-commons-contributor/src/consent_copy.rs`,
+across the C ABI as `tc_consent_copy` — and this shell prints it as plain text
+above the buttons on every preview. It is asserted where it is defined; the
+three shells no longer grep each other's sources for it. See
+`ConsentSurface`/`ConsentCopy` here and
+`tests/TraceCommons.Interop.Tests/ConsentCopyTests.cs`.
 
 The rule lives in the interop assembly rather than in a view model because it
 is the safety property of this shell, and there it is exercised on a machine

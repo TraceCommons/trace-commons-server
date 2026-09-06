@@ -123,7 +123,17 @@ final class ComputeExportTests: XCTestCase {
                 }
             }
         }
-        XCTAssertThrowsError(try compute.statusJSON())
+        // Every racing close may legitimately refuse an active call or an
+        // actor command still pending after its acknowledgement. Once callers
+        // have joined, finish teardown explicitly before asserting closed.
+        if !compute.close() {
+            let stopped = try snapshot(compute.shutdownJSON(timeoutMilliseconds: 2_000))
+            XCTAssertEqual(stopped["worker_stopped"] as? Bool, true)
+            XCTAssertTrue(compute.close())
+        }
+        XCTAssertThrowsError(try compute.statusJSON()) { error in
+            XCTAssertEqual(error as? TCCompute.Failure, .closed)
+        }
     }
 
     func testNulDirectoryIsRejectedBeforeCTruncation() throws {

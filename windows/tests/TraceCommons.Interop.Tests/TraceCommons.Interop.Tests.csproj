@@ -82,6 +82,26 @@
   </ItemGroup>
 
   <!--
+    The consent surface's implementation sources, copied next to the test
+    assembly and read by NoWordingIsAuthoredInTheConsentSurface.
+
+    All three, not just the two new ones: ReadGate.cs is where the four
+    sentences used to live, and the strict rule is the thing that stops one
+    of them coming back beside the rule that survived.
+  -->
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../src/TraceCommons.Interop/ConsentCopy.cs"
+          Link="ConsentCopy.cs.txt"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(MSBuildThisFileDirectory)../../src/TraceCommons.Interop/ConsentSurface.cs"
+          Link="ConsentSurface.cs.txt"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(MSBuildThisFileDirectory)../../src/TraceCommons.Interop/ReadGate.cs"
+          Link="ReadGate.cs.txt"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!--
     The app layer's routing surface and settings view model, copied next to
     the test assembly.
 

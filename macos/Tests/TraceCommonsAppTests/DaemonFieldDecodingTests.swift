@@ -3,9 +3,11 @@ import XCTest
 @testable import TraceCommonsApp
 
 /// The daemon gained a project path, a session path, distinct redaction
-/// counts, and a project id on history records. Every one of them must be
-/// optional in practice: this app is shipped separately from the daemon and
-/// routinely runs against an older one.
+/// counts, an enrollment flag on previews, and a project id on history
+/// records. Every one of them must be optional in practice: this app is
+/// shipped separately from the daemon and routinely runs against an older
+/// one -- and where the absent value gates something, absent is the
+/// refusing answer.
 final class DaemonFieldDecodingTests: XCTestCase {
     private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         let decoder = JSONDecoder()
@@ -54,6 +56,31 @@ final class DaemonFieldDecodingTests: XCTestCase {
          "pii_labels_present":[],"consent_scopes":[],"residual_risk":"low"}
         """)
         XCTAssertTrue(summary.redactionsDistinct.isEmpty)
+    }
+
+    func testPreviewSummaryDecodesTheEnrollment() throws {
+        let summary = try decode(PreviewSummary.self, """
+        {"would_send_bytes":10,"raw_session_bytes":20,"event_count":3,
+         "opening_prompt":"hi","redactions":{},"enrolled":true,
+         "pii_labels_present":[],"consent_scopes":[],"residual_risk":"low"}
+        """)
+        XCTAssertTrue(summary.enrolled)
+    }
+
+    /// The one field on this summary that gates a button.
+    ///
+    /// Absent means false, not "assume yes". A daemon predating the field
+    /// cannot say whether the preview pinned a real identity, and
+    /// `PreviewSheet` arms `Contribute` on exactly this -- so the missing
+    /// answer has to be the refusing one. Windows already fails closed the
+    /// same way, by `System.Text.Json`'s default rather than by choice.
+    func testPreviewSummaryFromAnOlderDaemonIsNotEnrolled() throws {
+        let summary = try decode(PreviewSummary.self, """
+        {"would_send_bytes":10,"raw_session_bytes":20,"event_count":3,
+         "opening_prompt":"hi","redactions":{},
+         "pii_labels_present":[],"consent_scopes":[],"residual_risk":"low"}
+        """)
+        XCTAssertFalse(summary.enrolled)
     }
 
     func testHistoryRecordDecodesProjectID() throws {

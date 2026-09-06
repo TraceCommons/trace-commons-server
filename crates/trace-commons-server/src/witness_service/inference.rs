@@ -182,6 +182,32 @@
 //! surfaces as [`WitnessError::InferenceReceiptUnverified`]; nothing more is
 //! enforced until the provider signs one.
 //!
+//! # Who signed, not just that a signature verifies
+//!
+//! `verify_receipt` establishes that a well-formed signature over these bytes
+//! checks out against the key the receipt itself names. Every key satisfies
+//! that, the submitter's included -- so on its own it is a statement about
+//! self-consistency, not about provenance.
+//!
+//! [`InferenceAttestationPolicy::pinning_gateway_key`] is what turns it into
+//! one. NEAR AI's attestation report binds the gateway's ed25519 signing key
+//! into a TDX quote (`report_data == signing_address || nonce`), and the
+//! contributor client already compares a fetched receipt's signer against a
+//! freshly-nonced report. A check the submitter runs on its own submission is
+//! not a bound: a patched client skips it. The pin is the same comparison,
+//! made here, against a key the operator configured.
+//!
+//! A pin rather than a live report fetch, because this module makes no
+//! outbound call on the request path and one that did would be trusting a
+//! report fetched over a path an attacker able to substitute a signing key is
+//! also positioned to influence. And ed25519 only: the ECDSA signer is in no
+//! attestation report, so an ECDSA receipt cannot satisfy a pin.
+//!
+//! Dormant when unset, and a pin failure folds into
+//! [`WitnessError::InferenceReceiptUnverified`] with every other receipt
+//! failure -- a label of its own would make an unauthenticated route an oracle
+//! for the pinned key.
+//!
 //! # Nothing here is logged
 //!
 //! Bodies, receipt text, signatures and signing addresses are all caller data.
@@ -199,7 +225,9 @@ use trace_commons_protocol::trace_contribution::{
     TraceContributionEventType,
 };
 
-use crate::near_attestation::receipt::{ReceiptPayload, verify_receipt};
+use crate::near_attestation::receipt::{
+    ReceiptAlgo, ReceiptPayload, normalize_ed25519_key, signer_is_attested, verify_receipt,
+};
 
 use super::WitnessError;
 
@@ -219,12 +247,24 @@ pub const DEFAULT_MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 pub struct InferenceAttestationPolicy {
     required: bool,
     max_body_bytes: usize,
+    /// The gateway ed25519 signing key this deployment trusts, normalised.
+    /// `None` is the dormant default; see [`Self::pinning_gateway_key`].
+    gateway_key_pin: Option<String>,
 }
 
 /// The requirement was configured in a way that would not require anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("the attested-inference requirement is configured to require nothing")]
 pub struct PolicyMisconfigured;
+
+/// The configured gateway key pin is not a 32-byte ed25519 key.
+///
+/// Carries nothing. The value is deployment configuration and, on a
+/// misconfiguration, is quite possibly a key material paste; it does not
+/// belong in an error string that will be logged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the pinned gateway signing key is not 32 bytes of hex")]
+pub struct GatewayKeyPinMalformed;
 
 impl InferenceAttestationPolicy {
     /// No requirement: a submission carrying no receipt is certified.
@@ -236,6 +276,7 @@ impl InferenceAttestationPolicy {
         Self {
             required: false,
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
+            gateway_key_pin: None,
         }
     }
 
@@ -253,7 +294,51 @@ impl InferenceAttestationPolicy {
         Ok(Self {
             required: true,
             max_body_bytes,
+            gateway_key_pin: None,
         })
+    }
+
+    /// Trust receipts signed by exactly this gateway ed25519 key, and no
+    /// other.
+    ///
+    /// # What this closes, and what it does not
+    ///
+    /// Without it, `verify_receipt` establishes that *someone* signed these
+    /// bytes and that the signature is self-consistent -- it does not
+    /// establish *who*. NEAR AI's attestation report binds the gateway's
+    /// ed25519 signing key into a TDX quote (`report_data == signing_address
+    /// || nonce`), and the contributor client checks a fetched receipt's
+    /// signer against a freshly-nonced report. But a client-side check is a
+    /// check the submitter performs on itself: a patched client simply does
+    /// not perform it. This is the same comparison made where the decision is
+    /// enforced, against a key the *operator* configured.
+    ///
+    /// It is a pin rather than a live report fetch on purpose. A witness
+    /// makes no outbound network calls on the request path, and one that did
+    /// would be trusting a report fetched over a path an attacker who could
+    /// substitute a signing key is also positioned to influence. An operator
+    /// obtains the key once, out of band, and pins it -- the same shape as
+    /// every other measurement this deployment pins.
+    ///
+    /// **ed25519 only, and that is the point.** Only the ed25519 signer
+    /// appears in the gateway's attestation report; the ECDSA signer appears
+    /// in none. A pin is therefore a 32-byte key, and an ECDSA receipt cannot
+    /// satisfy one however well it verifies.
+    ///
+    /// Dormant by default. An unset pin leaves every existing path exactly as
+    /// it was, which is what makes this safe to ship ahead of the operator
+    /// procedure for obtaining the key.
+    ///
+    /// # Errors
+    ///
+    /// [`GatewayKeyPinMalformed`] when `key` is not 32 bytes of hex --
+    /// including empty, which is how an operator who set the variable to
+    /// nothing would otherwise get a witness that pins nothing while
+    /// appearing configured. Refused here, where the policy is built, so a
+    /// witness fails to start rather than holding a pin that can never match.
+    pub fn pinning_gateway_key(mut self, key: &str) -> Result<Self, GatewayKeyPinMalformed> {
+        self.gateway_key_pin = Some(normalize_ed25519_key(key).ok_or(GatewayKeyPinMalformed)?);
+        Ok(self)
     }
 
     /// Whether this deployment refuses an unattested contribution.
@@ -264,6 +349,16 @@ impl InferenceAttestationPolicy {
     /// How large either attested body may be.
     pub fn max_body_bytes(&self) -> usize {
         self.max_body_bytes
+    }
+
+    /// The pinned gateway signing key, normalised, or `None` where no pin is
+    /// configured.
+    ///
+    /// A public key, so returning it is not a disclosure -- but it is still
+    /// deployment configuration, and no caller may put it on an operational
+    /// surface except as a hash prefix.
+    pub fn gateway_key_pin(&self) -> Option<&str> {
+        self.gateway_key_pin.as_deref()
     }
 }
 
@@ -396,23 +491,49 @@ pub fn check_inference_attestation(
 
     // One label for every `ReceiptError`; see the module's note on why a
     // re-serialised capture is indistinguishable from a forgery here.
-    // The verdict is discarded rather than inspected. Its `model` is `None`
-    // for every receipt the provider signs today, its hashes are the ones just
-    // checked, and its `signing_address` is the inference enclave's key --
-    // which this witness does not pin TODAY. An attested value now exists:
-    // NEAR AI's attestation report binds the gateway's ed25519 signing key
-    // into a TDX quote, and the contributor's opt-in check compares against
-    // it. Pinning it here -- as deployment configuration, the way ingest pins
-    // this witness's own key -- is the follow-up that would make the check
-    // bind at the enforcement point rather than in a client that can be
-    // patched.
-    verify_receipt(
+    //
+    // The verdict's `model` is `None` for every receipt the provider signs
+    // today and its hashes are the ones just checked, so neither is read. Its
+    // `signing_address` is the inference gateway's key, and that one is read:
+    // see the pin below.
+    let verdict = verify_receipt(
         receipt,
         request_body.as_bytes(),
         response_body.as_bytes(),
         &requested_model,
     )
     .map_err(|_| WitnessError::InferenceReceiptUnverified)?;
+
+    // Who signed, not merely that the signature is self-consistent.
+    //
+    // `verify_receipt` alone says a well-formed signature over these bytes
+    // verifies against the key the receipt itself names -- which any key
+    // satisfies, including one the submitter holds. The pin is the operator's
+    // statement of which key that may be. It is the same comparison the
+    // contributor client makes against a freshly-fetched attestation report,
+    // made here, where the decision is actually enforced and where a patched
+    // client cannot skip it.
+    //
+    // ed25519 only: the ECDSA signer is in no attestation report, so an ECDSA
+    // receipt cannot satisfy a pin. The scheme is checked explicitly rather
+    // than left to the string comparison, which would also reject it (a
+    // 20-byte `0x` address never equals a 32-byte key) but for an incidental
+    // reason that a future address format could stop being true of.
+    //
+    // Folded into `InferenceReceiptUnverified` deliberately. A distinct label
+    // would turn this route into an oracle for the pinned key: a prober could
+    // learn from the refusal alone whether its receipt was signed by the key
+    // this deployment trusts. Nothing is logged here for the same reason the
+    // rest of this module logs nothing -- the key and the signer are both
+    // caller-visible data on one side and deployment configuration on the
+    // other, and neither belongs on a per-request surface.
+    if let Some(pinned) = policy.gateway_key_pin() {
+        let signed_by_the_pinned_gateway = verdict.signing_algo == ReceiptAlgo::Ed25519
+            && signer_is_attested(&verdict.signing_address, pinned);
+        if !signed_by_the_pinned_gateway {
+            return Err(WitnessError::InferenceReceiptUnverified);
+        }
+    }
 
     Ok(InferenceAttestationOutcome {
         verified: 1,
@@ -1058,5 +1179,247 @@ mod tests {
             InferenceAttestationPolicy::required(0),
             Err(PolicyMisconfigured)
         );
+    }
+
+    // ---------------------------------------------------------------
+    // The gateway signing-key pin.
+    // ---------------------------------------------------------------
+
+    /// Two fixed ed25519 seeds, for the same reason the secp256k1 key above
+    /// is fixed: a generated key makes a failure unreproducible.
+    const GATEWAY_SEED_HEX: &str =
+        "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
+    const IMPOSTOR_SEED_HEX: &str =
+        "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb";
+
+    fn ed25519_pair(seed_hex: &str) -> ring::signature::Ed25519KeyPair {
+        ring::signature::Ed25519KeyPair::from_seed_unchecked(&hex::decode(seed_hex).expect("hex"))
+            .expect("seed")
+    }
+
+    /// The public key in the spelling NEAR AI renders and the pin takes: 64
+    /// lowercase hex characters, no `0x`.
+    fn ed25519_key_hex(seed_hex: &str) -> String {
+        use ring::signature::KeyPair as _;
+        hex::encode(ed25519_pair(seed_hex).public_key().as_ref())
+    }
+
+    /// A two-part ed25519 receipt over these exact bytes -- the form NEAR AI
+    /// signs today, in the scheme whose signer its attestation report binds.
+    fn ed25519_receipt(seed_hex: &str, request_body: &str, response_body: &str) -> ReceiptPayload {
+        let text = format!("{}:{}", sha256_hex(request_body), sha256_hex(response_body));
+        let signature = ed25519_pair(seed_hex).sign(text.as_bytes());
+        ReceiptPayload {
+            signature: hex::encode(signature.as_ref()),
+            signing_address: ed25519_key_hex(seed_hex),
+            text,
+            signing_algo: ReceiptAlgo::Ed25519,
+        }
+    }
+
+    fn pinned(policy: InferenceAttestationPolicy, key: &str) -> InferenceAttestationPolicy {
+        policy.pinning_gateway_key(key).expect("a well formed pin")
+    }
+
+    /// The positive control for every refusal below: a receipt signed by the
+    /// pinned key is admitted, so the refusals are the pin and not the
+    /// ed25519 fixture.
+    #[test]
+    fn a_receipt_signed_by_the_pinned_gateway_key_is_admitted() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        let policy = pinned(required(), &ed25519_key_hex(GATEWAY_SEED_HEX));
+
+        let outcome = check(
+            &policy,
+            Some(&ed25519_receipt(GATEWAY_SEED_HEX, &request, &response)),
+            &raw,
+        )
+        .expect("a receipt from the pinned key");
+        assert_eq!(
+            outcome,
+            InferenceAttestationOutcome {
+                verified: 1,
+                declared_calls: 1
+            }
+        );
+    }
+
+    /// The whole point. A receipt that is perfectly well signed, over exactly
+    /// these bytes, by a key that is not the pinned one.
+    #[test]
+    fn a_receipt_from_an_unpinned_key_is_refused_even_though_it_verifies() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        let impostor = ed25519_receipt(IMPOSTOR_SEED_HEX, &request, &response);
+
+        // It verifies as a receipt: an unpinned witness admits it.
+        assert!(
+            check(&required(), Some(&impostor), &raw).is_ok(),
+            "the impostor receipt must itself be valid, or the pin assertion \
+             below proves nothing"
+        );
+
+        let policy = pinned(required(), &ed25519_key_hex(GATEWAY_SEED_HEX));
+        assert_eq!(
+            check(&policy, Some(&impostor), &raw),
+            Err(WitnessError::InferenceReceiptUnverified),
+        );
+    }
+
+    /// Unset is unchanged. The same contribution and the same receipts, under
+    /// a policy built the way every existing deployment builds one.
+    #[test]
+    fn an_unset_pin_leaves_both_paths_exactly_as_they_were() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+
+        assert_eq!(required().gateway_key_pin(), None);
+        assert_eq!(
+            InferenceAttestationPolicy::not_required().gateway_key_pin(),
+            None
+        );
+        // Both schemes, and the ECDSA one in particular: a witness with no
+        // pin must keep admitting the receipts it admitted before.
+        assert!(
+            check(
+                &required(),
+                Some(&ed25519_receipt(IMPOSTOR_SEED_HEX, &request, &response)),
+                &raw
+            )
+            .is_ok()
+        );
+        assert!(
+            check(
+                &required(),
+                Some(&receipt(MODEL, &request, &response)),
+                &raw
+            )
+            .is_ok()
+        );
+    }
+
+    /// The pin binds a receipt that is *offered*, not only one that is
+    /// *required*. A deployment requiring nothing still must not certify a
+    /// trace carrying a receipt from a key it does not trust; accepting it
+    /// would be the same silent downgrade an invalid receipt already is not.
+    #[test]
+    fn the_pin_binds_an_offered_receipt_where_nothing_is_required() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        let policy = pinned(
+            InferenceAttestationPolicy::not_required(),
+            &ed25519_key_hex(GATEWAY_SEED_HEX),
+        );
+
+        assert_eq!(
+            check(
+                &policy,
+                Some(&ed25519_receipt(IMPOSTOR_SEED_HEX, &request, &response)),
+                &raw
+            ),
+            Err(WitnessError::InferenceReceiptUnverified)
+        );
+        // A submission carrying no receipt at all is still certified: the pin
+        // constrains which key is trusted, it does not impose a requirement.
+        assert!(check(&policy, None, &raw).is_ok());
+    }
+
+    /// A pin is a 32-byte ed25519 key, and only the ed25519 signer is bound
+    /// into the gateway's attestation report. An ECDSA receipt therefore
+    /// cannot satisfy one, however well it verifies.
+    #[test]
+    fn an_ecdsa_receipt_cannot_satisfy_a_gateway_key_pin() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        let policy = pinned(required(), &ed25519_key_hex(GATEWAY_SEED_HEX));
+
+        assert_eq!(
+            check(&policy, Some(&receipt(MODEL, &request, &response)), &raw),
+            Err(WitnessError::InferenceReceiptUnverified)
+        );
+    }
+
+    /// Case and surrounding whitespace are configuration spellings of one
+    /// key, not two keys.
+    #[test]
+    fn a_pin_is_normalised_before_it_is_compared() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        let policy = pinned(
+            required(),
+            &format!(
+                "  {}  ",
+                ed25519_key_hex(GATEWAY_SEED_HEX).to_ascii_uppercase()
+            ),
+        );
+        assert_eq!(
+            policy.gateway_key_pin(),
+            Some(ed25519_key_hex(GATEWAY_SEED_HEX).as_str())
+        );
+        assert!(
+            check(
+                &policy,
+                Some(&ed25519_receipt(GATEWAY_SEED_HEX, &request, &response)),
+                &raw
+            )
+            .is_ok()
+        );
+    }
+
+    /// Fail-closed configuration: a pin that is not a key is refused where it
+    /// is configured, so a witness cannot start holding one that can never
+    /// match. Empty is refused too -- an operator who set the variable to
+    /// nothing must not get a witness that silently pins nothing.
+    #[test]
+    fn a_pin_that_is_not_a_key_is_refused_rather_than_ignored() {
+        for malformed in [
+            "",
+            "   ",
+            "0xcb6fc58f6bd685919fa42fb54d3fcfe03222e324bdda91f0bac6d5c73dc4f1c6",
+            "cb6fc58f",
+            "zzzzc58f6bd685919fa42fb54d3fcfe03222e324bdda91f0bac6d5c73dc4f1c6",
+        ] {
+            assert_eq!(
+                required().pinning_gateway_key(malformed).err(),
+                Some(GatewayKeyPinMalformed),
+                "{malformed:?} is not a 32-byte hex key"
+            );
+        }
+    }
+
+    /// Anti-oracle: a pin failure and a receipt bound to other bytes are the
+    /// same `WitnessError`, so they are the same label on the wire. A prober
+    /// cannot learn from a refusal whether it guessed the pinned key.
+    #[test]
+    fn a_pin_failure_is_indistinguishable_from_any_other_receipt_failure() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        let policy = pinned(required(), &ed25519_key_hex(GATEWAY_SEED_HEX));
+
+        let unpinned_key = check(
+            &policy,
+            Some(&ed25519_receipt(IMPOSTOR_SEED_HEX, &request, &response)),
+            &raw,
+        );
+        // A receipt from the pinned key, over bodies that are not these.
+        let wrong_bytes = check(
+            &policy,
+            Some(&ed25519_receipt(
+                GATEWAY_SEED_HEX,
+                "some other request",
+                &response,
+            )),
+            &raw,
+        );
+        assert_eq!(unpinned_key, wrong_bytes);
+        assert_eq!(unpinned_key, Err(WitnessError::InferenceReceiptUnverified));
     }
 }
