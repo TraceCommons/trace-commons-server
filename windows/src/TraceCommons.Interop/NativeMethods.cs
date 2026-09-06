@@ -482,6 +482,9 @@ internal static class NativeMethods
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr tc_witness_copy();
 
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr tc_onboarding_copy();
+
     /// <summary>
     /// The sentence for a <c>TC_WITNESS_STATE_*</c> value, as an owned char*.
     ///

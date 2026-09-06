@@ -829,6 +829,8 @@ char*       tc_witness_last_result_json(void);
  * Returns NULL only on a caught panic.
  */
 char*       tc_witness_copy(void);
+/* Owned JSON; release with tc_string_free. */
+char*       tc_onboarding_copy(void);
 
 /* The sentence for a witness state, given a TC_WITNESS_STATE_* value.
  * Returns an OWNED string; free with tc_string_free.

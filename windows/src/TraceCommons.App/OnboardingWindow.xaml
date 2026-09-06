@@ -34,7 +34,7 @@
             <TextBlock Style="{StaticResource TcBodyTextStyle}" TextWrapping="Wrap"
                        Text="Coding agents get better when there are real transcripts to learn from. Almost all of that data is locked inside companies. Trace Commons is a shared pool that isn't." />
             <TextBlock Style="{StaticResource TcBodyTextStyle}" TextWrapping="Wrap"
-                       Text="This app watches for finished Claude Code and Codex sessions on this machine and shows them to you." />
+                       Text="{x:Bind ViewModel.WelcomeBody}" />
             <!--
                 "Good and it is not perfect" is load bearing. A developer
                 knows automatic redaction is imperfect, and conceding it
@@ -304,7 +304,7 @@
             <TextBlock Style="{StaticResource TcTitleScreenTextStyle}"
                        Text="You're set up. Nothing has been sent." TextWrapping="Wrap" />
             <TextBlock Style="{StaticResource TcBodyTextStyle}" TextWrapping="Wrap"
-                       Text="When a session finishes and goes quiet for 30 minutes, it'll show up here. You'll get at most one notification every 4 hours, and none at all if there's nothing waiting." />
+                       Text="{x:Bind ViewModel.DoneBody}" />
             <Button Content="Finish" HorizontalAlignment="Right" Click="OnFinish" />
         </StackPanel>
 

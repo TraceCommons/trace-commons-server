@@ -2847,6 +2847,15 @@ pub extern "C" fn tc_witness_last_result_tone() -> i32 {
     })
 }
 
+/// Shared native onboarding and notification copy. Free with `tc_string_free`.
+#[unsafe(no_mangle)]
+pub extern "C" fn tc_onboarding_copy() -> *mut c_char {
+    guarded_string_no_err(|| {
+        let copy = trace_commons_contributor::onboarding_copy::onboarding_copy();
+        Ok(to_owned_cstring(&serde_json::to_string(&copy)?))
+    })
+}
+
 #[cfg(test)]
 mod string_guard_tests {
     use super::*;
