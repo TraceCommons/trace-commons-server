@@ -815,6 +815,55 @@ const INVITE_GRANT_COLUMNS: &str = "invite_subject_hash, policy_label, tenant_mo
     allowed_uses, max_uses, expires_at, issuance_source, issued_by_label,
     credential_binding_hash, note_label, revoked_at";
 
+/// Applies one migration and records it in `_trace_commons_migrations` as a
+/// single transaction.
+///
+/// The apply and the record used to be two statements on one connection with
+/// nothing wrapping them. A crash, a connection reset, or a failing insert
+/// between the two left the migration applied but unrecorded, and the next boot
+/// re-ran it and died on `already exists` -- an unbootable server that only a
+/// hand-written INSERT could clear. Committing both together makes that state
+/// unreachable: either the version is recorded and its DDL is durable, or
+/// neither is.
+///
+/// This is sound only because every migration in `migrations/` is executable
+/// inside a transaction block. PostgreSQL refuses a handful of statements there
+/// -- `CREATE INDEX CONCURRENTLY`, `DROP INDEX CONCURRENTLY`,
+/// `REINDEX CONCURRENTLY`, `ALTER TABLE ... DETACH PARTITION CONCURRENTLY`,
+/// `VACUUM`, `CREATE`/`DROP DATABASE`, `CREATE`/`DROP TABLESPACE`,
+/// `ALTER SYSTEM`, `CREATE`/`DROP SUBSCRIPTION`, `DISCARD`, and, before
+/// PostgreSQL 12, `ALTER TYPE ... ADD VALUE`. `migrations/` holds none of them
+/// as of V60, and
+/// `no_migration_uses_a_statement_postgres_refuses_inside_a_transaction` fails
+/// the build if one appears. A migration that genuinely needs a concurrent
+/// index has to opt out of this wrapper explicitly -- carrying the reason in
+/// code, and recording itself on the same connection immediately afterwards.
+/// Do not quietly unwrap every migration to accommodate one.
+///
+/// `batch_execute` sends the file as one simple-query message, which PostgreSQL
+/// already runs as an implicit transaction; the explicit one folds the record
+/// into that unit, it does not change how the file's own statements relate.
+///
+/// Exposed (hidden) so `tests/migration_atomicity_pg.rs` can drive it against a
+/// recording forced to fail, which is the only way to observe the rollback.
+#[doc(hidden)]
+pub async fn apply_and_record_migration(
+    client: &mut tokio_postgres::Client,
+    version: i32,
+    name: &str,
+    sql: &str,
+) -> Result<(), DatabaseError> {
+    let tx = client.transaction().await?;
+    tx.batch_execute(sql).await?;
+    tx.execute(
+        "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
+        &[&version, &name],
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Every migration in `migrations/`, in the order `run_migrations` applies
 /// them: `(version, recorded name, SQL text)`. The recorded name is the file
 /// stem and the SQL is the file itself, embedded at compile time.
@@ -823,6 +872,9 @@ const INVITE_GRANT_COLUMNS: &str = "invite_subject_hash, policy_label, tenant_mo
 /// never runs. `every_migration_is_wired_into_run_migrations` checks the table
 /// against the directory, including that each row's `include_str!` names the
 /// row's own version and stem.
+///
+/// Applying a row is `apply_and_record_migration`, which commits the DDL and
+/// the `_trace_commons_migrations` insert together.
 const MIGRATIONS: &[(i32, &str, &str)] = &[
     (
         1,
@@ -1322,7 +1374,7 @@ impl Database for PgBackend {
     }
 
     async fn run_migrations(&self) -> Result<(), DatabaseError> {
-        let client = self
+        let mut client = self
             .trace_pool()
             .get()
             .await
@@ -1345,13 +1397,7 @@ impl Database for PgBackend {
                 .await?
                 .is_some();
             if !already_applied {
-                client.batch_execute(sql).await?;
-                client
-                    .execute(
-                        "INSERT INTO _trace_commons_migrations (version, name) VALUES ($1, $2)",
-                        &[version, name],
-                    )
-                    .await?;
+                apply_and_record_migration(&mut client, *version, name, sql).await?;
             }
         }
         Ok(())
@@ -5884,6 +5930,143 @@ mod tests {
     ///
     /// What it still does not prove: that the SQL inside a migration file does
     /// what its name says.
+    /// `apply_and_record_migration` runs each migration file inside an explicit
+    /// transaction so the `_trace_commons_migrations` row commits with the DDL.
+    /// That is only legal for SQL PostgreSQL will accept inside a transaction
+    /// block, and the statements it refuses there are exactly the ones below.
+    /// None of them appears in `migrations/` today; this test is what keeps it
+    /// that way, because the alternative discovery route is a migration that
+    /// fails on a production boot with `cannot run inside a transaction block`.
+    ///
+    /// A migration that genuinely needs one -- a `CREATE INDEX CONCURRENTLY` on
+    /// a table too large to lock, most likely -- is not forbidden. It has to
+    /// opt out of the wrapper explicitly, with its reason in code, and record
+    /// itself on the same connection right after. Downgrading every migration
+    /// to the old unwrapped path to accommodate one is what this test exists to
+    /// make someone argue for rather than do quietly.
+    ///
+    /// Every `--` in `migrations/` today starts a line comment, so dropping
+    /// comment lines is exact; the assertion below pins that. A trailing
+    /// comment introduced later would survive the strip and could only produce
+    /// a false positive here, never a false negative.
+    #[test]
+    fn no_migration_uses_a_statement_postgres_refuses_inside_a_transaction() {
+        // Multi-word where a single word would collide with prose: `alter type`
+        // and `vacuum` are plausible in a comment, and a comment that mentions
+        // them is not a bug.
+        const REFUSED_INSIDE_A_TRANSACTION: &[&str] = &[
+            "index concurrently",
+            "partition concurrently",
+            "reindex",
+            "vacuum",
+            "alter type",
+            "alter system",
+            "create database",
+            "drop database",
+            "create tablespace",
+            "drop tablespace",
+            "create subscription",
+            "drop subscription",
+            "alter subscription",
+            "discard",
+        ];
+
+        assert!(
+            super::MIGRATIONS.len() >= 60,
+            "the MIGRATIONS table came back with {} rows: an empty or truncated \
+             table passes every check below vacuously",
+            super::MIGRATIONS.len()
+        );
+
+        let mut offenders: Vec<String> = Vec::new();
+        for (version, name, sql) in super::MIGRATIONS {
+            for line in sql.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("--") {
+                    continue;
+                }
+                assert!(
+                    !trimmed.contains("--"),
+                    "V{version} ({name}): a `--` appears outside a leading comment, so the \
+                     comment strip this test relies on is no longer exact -- widen the strip \
+                     deliberately rather than letting it drift"
+                );
+                let normalized = trimmed.to_ascii_lowercase();
+                let normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+                for refused in REFUSED_INSIDE_A_TRANSACTION {
+                    if normalized.contains(refused) {
+                        offenders.push(format!("V{version} ({name}): {refused}"));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these migrations use statements PostgreSQL refuses inside a transaction \
+             block, which apply_and_record_migration opens around every migration:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    /// The apply and the record must commit together. Read against the source
+    /// rather than a live database because the loop's non-atomic form was
+    /// invisible to every test in the suite: both statements succeed, and only
+    /// a crash between them shows the difference. `migration_atomicity_pg`
+    /// proves the rollback against real PostgreSQL where one is configured;
+    /// this pins the shape everywhere else, including CI, which runs no
+    /// PostgreSQL at all.
+    #[test]
+    fn applying_a_migration_and_recording_it_share_one_transaction() {
+        const THIS_FILE: &str = include_str!("postgres.rs");
+
+        let start = THIS_FILE
+            .find("pub async fn apply_and_record_migration(")
+            .expect("apply_and_record_migration must exist in this file");
+        let body = &THIS_FILE[start..];
+        let end = body
+            .find("\n}\n")
+            .expect("apply_and_record_migration must be closed by a `}` at column zero");
+        let body = &body[..end];
+
+        assert!(
+            body.contains("client.transaction().await?"),
+            "apply_and_record_migration must open a transaction: without one the \
+             INSERT into _trace_commons_migrations is a separate statement, and a \
+             crash between it and the DDL leaves a migration applied but unrecorded"
+        );
+        assert!(
+            body.contains("tx.batch_execute(sql)"),
+            "the migration SQL must run on the transaction, not on the connection \
+             beside it"
+        );
+        assert!(
+            body.contains("INSERT INTO _trace_commons_migrations") && body.contains("tx.execute("),
+            "the _trace_commons_migrations insert must run on the same transaction \
+             as the migration SQL"
+        );
+        assert!(
+            body.contains("tx.commit().await?"),
+            "the transaction must be committed, and its failure must propagate: an \
+             uncommitted transaction rolls back the migration it just applied"
+        );
+
+        let start = THIS_FILE
+            .find("    async fn run_migrations(&self)")
+            .expect("run_migrations must exist in this file");
+        let body = &THIS_FILE[start..];
+        let end = body
+            .find("\n    }\n")
+            .expect("run_migrations must be closed by a `}` at its own indent");
+        let body = &body[..end];
+        assert!(
+            body.contains("apply_and_record_migration(&mut client, *version, name, sql)"),
+            "run_migrations must apply each migration through \
+             apply_and_record_migration, not inline the apply and the record as two \
+             statements again"
+        );
+    }
+
     #[test]
     fn every_migration_is_wired_into_run_migrations() {
         const THIS_FILE: &str = include_str!("postgres.rs");
