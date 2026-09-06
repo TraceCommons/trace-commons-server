@@ -75,7 +75,7 @@ pub enum PrivateInferenceState {
     /// A pointer responds or the home lock is held. This daemon bound nothing
     /// and stopped nothing; the response alone is not identity or readiness proof.
     RunningElsewhere {
-        /// The port the existing instance published.
+        /// Published port, or the requested port if a lock owner has not published.
         port: u16,
     },
     /// A refusal, by fixed label.
@@ -166,6 +166,69 @@ struct Pointer {
     control_url: String,
 }
 
+/// Open once without following a replacement symlink or blocking on a FIFO.
+/// Constants match the shipped platforms' fcntl.h; unsupported Unix targets
+/// decline advisory discovery rather than guessing their open ABI.
+#[cfg(unix)]
+fn pointer_open_flags() -> Option<i32> {
+    let flags = if cfg!(target_os = "macos") {
+        0x0004 | 0x0100 // O_NONBLOCK | O_NOFOLLOW (Darwin)
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        0x0800 | 0x20000
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        0x0800 | 0x08000
+    } else {
+        return None;
+    };
+    Some(flags)
+}
+
+#[cfg(unix)]
+fn open_checked_pointer(path: &Path, checked: &std::fs::Metadata) -> Option<std::fs::File> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let flags = pointer_open_flags()?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(flags)
+        .open(path)
+        .ok()?;
+    let opened = file.metadata().ok()?;
+    if !opened.is_file()
+        || opened.dev() != checked.dev()
+        || opened.ino() != checked.ino()
+        || opened.uid() != checked.uid()
+        || opened.mode() & 0o022 != 0
+    {
+        return None;
+    }
+    Some(file)
+}
+
+#[cfg(windows)]
+fn open_checked_pointer(path: &Path, _checked: &std::fs::Metadata) -> Option<std::fs::File> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+    };
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .ok()?;
+    let opened = file.metadata().ok()?;
+    // Windows policy is regular-file/reparse shape, not a Unix uid/mode or
+    // DACL assertion. Validate the opened object rather than the old pathname.
+    if !opened.is_file() || opened.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return None;
+    }
+    Some(file)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_checked_pointer(_path: &Path, _checked: &std::fs::Metadata) -> Option<std::fs::File> {
+    None
+}
+
 /// The loopback port a pointer in `home` names, if it names one.
 fn pointed_port(home: &Path) -> Option<u16> {
     let path = home.join("endpoint.json");
@@ -175,8 +238,7 @@ fn pointed_port(home: &Path) -> Option<u16> {
     }
     // Bound the read itself too: the file can grow after the metadata check.
     let mut body = Vec::new();
-    std::fs::File::open(path)
-        .ok()?
+    open_checked_pointer(&path, &metadata)?
         .take(MAX_POINTER_BYTES + 1)
         .read_to_end(&mut body)
         .ok()?;
@@ -502,6 +564,76 @@ mod tests {
         std::fs::rename(&target, &path).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
         assert_eq!(pointed_port(home.path()), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_pointer_cannot_be_replaced_by_a_symlink_or_another_inode() {
+        let home = tempfile::tempdir().unwrap();
+        write_pointer(home.path(), 1234);
+        let path = home.path().join("endpoint.json");
+        let checked = super::super::ironwire_pointer::trustworthy_file(&path).unwrap();
+        let original = home.path().join("original.json");
+        std::fs::rename(&path, &original).unwrap();
+        std::os::unix::fs::symlink(&original, &path).unwrap();
+        // Same original inode behind a symlink: identity checks alone would
+        // accept it, so this specifically exercises no-follow opening.
+        assert!(open_checked_pointer(&path, &checked).is_none());
+        std::fs::remove_file(&path).unwrap();
+        write_pointer(home.path(), 4321);
+        assert!(open_checked_pointer(&path, &checked).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_pointer_fifo_swap_is_refused_without_waiting_for_a_writer() {
+        let home = tempfile::tempdir().unwrap();
+        write_pointer(home.path(), 1234);
+        let path = home.path().join("endpoint.json");
+        let checked = super::super::ironwire_pointer::trustworthy_file(&path).unwrap();
+        std::fs::rename(&path, home.path().join("original.json")).unwrap();
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let open_path = path.clone();
+        let (sent, received) = std::sync::mpsc::channel();
+        let opener = std::thread::spawn(move || {
+            sent.send(open_checked_pointer(&open_path, &checked).is_none())
+                .unwrap();
+        });
+        let immediate = received.recv_timeout(Duration::from_secs(1));
+        if immediate.is_err() {
+            // A broken blocking-open implementation must fail the test,
+            // not hang the suite: pair its FIFO reader with a writer.
+            use std::os::unix::fs::OpenOptionsExt;
+            let deadline = std::time::Instant::now() + Duration::from_secs(1);
+            while !opener.is_finished() && std::time::Instant::now() < deadline {
+                // Nonblocking even if the reader was merely delayed and has
+                // already finished: cleanup must not introduce its own hang.
+                if let Ok(writer) = std::fs::OpenOptions::new()
+                    .write(true)
+                    .custom_flags(pointer_open_flags().expect("supported pointer open flags"))
+                    .open(&path)
+                {
+                    drop(writer);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let _ = received.recv_timeout(Duration::from_secs(1));
+        }
+        if opener.is_finished() {
+            opener.join().unwrap();
+        }
+        assert_eq!(
+            immediate.ok(),
+            Some(true),
+            "FIFO swap blocked or was accepted"
+        );
     }
 
     #[tokio::test]

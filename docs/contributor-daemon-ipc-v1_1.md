@@ -1589,8 +1589,14 @@ on `get_settings`, `set_settings` and `status`. It is an object,
 | `start_failed` | the proxy refused to start for any other reason | `null` |
 | `crashed` | a proxy this daemon started ended without being asked to | `null` |
 
-Existing-instance discovery reads at most 64 KiB from a regular, trusted pointer
-file and probes only the fixed loopback health path. The probe sends no token,
+Existing-instance discovery reads at most 64 KiB from an opened regular pointer
+file and probes only the fixed loopback health path. On supported Unix targets,
+the opened object must match the checked device/inode and effective-user owner,
+remain unwritable by others, and is opened with no-follow/nonblocking flags so a
+replacement symlink or FIFO cannot bypass the check or block the open. Windows
+checks regular-file/reparse shape on the opened handle; this is not a DACL or
+Unix ownership guarantee. Advisory discovery fails closed on Unix targets other
+than shipped macOS and Linux x86_64/aarch64. The probe sends no token,
 ignores environment proxies, and never follows redirects. A successful health
 response is advisory: it conservatively avoids takeover but does not authenticate
 the endpoint. The exclusive home lock remains authoritative when starting.
