@@ -6,11 +6,10 @@
 //! Trajectory-v1 records, and `import` stages those through the existing
 //! `trajectory` source instead.
 //!
-//! `dead_code` stays allowed at the module level for the descriptive fields
-//! and probe internals the import path does not itself read (`git_root`,
-//! `step_count`, `Candidate`), which are part of the recorded API surface
-//! and are asserted by this module's own tests.
-#![allow(dead_code)]
+//! Descriptive listing fields and `ImportOutcome::into_result` are exercised
+//! by fixtures but not read by the production import path. Their non-test
+//! builds carry item-level dead-code allowances; the rest of the module
+//! remains checked, including endpoint candidate discovery.
 
 mod client;
 mod convert;

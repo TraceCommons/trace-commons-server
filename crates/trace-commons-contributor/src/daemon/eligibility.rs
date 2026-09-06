@@ -161,9 +161,7 @@ pub fn evaluate(
 mod tests {
     use super::*;
 
-    fn at(s: &str) -> DateTime<Utc> {
-        s.parse().unwrap()
-    }
+    use crate::daemon::test_support::at;
 
     fn obs(size: u64, modified: &str) -> Observation {
         Observation {
