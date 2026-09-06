@@ -9,6 +9,12 @@ import TCShellCore
 /// as a place with actions. At 149 waiting sessions that inversion is the
 /// difference between a list you can scan and one you cannot.
 ///
+/// `Open` is the row's primary action and the only accented control on it.
+/// `Submit all` is a peer, untinted, for the reason the card's `Submit` is:
+/// the one-click design says Submit is not the primary action, and a filled
+/// `Submit all` on the folder row was recommending exactly what the card
+/// below it declines to recommend.
+///
 /// `Submit all` is shown at EVERY count, including one. The old rule hid it
 /// at one because the row's own `Submit` was on the same screen and did the
 /// same thing. Under drill-in it is a level down, so hiding it here would
@@ -62,8 +68,12 @@ struct QueueFolderRow: View {
             .accessibilityLabel("\(group.label), \(group.count) waiting. Open.")
 
             HStack(spacing: TC.Space.s) {
+                // Untinted, like the card's `Submit`: the one-click design
+                // says Submit is availability, not a recommendation, and
+                // the accent on this row belongs to opening the folder --
+                // see `Open` at the trailing edge.
                 Button("Submit all (\(group.count))", action: onSubmitAll)
-                    .tcPrimaryAction()
+                    .tint(.primary)
                     .help("""
                     Submits every session waiting in \(group.label). Each is scrubbed \
                     the same way a single Submit would be, and flagged sessions are \
@@ -88,6 +98,13 @@ struct QueueFolderRow: View {
                 // actions that do opposite things must not look alike.
                 Button(ProjectIgnoreCopy.buttonLabel) { confirmingIgnore = true }
                     .help(ProjectIgnoreCopy.tooltip)
+                // The row's primary action, in the card's position (trailing,
+                // default action last). It carries the accent that `Submit
+                // all` used to: looking is what this product recommends,
+                // and a folder row is offering a look at what is inside.
+                Button("Open", action: onOpen)
+                    .tcPrimaryAction()
+                    .help("Opens \(group.label) to look at each session before deciding.")
             }
         }
         .padding(TC.Space.l)

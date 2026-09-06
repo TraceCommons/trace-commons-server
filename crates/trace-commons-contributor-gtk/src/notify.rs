@@ -74,7 +74,8 @@ pub fn post(summary: &str, body: &str) -> Option<Action> {
     pressed
 }
 
-/// The 4-hour digest, in the shared spec's words.
+/// The digest, in the shared spec's words. It arrives no more often than
+/// the daemon's configured digest interval, which is not a fixed number.
 ///
 /// Carries counts and project labels only. Never trace content: the preview
 /// exemption does not extend to notification text.

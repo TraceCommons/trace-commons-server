@@ -38,7 +38,7 @@ use std::rc::Rc;
 use crate::copy;
 use crate::model::Project;
 use crate::ui::App;
-use crate::ui::style::space;
+use crate::ui::style::{self, space};
 use adw::prelude::*;
 
 /// Where a run of onboarding has got to.
@@ -488,26 +488,14 @@ fn present_what_gets_removed(parent: &adw::Window) {
         .spacing(space::XXS)
         .build();
     for slug in trace_commons_protocol::trace_contribution::secret_leak_pattern_names() {
-        let item = gtk::Label::builder()
-            .label(copy::scrub_detector_label(slug))
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        item.add_css_class("tc-body");
-        list.append(&item);
+        style::append_body(&list, copy::scrub_detector_label(slug));
     }
     content.append(&list);
 
     // The list and its limit travel together. A list on its own reads as a
     // guarantee, and this one is not: the same concession the preview sheet
     // makes before every decision.
-    let concession = gtk::Label::builder()
-        .label(copy::RESIDUAL_RISK)
-        .xalign(0.0)
-        .wrap(true)
-        .build();
-    concession.add_css_class("tc-meta");
-    content.append(&concession);
+    style::append_meta(&content, copy::RESIDUAL_RISK);
 
     dialog.set_extra_child(Some(&content));
     dialog.add_response("close", copy::CLOSE);
@@ -969,13 +957,7 @@ fn watch_page(app: &Rc<App>, onboarding: &Rc<Onboarding>) -> gtk::Box {
             // title above nothing. An empty screen is an invitation to act,
             // or at minimum an explanation -- never a blank.
             if projects.is_empty() {
-                let empty = gtk::Label::builder()
-                    .label(copy::ONBOARD_WATCH_EMPTY)
-                    .xalign(0.0)
-                    .wrap(true)
-                    .build();
-                empty.add_css_class("tc-meta");
-                list.append(&empty);
+                style::append_meta(&list, copy::ONBOARD_WATCH_EMPTY);
                 return;
             }
             for (index, project) in projects.into_iter().enumerate() {
@@ -1034,16 +1016,11 @@ fn watch_page(app: &Rc<App>, onboarding: &Rc<Onboarding>) -> gtk::Box {
                 // in place of the state line rather than adding a third: the
                 // note ends "you'll always be asked", which is what the state
                 // line would have said.
-                let state = gtk::Label::builder()
-                    .label(if unresolvable {
-                        copy::ONBOARD_WATCH_UNKNOWN_NOTE
-                    } else {
-                        copy::ONBOARD_WATCH_ASK_FIRST
-                    })
-                    .xalign(0.0)
-                    .wrap(true)
-                    .build();
-                state.add_css_class("tc-meta");
+                let state = style::meta(if unresolvable {
+                    copy::ONBOARD_WATCH_UNKNOWN_NOTE
+                } else {
+                    copy::ONBOARD_WATCH_ASK_FIRST
+                });
                 column.append(&state);
                 let ignore = gtk::Button::with_label(copy::ONBOARD_IGNORE);
                 // An outlined chip, centred against the two-line column.

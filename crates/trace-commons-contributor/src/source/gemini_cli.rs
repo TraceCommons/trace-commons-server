@@ -20,7 +20,7 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use anyhow::anyhow;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::{
     SOURCE_GEMINI_CLI, SessionEvent, SessionEventKind, SessionRef, SessionTranscript, TraceSource,
@@ -60,9 +60,7 @@ pub fn conventional_root(home: &Path, env: impl Fn(&str) -> Option<String>) -> P
 /// The conventional store, resolved against this machine's real home and
 /// environment.
 pub fn conventional_root_this_machine() -> PathBuf {
-    conventional_root(&dirs::home_dir().unwrap_or_default(), |key| {
-        std::env::var(key).ok()
-    })
+    super::conventional_root_on_this_machine(conventional_root)
 }
 
 pub struct GeminiCliSource {
@@ -261,20 +259,6 @@ fn timestamp_of(value: Option<&Value>) -> Option<chrono::DateTime<chrono::Utc>> 
         .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
-fn opaque(record_type: &str, timestamp: Option<chrono::DateTime<chrono::Utc>>) -> SessionEvent {
-    SessionEvent {
-        served_by: None,
-        kind: SessionEventKind::Opaque,
-        timestamp,
-        content: None,
-        structured: json!({ "record_type": record_type }),
-        tool_name: None,
-        token_counts: None,
-        tool_call_id: None,
-        success: None,
-    }
-}
-
 /// A `gemini` turn expands to its thoughts, then its answer, then each tool
 /// call paired with its result -- the order the turn happened in.
 fn map_gemini_message(message: &Value, model: &mut Option<String>, events: &mut Vec<SessionEvent>) {
@@ -375,17 +359,12 @@ fn map_gemini_message(message: &Value, model: &mut Option<String>, events: &mut 
             .get("status")
             .and_then(|v| v.as_str())
             .map(|status| status == "success");
-        events.push(SessionEvent {
-            served_by: None,
-            kind: SessionEventKind::ToolResult,
+        events.push(SessionEvent::tool_result(
             timestamp,
             content,
-            structured: Value::Null,
-            tool_name: None,
-            token_counts: None,
             tool_call_id,
             success,
-        });
+        ));
     }
 }
 
@@ -435,7 +414,10 @@ fn load_session(path: &Path, cwd: Option<String>) -> anyhow::Result<SessionTrans
                 success: None,
             }),
             "gemini" => map_gemini_message(message, &mut model, &mut events),
-            other => events.push(opaque(other, timestamp_of(message.get("timestamp")))),
+            other => events.push(SessionEvent::opaque(
+                other,
+                timestamp_of(message.get("timestamp")),
+            )),
         }
     }
 
