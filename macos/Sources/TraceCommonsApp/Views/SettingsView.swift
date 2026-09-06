@@ -1495,7 +1495,7 @@ struct SettingsContent: View {
         VStack(alignment: .leading, spacing: TC.Space.sm) {
             TCSectionHeader(title: "Projects")
             if let error = model.lastActionError {
-                Text(error).font(TC.Font_.body).foregroundStyle(.secondary)
+                ActionErrorBanner(text: error) { model.lastActionError = nil }
             }
             if model.projects.isEmpty {
                 Text("No projects seen yet.").font(TC.Font_.body).foregroundStyle(.secondary)
