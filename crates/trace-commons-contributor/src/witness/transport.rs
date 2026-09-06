@@ -2070,7 +2070,7 @@ mod tests {
                 token_dir: Some(ironwire_home.path().to_path_buf()),
             });
             settings.ironwire_attested_bodies = carry_bodies;
-            shared.rebuild_routing(settings.ironwire.as_ref());
+            shared.rebuild_effective_routing(&settings);
         }
         shared.refresh_routing().await;
 

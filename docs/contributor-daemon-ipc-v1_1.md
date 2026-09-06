@@ -539,12 +539,30 @@ the Windows deserializer is left at its default — so an older shell against a
 newer daemon behaves exactly as it did before, which is the rule this
 document's "additive" status already states.
 
-Whether the IronWire proxy overlay is declared and whether it is producing
-anything. **Four states, not two.**
+Whether the effective IronWire metadata overlay is enabled and whether it is
+producing anything. **Four states, not two.**
+
+An explicit `ironwire: {"mode":"off"}` always disables this overlay. An
+explicit Watch declaration keeps its exact port and token directory, including
+while private-inference hosting starts or stops. With no explicit declaration,
+a successfully persisted `private_inference: true` may derive metadata routing
+from the proxy this daemon actually owns: its bound port and canonical home.
+Discovery, an existing foreign instance, an unpersisted request, and a failed or
+stopping proxy cannot supply that endpoint. Turning hosting off withdraws the
+derived reader in the accepted settings transaction; cleanup need not finish
+first. Terminal daemon cleanup also withdraws only the derived reader.
+
+This derived declaration is not written to settings. `ironwire: null` removes
+an explicit declaration, so automatic metadata can resume while owned hosting
+is enabled; use explicit Off to refuse it. Derivation never grants body
+collection: `ironwire_attested_bodies` still requires its separate opt-in and an
+explicit Watch declaration. No agent configuration or tool endpoint is changed.
+Unrelated settings writes retain a warm metadata reader when its effective
+endpoint is unchanged.
 
 | `state` | meaning |
 | --- | --- |
-| `not_declared` | no proxy declared; the daemon holds no ledger and reads nothing |
+| `not_declared` | no effective metadata declaration; the daemon holds no ledger and reads nothing |
 | `awaiting_rows` | declared, and the daemon holds a ledger, but no row has arrived yet |
 | `rows_seen` | declared, and the last refresh window had rows |
 | `token_unreadable` | declared, and no ledger could be built: `control.token` could not be read |
