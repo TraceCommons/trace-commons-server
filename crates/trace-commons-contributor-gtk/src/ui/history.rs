@@ -306,13 +306,7 @@ fn render(
         }
     }
 
-    let credit_body = gtk::Label::builder()
-        .label(copy::CREDIT_BODY)
-        .xalign(0.0)
-        .wrap(true)
-        .build();
-    credit_body.add_css_class("tc-caveat");
-    credit.append(&credit_body);
+    style::append_caveat(&credit, copy::CREDIT_BODY);
     content.append(&credit);
 
     // --- Community, in the public surface's own language ------------------
@@ -595,13 +589,7 @@ fn held_group(quarantined: u32) -> gtk::Expander {
 
     let inner = style::card(gtk::Orientation::Vertical, space::S);
     inner.set_margin_top(space::S);
-    let body = gtk::Label::builder()
-        .label(copy::QUARANTINE_BODY)
-        .xalign(0.0)
-        .wrap(true)
-        .build();
-    body.add_css_class("tc-body");
-    inner.append(&body);
+    style::append_body(&inner, copy::QUARANTINE_BODY);
 
     // The shared spec draws a "Withdraw these traces" button here, and this
     // shell does not offer one. Withdrawal itself is now reachable -- every
@@ -610,13 +598,7 @@ fn held_group(quarantined: u32) -> gtk::Expander {
     // "withdrawn". See `copy::WITHDRAW_NO_BULK`, which says all of that to
     // the contributor rather than leaving a drawn affordance missing with
     // no explanation.
-    let withdraw_note = gtk::Label::builder()
-        .label(copy::WITHDRAW_NO_BULK)
-        .xalign(0.0)
-        .wrap(true)
-        .build();
-    withdraw_note.add_css_class("tc-caveat");
-    inner.append(&withdraw_note);
+    style::append_caveat(&inner, copy::WITHDRAW_NO_BULK);
     expander.set_child(Some(&inner));
     expander
 }
@@ -661,13 +643,7 @@ fn record_row(app: &Rc<App>, record: &HistoryRecord) -> gtk::Box {
         .iter()
         .filter(|e| explanation_is_contributor_facing(e))
     {
-        let line = gtk::Label::builder()
-            .label(explanation)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        line.add_css_class("tc-body");
-        card.append(&line);
+        style::append_body(&card, explanation);
     }
     // Only a held record gets a sentence it did not earn from the server,
     // and only when the server sent none: it is the one state a person can
@@ -682,13 +658,7 @@ fn record_row(app: &Rc<App>, record: &HistoryRecord) -> gtk::Box {
             .iter()
             .any(|e| explanation_is_contributor_facing(e))
     {
-        let body = gtk::Label::builder()
-            .label(copy::HELD_ROW_BODY)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        body.add_css_class("tc-body");
-        card.append(&body);
+        style::append_body(&card, copy::HELD_ROW_BODY);
     }
 
     // The record's own figures, in the ledger face. Recorded credit is
@@ -757,13 +727,7 @@ fn withdraw_control(app: &Rc<App>, record: &HistoryRecord) -> gtk::Box {
                 .build();
             done.add_css_class("tc-body");
             row.append(&done);
-            let credit = gtk::Label::builder()
-                .label(copy::WITHDRAW_CREDIT_NOTE)
-                .xalign(0.0)
-                .wrap(true)
-                .build();
-            credit.add_css_class("tc-caveat");
-            row.append(&credit);
+            style::append_caveat(&row, copy::WITHDRAW_CREDIT_NOTE);
             return row;
         }
         Some(Withdrawal::Failed(label)) => {
@@ -808,21 +772,10 @@ fn confirm_withdrawal(app: &Rc<App>, submission_id: &str, status: &str) {
     let dialog = adw::MessageDialog::new(Some(&app.window), Some(confirmation.question), None);
     let body = gtk::Box::new(gtk::Orientation::Vertical, space::S);
     if let Some(ambiguity) = confirmation.ambiguity {
-        let line = gtk::Label::builder()
-            .label(ambiguity)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        line.add_css_class("tc-body");
-        body.append(&line);
+        style::append_body(&body, ambiguity);
     }
     for (index, text) in confirmation.bodies.iter().enumerate() {
-        let line = gtk::Label::builder()
-            .label(*text)
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-        line.add_css_class("tc-body");
+        let line = style::body(*text);
         // The gravest body is the one a contributor most needs to have
         // read, so it is the one drawn in the attention ink rather than
         // being one paragraph of two identical ones.
@@ -831,13 +784,7 @@ fn confirm_withdrawal(app: &Rc<App>, submission_id: &str, status: &str) {
         }
         body.append(&line);
     }
-    let credit = gtk::Label::builder()
-        .label(confirmation.credit)
-        .xalign(0.0)
-        .wrap(true)
-        .build();
-    credit.add_css_class("tc-caveat");
-    body.append(&credit);
+    style::append_caveat(&body, confirmation.credit);
     dialog.set_extra_child(Some(&body));
 
     dialog.add_responses(&[
