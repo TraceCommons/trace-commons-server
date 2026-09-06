@@ -14,6 +14,7 @@ pub mod daemon;
 pub mod envelope;
 pub mod identity;
 pub mod issuer_client;
+pub mod onboarding_copy;
 pub mod picker;
 pub mod pricing;
 pub mod routing;
