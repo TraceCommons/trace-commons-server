@@ -251,6 +251,21 @@ internal static class NativeMethods
     internal static extern IntPtr tc_routing_copy();
 
     /// <summary>
+    /// Every fixed sentence on the consent surface, as an owned JSON object;
+    /// free it with <see cref="tc_string_free"/>, which
+    /// <see cref="TakeOwnedString"/> does. NULL only on a caught panic.
+    /// </summary>
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr tc_consent_copy();
+
+    /// <summary>
+    /// Which of the two Contribute tooltips applies, chosen on the Rust
+    /// side. 1 is pinned; 0 and anything else are not.
+    /// </summary>
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr tc_consent_gate_help(int pinned);
+
+    /// <summary>
     /// Every fixed word on the private-inference offer and settings card, as
     /// an owned JSON object.
     ///

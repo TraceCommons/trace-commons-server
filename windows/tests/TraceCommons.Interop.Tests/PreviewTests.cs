@@ -43,7 +43,6 @@ public sealed class ReadGateTests
         gate.SetPinnedPreview(true);
 
         Assert.True(gate.CanContribute);
-        Assert.Equal(ReadGate.ReadyHelp, gate.Help);
     }
 
     [Fact]
@@ -55,7 +54,6 @@ public sealed class ReadGateTests
         var gate = new ReadGate();
 
         Assert.False(gate.CanContribute);
-        Assert.Equal(ReadGate.UnenrolledHelp, gate.Help);
     }
 
     [Fact]
@@ -101,40 +99,6 @@ public sealed class ReadGateTests
         gate.Reset();
 
         Assert.Equal(1, raised);
-    }
-}
-
-/// <summary>
-/// The sentence that replaced the acknowledgement checkbox.
-///
-/// The same assertions the Linux shell holds in
-/// <c>crates/trace-commons-contributor-gtk/src/copy.rs</c> and the macOS shell
-/// in <c>macos/Tests/TCShellCoreTests/ReadGateTests.swift</c>. Three shells
-/// print this above one irreversible button; the only thing that holds three
-/// languages to one sentence is the same text asserted in each of them, plus
-/// the Rust test that reads all three sources.
-/// </summary>
-public sealed class ReadGateCopyTests
-{
-    private const string Statement =
-        "\"Exactly what would be sent\" is the exact text that would leave this machine. "
-        + "Pattern-based scrubbing may have missed something in it, and nothing here checks "
-        + "that you looked.";
-
-    [Fact]
-    public void TheConsentStatementIsExactlyWhatWasAgreed()
-    {
-        Assert.Equal(Statement, ReadGate.Statement);
-    }
-
-    [Fact]
-    public void TheStatementKeepsBothHalvesOfWhatTheCheckboxUsedToSay()
-    {
-        // The acknowledgement made a contributor assert these two things by
-        // hand. Neither may quietly drop out now that nobody is asked to tick
-        // anything.
-        Assert.Contains("Pattern-based scrubbing may have missed something", ReadGate.Statement);
-        Assert.Contains("nothing here checks that you looked", ReadGate.Statement);
     }
 }
 
