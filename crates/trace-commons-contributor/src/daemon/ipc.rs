@@ -433,6 +433,7 @@ pub struct DaemonShared {
     private_inference_terminating: AtomicBool,
     private_inference_generation: std::sync::atomic::AtomicU64,
     private_inference_stop_confirmed: Arc<AtomicBool>,
+    pub(crate) private_inference_changed: tokio::sync::Notify,
     private_inference_stop_task: Mutex<Option<tokio::task::JoinHandle<bool>>>,
     /// The runtime a hosted proxy's tasks must be spawned onto.
     ///
@@ -576,6 +577,7 @@ impl DaemonShared {
             private_inference_terminating: AtomicBool::new(false),
             private_inference_generation: std::sync::atomic::AtomicU64::new(0),
             private_inference_stop_confirmed: Arc::new(AtomicBool::new(false)),
+            private_inference_changed: tokio::sync::Notify::new(),
             private_inference_stop_task: Mutex::new(None),
             proxy_runtime: std::sync::OnceLock::new(),
             private_inference_state: Arc::new(Mutex::new(
@@ -677,6 +679,7 @@ impl DaemonShared {
             if let Some(changed) = published {
                 drop(held);
                 if changed {
+                    self.private_inference_changed.notify_one();
                     self.publish(EVENT_STATUS_CHANGED, serde_json::json!({}));
                 }
                 return;
@@ -696,14 +699,12 @@ impl DaemonShared {
             return;
         }
         {
-            let mut state = self
+            let _state = self
                 .private_inference_state
                 .lock()
                 .expect("proxy state lock");
             self.private_inference_terminating
                 .store(true, Ordering::Release);
-            *state =
-                super::private_inference::PrivateInferenceState::Stopping { port: state.port() };
         }
         let Some(runtime) = self
             .proxy_runtime
@@ -713,6 +714,38 @@ impl DaemonShared {
         else {
             return;
         };
+        if self.private_inference.try_lock().is_ok_and(|held| {
+            held.as_ref()
+                .is_none_or(|host| !host.has_pending_ownership())
+        }) {
+            *self
+                .private_inference_state
+                .lock()
+                .expect("proxy state lock") = super::private_inference::PrivateInferenceState::Off;
+            self.private_inference_stop_confirmed
+                .store(true, Ordering::Release);
+            return;
+        }
+        {
+            let mut state = self
+                .private_inference_state
+                .lock()
+                .expect("proxy state lock");
+            let port = match &*state {
+                super::private_inference::PrivateInferenceState::Running { port }
+                | super::private_inference::PrivateInferenceState::RunningWithoutBackends {
+                    port,
+                } => Some(*port),
+                super::private_inference::PrivateInferenceState::Stopping { port } => *port,
+                _ => None,
+            };
+            if !matches!(
+                *state,
+                super::private_inference::PrivateInferenceState::Failed { .. }
+            ) {
+                *state = super::private_inference::PrivateInferenceState::Stopping { port };
+            }
+        }
         let held = Arc::clone(&self.private_inference);
         let state = Arc::clone(&self.private_inference_state);
         let events = self.events.clone();
@@ -756,6 +789,12 @@ impl DaemonShared {
 
     async fn finish_private_inference_stop(&self, budget: std::time::Duration) -> bool {
         self.request_private_inference_stop();
+        if self
+            .private_inference_stop_confirmed
+            .load(Ordering::Acquire)
+        {
+            return true;
+        }
         let completed = tokio::time::timeout(budget, async {
             loop {
                 let finished = self
@@ -6842,6 +6881,75 @@ mod tests {
         );
         assert!(r.error.is_none(), "{:?}", r.error);
         assert_eq!(s.settings.lock().unwrap().ironwire, None);
+    }
+
+    #[tokio::test]
+    async fn private_inference_transition_wakes_an_idle_supervisor() {
+        let s = shared();
+        s.adopt_runtime();
+        let home = tempfile::tempdir().unwrap();
+        s.install_private_inference_for_test(home.path().to_path_buf(), 0);
+        assert!(
+            handle_set_settings_async(
+                &s,
+                &req(
+                    "set_settings",
+                    serde_json::json!({"private_inference":true})
+                )
+            )
+            .await
+            .error
+            .is_none()
+        );
+        // Consume the start notification: the supervisor can now be waiting
+        // with its conditional cleanup timer disabled because it saw Running.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            s.private_inference_changed.notified(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            handle_set_settings_async(
+                &s,
+                &req(
+                    "set_settings",
+                    serde_json::json!({"private_inference":false})
+                )
+            )
+            .await
+            .error
+            .is_none()
+        );
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            s.private_inference_changed.notified(),
+        )
+        .await
+        .expect("stop transition must wake the existing select");
+        s.stop_private_inference().await;
+    }
+
+    #[test]
+    fn stopping_without_runtime_does_not_invent_owned_cleanup() {
+        let s = shared();
+        s.request_private_inference_stop();
+        assert_eq!(s.private_inference_value()["state"], "off");
+        assert!(s.private_inference_stop_task.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn stopping_foreign_instance_does_not_publish_its_port_as_owned() {
+        let s = shared();
+        s.adopt_runtime();
+        *s.private_inference_state.lock().unwrap() =
+            super::super::private_inference::PrivateInferenceState::RunningElsewhere { port: 1234 };
+        s.stop_private_inference().await;
+        assert_eq!(
+            s.private_inference_value(),
+            serde_json::json!({"state":"off", "port":null})
+        );
+        assert!(s.private_inference_stop_task.lock().unwrap().is_none());
     }
 
     #[tokio::test]

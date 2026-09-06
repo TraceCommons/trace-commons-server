@@ -52,7 +52,7 @@ pub const LABEL_RUNNING_ELSEWHERE: &str = "running_elsewhere";
 pub const LABEL_PORT_IN_USE: &str = "port_in_use";
 /// The proxy refused to start for any other reason.
 pub const LABEL_START_FAILED: &str = "start_failed";
-/// A proxy this daemon started ended without being asked to.
+/// Startup, serving, or cleanup failed; ownership may remain unconfirmed.
 pub const LABEL_CRASHED: &str = "crashed";
 
 /// What the daemon can truthfully say about private inference right now.
@@ -217,6 +217,7 @@ pub struct PrivateInference {
     starting: Option<tokio::task::JoinHandle<Result<EmbeddedProxy, EmbedError>>>,
     stopping: Option<tokio::task::JoinHandle<bool>>,
     cleanup_unconfirmed: bool,
+    recovery_requested: bool,
     requested_generation: Option<u64>,
     /// The runtime a proxy's tasks must be spawned onto, when it is not the
     /// one this call happens to be running on.
@@ -264,6 +265,7 @@ impl PrivateInference {
             starting: None,
             stopping: None,
             cleanup_unconfirmed: false,
+            recovery_requested: false,
             requested_generation: None,
             runtime: None,
             state: PrivateInferenceState::Off,
@@ -327,9 +329,21 @@ impl PrivateInference {
 
     /// Whether accepted settings superseded the request this instance observed.
     pub(crate) fn accept_generation(&mut self, generation: u64) -> bool {
-        self.requested_generation
+        let changed = self
+            .requested_generation
             .replace(generation)
-            .is_some_and(|old| old != generation)
+            .is_some_and(|old| old != generation);
+        if changed && self.cleanup_unconfirmed {
+            self.recovery_requested = true;
+        }
+        changed
+    }
+
+    pub(crate) fn has_pending_ownership(&self) -> bool {
+        self.proxy.is_some()
+            || self.starting.is_some()
+            || self.stopping.is_some()
+            || self.cleanup_unconfirmed
     }
 
     /// What the daemon reports right now.
@@ -341,22 +355,29 @@ impl PrivateInference {
     /// Bring the instance in line with the switch. Idempotent both ways.
     pub async fn apply(&mut self, on: bool) {
         self.poll().await;
-        if self.cleanup_unconfirmed {
+        if self.cleanup_unconfirmed && self.starting.is_none() && (!on || !self.recovery_requested)
+        {
             return;
         }
+        // A new accepted opt-in may retry, but only acquisition of the same
+        // upstream home lock proves the uncertain prior owner has released it.
+        // Do not turn an unknown drain into Off, or trust its discovery pointer.
+        let recovering = self.cleanup_unconfirmed;
+        self.recovery_requested = false;
         if !on {
             if let Some(starting) = self.starting.take() {
                 let runtime = self
                     .runtime
                     .clone()
                     .unwrap_or_else(tokio::runtime::Handle::current);
+                let prior_cleanup_unknown = self.cleanup_unconfirmed;
                 self.stopping = Some(runtime.spawn(async move {
                     match starting.await {
                         Ok(Ok(proxy)) => {
                             proxy.shutdown().await;
                             true
                         }
-                        Ok(Err(_)) => true,
+                        Ok(Err(_)) => !prior_cleanup_unknown,
                         Err(_) => false,
                     }
                 }));
@@ -383,7 +404,8 @@ impl PrivateInference {
         if self.proxy.is_some() || self.stopping.is_some() || self.crashed {
             return;
         }
-        if self.starting.is_none()
+        if !recovering
+            && self.starting.is_none()
             && let Some(port) = existing_instance(&self.home).await
         {
             tracing::info!(
@@ -396,6 +418,7 @@ impl PrivateInference {
         }
         match self.start_proxy().await {
             Ok(proxy) => {
+                self.cleanup_unconfirmed = false;
                 let port = proxy.port();
                 self.state = state_after_start(port, proxy.startup_report().no_backends);
                 self.proxy = Some(proxy);
@@ -420,17 +443,24 @@ impl PrivateInference {
                 let error = match error {
                     StartRefusal::Embed(error) => error,
                     StartRefusal::Spawn => {
+                        self.cleanup_unconfirmed = true;
                         tracing::warn!(
                             pass = "private_inference",
-                            reason = LABEL_START_FAILED,
+                            reason = LABEL_CRASHED,
                             "the proxy start did not come back from the daemon runtime"
                         );
                         self.state = PrivateInferenceState::Failed {
-                            label: LABEL_START_FAILED,
+                            label: LABEL_CRASHED,
                         };
                         return;
                     }
                 };
+                if recovering {
+                    self.state = PrivateInferenceState::Failed {
+                        label: LABEL_CRASHED,
+                    };
+                    return;
+                }
                 if let EmbedError::Lock { port } = error {
                     tracing::info!(
                         pass = "private_inference",
@@ -483,13 +513,26 @@ impl PrivateInference {
     /// Wait for the retained shutdown task. Canceling this wait retains ownership.
     pub(crate) async fn finish_stop(&mut self) -> bool {
         self.apply(false).await;
-        while self.stopping.is_some() {
-            self.poll().await;
-            if self.stopping.is_some() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
+        if let Some(task) = self.stopping.as_mut() {
+            // Await by reference so cancellation retains ownership.
+            let completed = task.await;
+            self.stopping = None;
+            self.record_stop_outcome(completed);
         }
         self.state == PrivateInferenceState::Off
+    }
+
+    fn record_stop_outcome(&mut self, completed: Result<bool, tokio::task::JoinError>) {
+        if matches!(completed, Ok(true)) {
+            self.cleanup_unconfirmed = false;
+            self.state = PrivateInferenceState::Off;
+            self.crashed = false;
+        } else {
+            self.cleanup_unconfirmed = true;
+            self.state = PrivateInferenceState::Failed {
+                label: LABEL_CRASHED,
+            };
+        }
     }
 
     /// Notice a proxy that ended without being asked to.
@@ -505,16 +548,7 @@ impl PrivateInference {
             .is_some_and(|task| task.is_finished())
         {
             let completed = self.stopping.take().expect("finished shutdown task").await;
-            if matches!(completed, Ok(true)) {
-                self.state = PrivateInferenceState::Off;
-                self.crashed = false;
-            } else {
-                // A failed join is not proof that upstream released ownership.
-                self.cleanup_unconfirmed = true;
-                self.state = PrivateInferenceState::Failed {
-                    label: LABEL_CRASHED,
-                };
-            }
+            self.record_stop_outcome(completed);
         }
         let Some(proxy) = self.proxy.as_mut() else {
             return;
@@ -642,6 +676,82 @@ mod tests {
                 label: LABEL_CRASHED
             }
         );
+        assert!(!absent.exists());
+    }
+
+    #[tokio::test]
+    async fn explicit_retry_requires_the_previous_home_owner_to_release() {
+        let home = tempfile::tempdir().unwrap();
+        let owner = embed::start(home.path(), Some(0)).await.unwrap();
+        let failed = tokio::spawn(async { false });
+        let mut host = PrivateInference::with_shutdown_for_test(
+            home.path().to_path_buf(),
+            owner.port(),
+            failed,
+        );
+        host.port = Some(0);
+        host.accept_generation(0);
+        assert!(!host.finish_stop().await);
+        host.accept_generation(1);
+        host.apply(false).await;
+        assert_eq!(host.state().label(), LABEL_CRASHED);
+        host.accept_generation(2);
+        host.apply(true).await;
+        assert_eq!(host.state().label(), LABEL_CRASHED);
+        assert!(host.proxy.is_none());
+        owner.shutdown().await;
+        // A failed retry is not retried every poll, even after the lock frees.
+        host.apply(true).await;
+        assert!(host.proxy.is_none());
+        host.accept_generation(3);
+        host.apply(false).await;
+        host.accept_generation(4);
+        host.apply(true).await;
+        assert!(host.proxy.is_some());
+        assert!(!host.cleanup_unconfirmed);
+        assert!(host.finish_stop().await);
+    }
+
+    #[tokio::test]
+    async fn canceled_recovery_still_drains_without_erasing_prior_uncertainty() {
+        let home = tempfile::tempdir().unwrap();
+        let owner = embed::start(home.path(), Some(0)).await.unwrap();
+        let retry_home = home.path().to_path_buf();
+        let (release, pending) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            pending.await.unwrap();
+            embed::start(&retry_home, Some(0)).await
+        });
+        let mut host =
+            PrivateInference::with_pending_start_for_test(home.path().to_path_buf(), task);
+        host.cleanup_unconfirmed = true;
+        host.recovery_requested = true;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), host.apply(true))
+                .await
+                .is_err()
+        );
+        host.apply(false).await;
+        assert!(host.stopping.is_some());
+        release.send(()).unwrap();
+        assert!(!host.finish_stop().await);
+        assert!(host.cleanup_unconfirmed);
+        assert_eq!(host.state().label(), LABEL_CRASHED);
+        owner.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn failed_start_join_is_unknown_until_explicit_retry() {
+        let home = tempfile::tempdir().unwrap();
+        let absent = home.path().join("not-created");
+        let task = tokio::spawn(async { panic!("controlled start panic") });
+        let mut host = PrivateInference::with_pending_start_for_test(absent.clone(), task);
+        host.accept_generation(0);
+        host.apply(true).await;
+        assert_eq!(host.state().label(), LABEL_CRASHED);
+        host.apply(false).await;
+        host.apply(true).await;
+        assert!(host.cleanup_unconfirmed);
         assert!(!absent.exists());
     }
 

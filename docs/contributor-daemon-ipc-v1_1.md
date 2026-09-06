@@ -1588,7 +1588,7 @@ on `get_settings`, `set_settings` and `status`. It is an object,
 | `running_elsewhere` | another process owns the home; this daemon started and stopped nothing, and readiness is not implied by ownership | the existing instance's published or requested port |
 | `port_in_use` | something that is not this daemon's proxy holds the port | `null` |
 | `start_failed` | the proxy refused to start for any other reason | `null` |
-| `crashed` | a proxy this daemon started ended without being asked to | `null` |
+| `crashed` | startup, serving, or cleanup failed; release of owned resources may be unconfirmed | `null` |
 | `stopping` | retained shutdown is awaiting outstanding startup, calls or cleanup; the requested switch may already be off | last owned port, or `null` before binding |
 
 Turning hosting off persists the request before stopping the owned proxy. The
@@ -1607,7 +1607,11 @@ health endpoint and no inference can pass through it, so a client that
 rendered it as running would show a green light over a proxy that cannot
 work. `crashed` is sticky until the switch is turned off and on again,
 rather than restarting every poll tick, so a proxy that cannot stay up is
-visible instead of flickering.
+visible instead of flickering. If startup or shutdown lost its completion
+signal, Off does not claim cleanup succeeded. A newly accepted off/on cycle may
+retry through IronWire's exclusive home lock; only a successful start clears
+that uncertainty. If the prior owner still holds the lock, the failure remains
+visible and no second proxy is started.
 
 The shells distinguish an absent or empty status from a nonempty state label
 this build does not recognize. The former says the daemon does not report
