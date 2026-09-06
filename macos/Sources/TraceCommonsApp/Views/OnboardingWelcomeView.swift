@@ -299,10 +299,8 @@ struct OnboardingWelcomeContent: View {
     /// but the scrubbing concession is not droppable, so they stay, set at
     /// `body.brand` under the hero rather than competing with it.
     ///
-    /// The first sentence names all four agents the roots screen offers.
-    /// The spec's wording names two, from before Gemini CLI and Cline were
-    /// sources; a welcome that names two and a next screen that asks about
-    /// four would have the app contradicting itself one click apart.
+    /// The shared sentence follows source settings instead of keeping a
+    /// separate tool list that can drift from the adapters and other shells.
     private var supporting: some View {
         HStack(alignment: .top, spacing: CommunityBrand.Metric.heroGap) {
             Text(TCOnboardingCopy.load()?.welcomeBody ?? "")
