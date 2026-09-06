@@ -2081,7 +2081,7 @@ pub use trace_commons_contributor::routing_copy::{
 //
 // `state_line` and `state_tone` are re-exported as a pair and must be used
 // as one: a shell that recovered the tone by reading the sentence would be
-// matching on text, and three of the seven sentences begin with the same two
+// matching on text, and two refusal sentences begin with the same two
 // words.
 pub use trace_commons_contributor::private_inference_copy::{
     OFFER_ACCEPT as PRIVATE_INFERENCE_OFFER_ACCEPT,

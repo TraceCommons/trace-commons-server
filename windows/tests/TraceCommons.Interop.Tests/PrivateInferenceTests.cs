@@ -185,7 +185,7 @@ public class PrivateInferenceTests
             Assert.Contains("off and on again", sentence, StringComparison.Ordinal);
         }
 
-        Assert.Contains("stay this way", copy.StateCrashed, StringComparison.Ordinal);
+        Assert.Contains("will not retry by itself", copy.StateCrashed, StringComparison.Ordinal);
     }
 
     /// <summary>

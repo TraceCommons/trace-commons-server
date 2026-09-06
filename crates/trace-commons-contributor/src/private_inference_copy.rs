@@ -145,8 +145,9 @@ pub const STATE_START_FAILED: &str =
 /// contributor to discover it. A listener that cannot stay up and is retried
 /// on every poll tick reads as a light flickering, which is how a real fault
 /// becomes invisible.
-pub const STATE_CRASHED: &str = "Not on. It started and then stopped on its own, and it will stay this way \
-     until you turn this off and on again.";
+pub const STATE_CRASHED: &str = "The model-call state could not be confirmed. It may have stopped unexpectedly \
+     or cleanup may still be pending. It will not retry by itself. Turn this off and on again to retry; this app will not start \
+     another listener while the previous instance still owns its setup.";
 
 /// Said at the moment of quitting, on the two platforms where the app is the
 /// daemon.
@@ -462,7 +463,7 @@ mod tests {
     #[test]
     fn the_crashed_state_says_it_will_stay_that_way() {
         assert!(
-            state_line(LABEL_CRASHED).contains("stay this way"),
+            state_line(LABEL_CRASHED).contains("will not retry by itself"),
             "the crashed sentence stopped saying it is sticky: {}",
             state_line(LABEL_CRASHED)
         );
