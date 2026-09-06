@@ -351,6 +351,7 @@ public sealed partial class MainWindow : Window
     {
         // The daemon is up now, so the queue window needs the first snapshot
         // it could not load, and then the startup it did not finish.
+        _activationReady = false;
         ViewModel.SessionRootsDeclared();
         await ViewModel.RefreshAsync();
         await ContinueStartupAsync();

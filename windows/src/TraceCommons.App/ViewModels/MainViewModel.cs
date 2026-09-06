@@ -1047,12 +1047,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         await RefreshAsync().ConfigureAwait(true);
     }
 
+    internal void SessionRootsDeclared() => NeedsSessionRoots = false;
+
     /// <summary>
     /// Whether the last start was refused because the contributor has not yet
     /// said which session folders to watch.
     /// </summary>
-    internal void SessionRootsDeclared() => NeedsSessionRoots = false;
-
     public bool NeedsSessionRoots
     {
         get => _needsSessionRoots;
