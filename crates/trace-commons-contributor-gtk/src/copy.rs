@@ -531,25 +531,33 @@ pub const TRANSCRIPT_CAPTION: &str = "These are the exact bytes an approval cove
      <PRIVATE_LOCAL_PATH_1> and [REDACTED] show where scrubbing fired. A stretch with no mark \
      is not a stretch with nothing in it -- scrubbing only rewrites the fields it reaches.";
 
-/// What the sheet says about redaction at the moment of consent.
-///
-/// This replaced a read gate: `Contribute` used to stay disabled until the
-/// transcript tab had been on screen AND an acknowledgement checkbox had
-/// been ticked. The checkbox is gone -- it was friction on the only path
-/// that involves looking, while `Submit` on a queue row approves with no
-/// preview at all, so the gate taxed exactly the careful contributor and
-/// stopped nobody.
-///
-/// What the checkbox *said* is not gone. It is this sentence, printed on
-/// the sheet where the tick used to be asked for, and it keeps both halves
-/// of what the old gate was honest about: scrubbing is pattern-based and
-/// may have missed something, and nothing in this app can tell whether
-/// anyone read anything.
-///
-/// One line, one escaped literal, on purpose: `the_three_shells_print_the
-/// _same_statement` scans the macOS and Windows sources for this exact
-/// text, and a line break in any of the three would defeat it.
-pub const GATE_STATEMENT: &str = "\"Exactly what would be sent\" is the exact text that would leave this machine. Pattern-based scrubbing may have missed something in it, and nothing here checks that you looked.";
+// --- The consent surface ------------------------------------------------
+//
+// The sentence printed above `Contribute`, and the two tooltips beside it.
+//
+// The words are NOT here. They live in
+// `trace_commons_contributor::consent_copy`, because the macOS and Windows
+// shells print the same claim and reach it across the C ABI, and a claim
+// about what leaves this machine kept in three places is three claims that
+// have not diverged yet.
+//
+// `GATE_READY_HELP`, `GATE_NOT_PINNED_HELP` and `gate_help` are re-exported
+// and not rendered: this shell puts no tooltip on `Contribute`. That is
+// deliberate rather than an oversight -- they are here so that a screen
+// which later grows one reaches for the shared sentence instead of writing
+// a fourth.
+//
+// COPY-MIGRATED-BEGIN
+//
+// Everything between this marker and COPY-MIGRATED-END is swept by
+// `a_migrated_region_of_copy_rs_holds_no_words_of_its_own`, which reads this
+// file. The region may hold `pub use` and nothing else: a literal left
+// beside a re-export is the word this shell would render while the other
+// two render the shared one.
+pub use trace_commons_contributor::consent_copy::{
+    GATE_NOT_PINNED_HELP, GATE_READY_HELP, GATE_STATEMENT, gate_help,
+};
+// COPY-MIGRATED-END
 
 /// The verdict control's question. Answering it is optional and never
 /// gates `Contribute` -- see [`VERDICT_CAPTION`] for the disclosure that
