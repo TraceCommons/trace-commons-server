@@ -36,7 +36,7 @@ final class PrivateInferenceSurfaceTests: XCTestCase {
         offer: @escaping @Sendable (Bool, Bool) -> Bool = { !$0 && !$1 }
     ) -> PrivateInferenceCalls {
         PrivateInferenceCalls(
-            stateLine: line, stateTone: tone, servingLine: serving, shouldOffer: offer)
+            stateLine: line, stateTone: tone, servingLine: serving, shouldOffer: offer, quitNeedsNotice: { on, _ in on })
     }
 
     func testAPayloadMissingASentenceIsRefusedRatherThanRenderedBlank() {
@@ -145,8 +145,8 @@ final class PrivateInferenceSurfaceTests: XCTestCase {
     /// The quit sentence is added only while the switch is on, and it is the
     /// payload's words rather than this shell's.
     func testTheQuitSentenceIsOnlyAddedWhenTheSwitchIsOn() {
-        XCTAssertNil(PrivateInferenceSurface.quitDetail(on: false, copy: copy()))
-        XCTAssertNil(PrivateInferenceSurface.quitDetail(on: true, copy: nil))
-        XCTAssertEqual(PrivateInferenceSurface.quitDetail(on: true, copy: copy()), "QUIT")
+        XCTAssertNil(PrivateInferenceSurface.quitDetail(on: false, state: .init(label: "", port: nil), copy: copy(), calls: calls()))
+        XCTAssertNil(PrivateInferenceSurface.quitDetail(on: true, state: .init(label: "", port: nil), copy: nil, calls: calls()))
+        XCTAssertEqual(PrivateInferenceSurface.quitDetail(on: true, state: .init(label: "", port: nil), copy: copy(), calls: calls()), "QUIT")
     }
 }

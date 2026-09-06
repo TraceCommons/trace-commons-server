@@ -2218,6 +2218,32 @@ pub extern "C" fn tc_private_inference_copy() -> *mut c_char {
     })
 }
 
+/// Whether quitting may interrupt owned model-call work, including draining.
+/// Unknown/invalid status and caught panics conservatively retain requested_on.
+///
+/// # Safety
+/// `state`, if non-null, must point to a valid, NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tc_private_inference_quit_needs_notice(
+    requested_on: i32,
+    state: *const c_char,
+) -> i32 {
+    guard(|| {
+        let label = if state.is_null() {
+            ""
+        } else {
+            unsafe { borrow_str(state) }.unwrap_or("")
+        };
+        Ok(i32::from(
+            trace_commons_contributor::private_inference_copy::quit_needs_notice(
+                requested_on != 0,
+                label,
+            ),
+        ))
+    })
+    .unwrap_or(i32::from(requested_on != 0))
+}
+
 /// The sentence for one `private_inference_state` label.
 ///
 /// `state` is the `state` field of `get_settings`/`status`'s

@@ -155,8 +155,8 @@ pub const STATE_CRASHED: &str = "Not on. It started and then stopped on its own,
 /// listener inside the same process it now stops that too. A shell appends
 /// this to its own confirmation only when the switch is on -- a contributor
 /// who never turned it on should not be warned about losing it.
-pub const QUIT_ALSO_STOPS: &str = "It also stops answering model calls on this computer, so a tool pointed \
-     here will get no answer until you open this app again.";
+pub const QUIT_ALSO_STOPS: &str = "Quitting also ends any model calls still handled by this app. Tools pointed \
+     here cannot get answers until this app is open and answering.";
 
 /// The reported local port, without claiming readiness, assembled rather than exported as a
 /// template with a hole in it.
@@ -282,6 +282,17 @@ pub fn state_tone(label: &str) -> PrivateInferenceTone {
 #[must_use]
 pub fn should_offer(answered: bool, on: bool) -> bool {
     !answered && !on
+}
+
+/// Whether quitting may end this app's model-call work. Requested off does
+/// not prove cleanup completed; foreign ownership is never this app's work.
+#[must_use]
+pub fn quit_needs_notice(requested_on: bool, label: &str) -> bool {
+    match label {
+        LABEL_OFF | LABEL_RUNNING_ELSEWHERE => false,
+        LABEL_RUNNING | LABEL_RUNNING_NO_BACKENDS | LABEL_STOPPING => true,
+        _ => requested_on,
+    }
 }
 
 /// Every fixed string on this surface, in one payload.
@@ -472,6 +483,57 @@ mod tests {
         assert!(!STATE_OFF.contains("Nothing on this computer"));
         assert!(!STATE_RUNNING_ELSEWHERE.contains("already answering"));
         assert!(!serving_line(Some(8463)).contains("Answering"));
+    }
+
+    #[test]
+    fn emitted_daemon_states_have_copy_and_owned_work_warns_at_quit() {
+        use crate::daemon::private_inference::PrivateInferenceState as State;
+        let states = [
+            State::Off,
+            State::Stopping { port: None },
+            State::Stopping { port: Some(8463) },
+            State::Running { port: 8463 },
+            State::RunningWithoutBackends { port: 8463 },
+            State::RunningElsewhere { port: 8463 },
+            State::Failed {
+                label: LABEL_PORT_IN_USE,
+            },
+            State::Failed {
+                label: LABEL_START_FAILED,
+            },
+            State::Failed {
+                label: LABEL_CRASHED,
+            },
+        ];
+        for state in states {
+            // Exhaustive over actual producer variants: adding a lifecycle
+            // variant requires deciding its copy and quit semantics here.
+            let (line, tone, owned) = match &state {
+                State::Off => (STATE_OFF, PrivateInferenceTone::Neutral, false),
+                State::Stopping { .. } => (STATE_STOPPING, PrivateInferenceTone::Held, true),
+                State::Running { .. } => (STATE_RUNNING, PrivateInferenceTone::Clear, true),
+                State::RunningWithoutBackends { .. } => (
+                    STATE_RUNNING_NO_BACKENDS,
+                    PrivateInferenceTone::Attention,
+                    true,
+                ),
+                State::RunningElsewhere { .. } => {
+                    (STATE_RUNNING_ELSEWHERE, PrivateInferenceTone::Held, false)
+                }
+                State::Failed { label } => {
+                    (state_line(label), PrivateInferenceTone::Refused, false)
+                }
+            };
+            assert_eq!(state_line(state.label()), line);
+            assert_ne!(line, STATE_UNKNOWN);
+            assert_ne!(line, STATE_UNREPORTED);
+            assert_eq!(state_tone(state.label()), tone);
+            assert_eq!(quit_needs_notice(false, state.label()), owned);
+        }
+        assert!(!quit_needs_notice(true, LABEL_RUNNING_ELSEWHERE));
+        assert!(!quit_needs_notice(true, LABEL_OFF));
+        assert!(quit_needs_notice(true, "future_state"));
+        assert!(!quit_needs_notice(false, "future_state"));
     }
 
     /// The offer is asked once, whichever way it was answered, and is not put

@@ -294,9 +294,12 @@ public class PrivateInferenceTests
     public void TheQuitSentenceIsOnlyAddedWhenTheSwitchIsOn()
     {
         PrivateInferenceCopy copy = Copy();
-        Assert.Null(PrivateInferenceSurface.QuitDetail(on: false, copy));
-        Assert.Null(PrivateInferenceSurface.QuitDetail(on: true, null));
-        Assert.Equal(copy.QuitAlsoStops, PrivateInferenceSurface.QuitDetail(on: true, copy));
+        Assert.Null(PrivateInferenceSurface.QuitDetail(on: false, State(string.Empty), copy));
+        Assert.Null(PrivateInferenceSurface.QuitDetail(on: true, State(string.Empty), null));
+        Assert.Equal(copy.QuitAlsoStops, PrivateInferenceSurface.QuitDetail(on: true, State(string.Empty), copy));
+        Assert.Equal(copy.QuitAlsoStops, PrivateInferenceSurface.QuitDetail(false, State("stopping"), copy));
+        Assert.Null(PrivateInferenceSurface.QuitDetail(true, State("running_elsewhere"), copy));
+        Assert.Null(PrivateInferenceSurface.QuitDetail(true, State("off"), copy));
     }
 
     /// <summary>

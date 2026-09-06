@@ -22,13 +22,20 @@ final class PrivateInferenceExportTests: XCTestCase {
         return copy
     }
 
+    func testQuitTracksOwnedWorkRatherThanTheRequestedSwitch() {
+        XCTAssertTrue(TCPrivateInference.quitNeedsNotice(on: false, state: "stopping"))
+        XCTAssertFalse(TCPrivateInference.quitNeedsNotice(on: true, state: "running_elsewhere"))
+        XCTAssertFalse(TCPrivateInference.quitNeedsNotice(on: true, state: "off"))
+    }
+
     private func calls() -> PrivateInferenceCalls {
         // The production wiring, verbatim.
         PrivateInferenceCalls(
             stateLine: { TCPrivateInference.stateLine(state: $0) },
             stateTone: { TCPrivateInference.stateTone(state: $0) },
             servingLine: { TCPrivateInference.servingLine(port: $0) },
-            shouldOffer: { TCPrivateInference.shouldOffer(answered: $0, on: $1) }
+            shouldOffer: { TCPrivateInference.shouldOffer(answered: $0, on: $1) },
+            quitNeedsNotice: { TCPrivateInference.quitNeedsNotice(on: $0, state: $1) }
         )
     }
 

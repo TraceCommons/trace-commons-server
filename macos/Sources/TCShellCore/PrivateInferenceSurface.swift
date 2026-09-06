@@ -132,17 +132,20 @@ public struct PrivateInferenceCalls: Sendable {
     public let stateTone: @Sendable (String) -> Int32
     public let servingLine: @Sendable (UInt16?) -> String?
     public let shouldOffer: @Sendable (Bool, Bool) -> Bool
+    public let quitNeedsNotice: @Sendable (Bool, String) -> Bool
 
     public init(
         stateLine: @escaping @Sendable (String) -> String?,
         stateTone: @escaping @Sendable (String) -> Int32,
         servingLine: @escaping @Sendable (UInt16?) -> String?,
-        shouldOffer: @escaping @Sendable (Bool, Bool) -> Bool
+        shouldOffer: @escaping @Sendable (Bool, Bool) -> Bool,
+        quitNeedsNotice: @escaping @Sendable (Bool, String) -> Bool
     ) {
         self.stateLine = stateLine
         self.stateTone = stateTone
         self.servingLine = servingLine
         self.shouldOffer = shouldOffer
+        self.quitNeedsNotice = quitNeedsNotice
     }
 }
 
@@ -227,8 +230,8 @@ public enum PrivateInferenceSurface {
     /// be warned about losing it. The words are the payload's, never this
     /// shell's -- the rest of that dialog is Swift-authored, and this
     /// sentence deliberately is not.
-    public static func quitDetail(on: Bool, copy: PrivateInferenceCopy?) -> String? {
-        guard on, let copy else { return nil }
+    public static func quitDetail(on: Bool, state: PrivateInferenceState, copy: PrivateInferenceCopy?, calls: PrivateInferenceCalls) -> String? {
+        guard calls.quitNeedsNotice(on, state.label), let copy else { return nil }
         return copy.quitAlsoStops
     }
 }

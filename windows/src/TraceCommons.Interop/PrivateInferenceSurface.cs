@@ -203,8 +203,8 @@ public static class PrivateInferenceSurface
     /// on, or null. Null when it is off: a contributor who never turned it on
     /// should not be warned about losing it.
     /// </summary>
-    public static string? QuitDetail(bool on, PrivateInferenceCopy? copy) =>
-        on && copy is not null ? copy.QuitAlsoStops : null;
+    public static string? QuitDetail(bool on, PrivateInferenceState state, PrivateInferenceCopy? copy) =>
+        NativeMethods.tc_private_inference_quit_needs_notice(on ? 1 : 0, state.Label) != 0 && copy is not null ? copy.QuitAlsoStops : null;
 
     /// <summary>
     /// The ABI value, spelled out rather than cast.

@@ -155,7 +155,8 @@ final class AppModel: ObservableObject {
         stateLine: { TCPrivateInference.stateLine(state: $0) },
         stateTone: { TCPrivateInference.stateTone(state: $0) },
         servingLine: { TCPrivateInference.servingLine(port: $0) },
-        shouldOffer: { TCPrivateInference.shouldOffer(answered: $0, on: $1) }
+        shouldOffer: { TCPrivateInference.shouldOffer(answered: $0, on: $1) },
+        quitNeedsNotice: { TCPrivateInference.quitNeedsNotice(on: $0, state: $1) }
     )
 
     /// What the listener is doing, from the daemon's own report.
@@ -165,6 +166,11 @@ final class AppModel: ObservableObject {
     var privateInferenceState: PrivateInferenceState {
         daemonSettings?.privateInferenceState?.surfaceState
             ?? PrivateInferenceState(label: "", port: nil)
+    }
+
+    var privateInferenceQuitDetail: String? {
+        PrivateInferenceSurface.quitDetail(on: daemonSettings?.privateInferenceOn ?? false,
+            state: privateInferenceState, copy: privateInferenceCopy, calls: privateInferenceCalls)
     }
 
     /// Whether to put the offer in front of the contributor right now.
