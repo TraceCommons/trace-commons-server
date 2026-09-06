@@ -2322,14 +2322,17 @@ fn the_state_tone_branch_table_crosses_the_abi_and_agrees_with_the_sentence() {
     assert_ne!(tone("token_unreadable"), TONE_HELD);
     assert_ne!(tone("token_unreadable"), TONE_NEUTRAL);
 
-    for state in [
-        "not_declared",
-        "awaiting_rows",
-        "rows_seen",
-        "token_unreadable",
-        "",
-        "ROWS_SEEN",
-        "a_state_from_a_later_daemon",
+    for (state, expected_line) in [
+        ("not_declared", copy::IRONWIRE_STATE_OFF),
+        ("awaiting_rows", copy::IRONWIRE_STATE_WAITING),
+        ("rows_seen", copy::IRONWIRE_STATE_READING),
+        ("token_unreadable", copy::IRONWIRE_STATE_TOKEN_UNREADABLE),
+        // Empty input keeps the documented legacy behavior; nonempty
+        // unknown labels must not imply Off or diagnose a token failure.
+        ("", copy::IRONWIRE_STATE_OFF),
+        ("unknown", copy::IRONWIRE_STATE_UNKNOWN),
+        ("ROWS_SEEN", copy::IRONWIRE_STATE_UNKNOWN),
+        ("a_state_from_a_later_daemon", copy::IRONWIRE_STATE_UNKNOWN),
     ] {
         let expected = match copy::ironwire_state_tone(state) {
             copy::StateTone::Neutral => TONE_NEUTRAL,
@@ -2338,10 +2341,13 @@ fn the_state_tone_branch_table_crosses_the_abi_and_agrees_with_the_sentence() {
             copy::StateTone::Attention => TONE_ATTENTION,
         };
         assert_eq!(tone(state), expected, "{state:?}");
-        // The tone and the sentence are one decision across the boundary.
+        assert_eq!(state_line(state), expected_line, "{state:?}");
+        // Neutral is a presentation category, not proof of Off. Both Off
+        // and unavailable are neutral, but their sentences remain distinct.
         assert_eq!(
             tone(state) == TONE_NEUTRAL,
-            state_line(state) == copy::IRONWIRE_STATE_OFF,
+            expected_line == copy::IRONWIRE_STATE_OFF
+                || expected_line == copy::IRONWIRE_STATE_UNKNOWN,
             "{state:?}"
         );
     }
