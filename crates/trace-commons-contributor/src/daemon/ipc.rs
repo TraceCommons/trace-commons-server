@@ -2053,12 +2053,15 @@ fn handle_set_settings(shared: &DaemonShared, req: &Request) -> Response {
     // settings override) uses, so there is one definition of "a
     // valid settings object" for both. See its doc for why an
     // unrecognized key is rejected rather than ignored.
-    match super::settings::apply_settings_object(&mut settings, &req.params) {
+    // Rejected or unpersisted values must never reach the supervisor.
+    let mut candidate = settings.clone();
+    match super::settings::apply_settings_object(&mut candidate, &req.params) {
         Ok(false) => Response::err(req.id, ERR_BAD_PARAMS, "no-known-setting-supplied"),
         Ok(true) => {
-            if let Err(_e) = settings.save(&shared.store) {
+            if let Err(_e) = candidate.save(&shared.store) {
                 return Response::err(req.id, ERR_UNAVAILABLE, "settings-write-failed");
             }
+            *settings = candidate;
             if settings.private_inference != private_inference_before {
                 shared
                     .private_inference_generation
@@ -7002,6 +7005,56 @@ mod tests {
             s.finish_private_inference_stop(std::time::Duration::from_secs(2))
                 .await
         );
+    }
+
+    #[tokio::test]
+    async fn rejected_private_inference_settings_never_reach_reconcile() {
+        let s = shared();
+        let home = tempfile::tempdir().unwrap();
+        let absent_home = home.path().join("never-created");
+        *s.private_inference.lock().await = Some(
+            super::super::private_inference::PrivateInference::with_port(absent_home.clone(), 0),
+        );
+        let response = handle_set_settings_async(
+            &s,
+            &req(
+                "set_settings",
+                serde_json::json!({"private_inference": true, "zz_unknown": true}),
+            ),
+        )
+        .await;
+        assert!(response.error.is_some());
+        assert!(!s.settings.lock().unwrap().private_inference);
+        assert!(!DaemonSettings::load(&s.store).unwrap().private_inference);
+        s.reconcile_private_inference().await;
+        assert_eq!(s.private_inference_value()["state"], "off");
+        assert!(!absent_home.exists());
+    }
+
+    #[tokio::test]
+    async fn unpersisted_private_inference_opt_in_never_reaches_reconcile() {
+        let s = shared();
+        let home = tempfile::tempdir().unwrap();
+        let absent_home = home.path().join("never-created");
+        *s.private_inference.lock().await = Some(
+            super::super::private_inference::PrivateInference::with_port(absent_home.clone(), 0),
+        );
+        let path = s.store.daemon_path(crate::config::DAEMON_SETTINGS_FILE);
+        std::fs::create_dir_all(&path).unwrap();
+        let response = handle_set_settings_async(
+            &s,
+            &req(
+                "set_settings",
+                serde_json::json!({"private_inference": true}),
+            ),
+        )
+        .await;
+        assert_eq!(response.error.unwrap().message, "settings-write-failed");
+        assert!(!s.settings.lock().unwrap().private_inference);
+        s.reconcile_private_inference().await;
+        assert_eq!(s.private_inference_value()["state"], "off");
+        assert!(!absent_home.exists());
+        assert!(path.is_dir());
     }
 
     /// The switch is a settable key, it persists, and it is off until
