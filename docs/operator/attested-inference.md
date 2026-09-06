@@ -397,6 +397,41 @@ The receipt's own `signature_kind` selects **one** key source and never both.
 A gateway receipt is not checked against a model key, nor the reverse; a kind
 that is not recognised, or absent, names no source and the receipt is refused.
 
+### A gateway receipt attests the bytes, not the model
+
+Say this out loud before enabling the gateway pin, because it changes what a
+certificate means.
+
+A gateway receipt's signed text is the two-part `{requestHash}:{responseHash}`
+— no model in it. So nothing compares the declared model against anything:
+`verify_receipt` returns no bound model, and neither the client nor the witness
+has a name to check. The gateway key is a **single key shared across every
+hosted model**, so it cannot tell them apart either.
+
+The consequence: a contributor holding a genuine gateway receipt for a cheap
+model can declare that exchange as **any other model**, and both the client and
+a gateway-pinned witness accept it. The signature is real and the bytes are
+exactly the bytes; the model label beside them is an unattested claim.
+
+Under model pins alone this could not arise, because a receipt binding no model
+was always refused. **Enabling gateway pins is the first configuration in which
+an attested receipt carries no model claim at all.**
+
+This is inherent to NEAR AI's receipt format and is not fixable in our code.
+What follows from it:
+
+- A gateway-pinned witness attests the request and response **bytes**. It does
+  **not** attest the model.
+- **Any downstream consumer that keys credit, scoring, pricing or eligibility
+  off the declared model must not treat a gateway receipt as evidence of that
+  model.** Credit scoring, per-model rate tiers and anything reading
+  `served_model` on an attested trace are all in scope here. A gateway receipt
+  is evidence about bytes only.
+- A deployment that genuinely needs the model attested has to require the
+  chat-completions path, whose three-part receipt signs the model name — and
+  that means not accepting Codex traffic, since Codex speaks only the Responses
+  API. That is a product trade-off, not something the witness can decide.
+
 ### The witness side of the same keys
 
 A witness pins the two kinds separately, and the receipt's `signature_kind`

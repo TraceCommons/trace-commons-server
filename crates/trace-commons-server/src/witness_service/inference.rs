@@ -346,6 +346,14 @@ pub fn parse_gateway_key_pins(spec: &str) -> Result<Vec<String>, GatewayKeyPinMa
     let mut keys: Vec<String> = Vec::new();
     for element in spec.split(',') {
         let element = element.trim();
+        // An empty element is skipped, not refused, so `key,,key` and a
+        // trailing comma parse. Deliberate, and the same rule
+        // `parse_model_key_pins` follows: a wrapped or hand-edited
+        // environment value collects stray separators, and those are
+        // punctuation rather than a claim about a key. What this cannot
+        // become is a witness that appears configured and pins nothing --
+        // the empty-set check below refuses a spec that was *only*
+        // separators, so `,,` and `""` are still startup failures.
         if element.is_empty() {
             continue;
         }
@@ -2368,6 +2376,22 @@ mod tests {
         assert_eq!(
             parse_gateway_key_pins(&repeated).expect("repeats"),
             vec![ed25519_key_hex(MODEL_A_SEED_HEX)]
+        );
+
+        // Stray separators are punctuation, not a claim about a key: a
+        // doubled comma and a trailing one parse to the same set. A spec
+        // that is *only* separators still fails, which is the case below.
+        let stray = format!(
+            ",{},,{},",
+            ed25519_key_hex(MODEL_A_SEED_HEX),
+            ed25519_key_hex(MODEL_B_SEED_HEX)
+        );
+        assert_eq!(
+            parse_gateway_key_pins(&stray).expect("stray separators"),
+            vec![
+                ed25519_key_hex(MODEL_A_SEED_HEX),
+                ed25519_key_hex(MODEL_B_SEED_HEX)
+            ]
         );
 
         for bad in [

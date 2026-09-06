@@ -779,6 +779,42 @@ by is the one in the **receipt's own signed text**
 `gateway` receipt binds no model — the gateway signs for whatever was served —
 so its pin is a bare key list with nothing to look up.
 
+#### A gateway receipt attests the bytes, not the model
+
+This is a **threat-model consequence**, not a formatting detail, and enabling
+the gateway pin is the first configuration in which it arises. Read it before
+you set the variable.
+
+A gateway receipt's signed text is the two-part `{requestHash}:{responseHash}`.
+There is no model in it, so `verify_receipt` returns no bound model and the
+declared model is compared against nothing — not by the client, not by the
+witness. The gateway key is a **single key shared across every hosted model**,
+so it cannot distinguish them either: the same key signs whatever the Responses
+API served.
+
+The consequence, stated plainly: a contributor holding a genuine gateway
+receipt for a cheap model can declare that exchange as **any other model**, and
+both the client and a gateway-pinned witness will accept it. The receipt is
+real, the signature verifies, the bytes are exactly the bytes — and the model
+label beside them is an unattested claim.
+
+Under model pins alone this could not happen, because a receipt binding no
+model was always refused. Turning on the gateway pin is what admits an attested
+receipt that carries no model claim at all.
+
+This is inherent to NEAR AI's receipt format and **cannot be fixed here**. What
+follows from it:
+
+- A gateway-pinned witness attests the request and response **bytes**. It does
+  **not** attest the model.
+- Any downstream consumer that keys credit, scoring, pricing or eligibility off
+  the **declared** model must not treat a gateway receipt as evidence of that
+  model. The receipt is evidence about bytes only.
+- A deployment that needs the model attested must require the chat-completions
+  path, whose three-part receipt signs the model name — which means not
+  accepting Codex traffic, since Codex speaks only the Responses API. That is a
+  product trade-off, and this witness cannot make it for you.
+
 The receipt's own `signature_kind` selects **one** set and never both. A
 gateway receipt is not tried against a model key, nor the reverse: accepting
 either would mean a key attested for one role could vouch for the other. A
@@ -837,6 +873,32 @@ empty pin list.
 The `select(...)` line is the binding check, and it is the reason for the
 nonce: without it you are pinning a key some report once listed, rather than
 one attested against a value you chose.
+
+#### Upgrade order: three steps, and the order is load-bearing
+
+Do this before deriving anything. Getting it wrong refuses live submissions
+under the folded label, which is hard to diagnose from outside.
+
+1. **Deploy the new witness with BOTH pin variables unset.** Unset means
+   dormant: an offered receipt still has to verify against the key it names,
+   and nothing is refused for its kind. This step upgrades the code that can
+   *read* `signature_kind` without yet enforcing anything with it.
+2. **Upgrade the contributor clients.** Only a client at this version sends
+   `signature_kind` on the wire. This step must follow step 1 because the
+   witness request body is `deny_unknown_fields`: an older witness refuses a
+   body carrying the new field outright.
+3. **Then set the pins.** Only now is it safe to enforce, because a witness
+   that pins **either** kind refuses a receipt whose kind it cannot place —
+   and an un-upgraded client sends no `signature_kind` at all, which reads as
+   `Unrecognised`, resolves to an empty key set, and is refused. Setting the
+   pins before every client is upgraded refuses those clients' submissions.
+
+"Witness first, then clients" alone is **not** sufficient: it is necessary for
+step 2, and step 3 is a separate gate on the same rollout.
+
+Steps 1 and 3 are separate deployments of the witness. In the committed compose
+the pins live inside the measurement, so step 3 moves the measurement and needs
+re-allowlisting everywhere it is pinned — plan it as its own change.
 
 #### Deriving the gateway pin
 
