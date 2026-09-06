@@ -762,6 +762,12 @@ public sealed class ContributorSettingsViewModel : INotifyPropertyChanged
     public bool PrivateInferenceStateIsRefused =>
         PrivateInferenceStateTone == PrivateInferenceTone.Refused;
 
+    /// <summary>
+    /// Takes what the daemon reported. This card draws the SWITCH and the
+    /// line beneath it, never the offer: the offer belongs on the screen the
+    /// app opens on, and MainViewModel owns it -- together with the
+    /// has-the-daemon-answered guard a second copy here would not have had.
+    /// </summary>
     private void FillPrivateInference(DaemonSettingsSnapshot settings)
     {
         _privateInferenceOn = settings.PrivateInferenceOn;
@@ -777,14 +783,6 @@ public sealed class ContributorSettingsViewModel : INotifyPropertyChanged
         Raise(nameof(PrivateInferenceStateIsAttention));
         Raise(nameof(PrivateInferenceStateIsRefused));
     }
-
-    /// <summary>
-    /// Whether the offer belongs in front of the contributor right now.
-    /// Asked of the shared table, never decided here.
-    /// </summary>
-    public bool ShouldOfferPrivateInference =>
-        _privateInferenceCopy is not null
-        && PrivateInferenceSurface.ShouldOffer(_privateInferenceAnswered, _privateInferenceOn);
 
     /// <summary>
     /// Writes the switch and renders from the daemon's echo, never
@@ -838,40 +836,6 @@ public sealed class ContributorSettingsViewModel : INotifyPropertyChanged
         finally
         {
             IsBusy = false;
-        }
-    }
-
-    /// <summary>
-    /// Records the contributor's answer to the offer, starting the listener
-    /// only if they said yes.
-    /// </summary>
-    public async Task AnswerPrivateInferenceOfferAsync(bool accepted)
-    {
-        if (_privateInferenceCopy is null)
-        {
-            return;
-        }
-
-        try
-        {
-            DaemonResponse response = await _host
-                .CallAsync(
-                    DaemonProtocol.Methods.SetSettings,
-                    PrivateInferenceSurface.SerializeOfferAnswer(accepted))
-                .ConfigureAwait(true);
-            if (response.ResultAs<DaemonSettingsSnapshot>() is { } settings)
-            {
-                FillPrivateInference(settings);
-            }
-        }
-        catch
-        {
-            // The offer stays up and is asked again on the next refresh: an
-            // unrecorded answer is not an answer.
-        }
-        finally
-        {
-            Raise(nameof(ShouldOfferPrivateInference));
         }
     }
 

@@ -535,9 +535,25 @@ public class PrivateInferenceTests
             body[..guardReturn],
             StringComparison.Ordinal);
 
+        // The refusal path proper: a well-formed error frame. The call
+        // returned, so neither the guard nor the catch fires, and
+        // FillPrivateInference is never reached -- which is precisely the
+        // case where the daemon said no and the toggle is still sitting where
+        // the contributor put it.
+        int elseAt = body.IndexOf("else", StringComparison.Ordinal);
+        Assert.True(elseAt >= 0, "the error frame is no longer handled");
         int catchAt = body.IndexOf("catch", StringComparison.Ordinal);
         Assert.True(catchAt >= 0, "the write no longer catches");
+        Assert.True(elseAt < catchAt, "the else being asserted is not the one inside the try");
+        Assert.Contains(raise, body[elseAt..catchAt], StringComparison.Ordinal);
+
         Assert.Contains(raise, body[catchAt..], StringComparison.Ordinal);
+
+        // All three, and no more: every path out of this method either wrote
+        // the value or corrected it.
+        Assert.Equal(
+            3,
+            Regex.Matches(body, Regex.Escape(raise)).Count);
     }
 
     /// <summary>
