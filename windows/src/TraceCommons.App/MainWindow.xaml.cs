@@ -557,6 +557,8 @@ public sealed partial class MainWindow : Window
             _activationDaemonAvailable, _onboarding is not null);
         if (decision.Notice is string notice)
         {
+            // Notices live on the queue pane, including a link opened from Settings.
+            ViewModel.ShowQueue();
             ViewModel.ShowNotice(notice);
         }
         if (decision.Invite is not string invite)
