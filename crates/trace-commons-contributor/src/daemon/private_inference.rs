@@ -14,8 +14,9 @@
 //!
 //! # An IronWire this daemon did not start is left alone
 //!
-//! A pointer in the home that still answers means some other process owns
-//! this home. That is [`PrivateInferenceState::RunningElsewhere`]: nothing is
+//! A responding pointer is advisory and causes us to leave that endpoint
+//! alone; it does not authenticate the service or prove home ownership.
+//! A held exclusive home lock also refuses startup. These are [`PrivateInferenceState::RunningElsewhere`]: nothing is
 //! bound, nothing is stopped, and the existing instance keeps serving. A
 //! contributor's own proxy is not something to fight for a port.
 //!
@@ -27,6 +28,7 @@
 //! state -- [`PrivateInferenceState::RunningWithoutBackends`] -- with its own
 //! label on the wire.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -37,6 +39,7 @@ use ironwire_proxy::embed::{self, EmbedError, EmbeddedProxy, ExitError};
 /// This runs on the daemon's poll tick, so it must be short enough that a
 /// pointer naming a port nothing answers cannot stall the pass.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_POINTER_BYTES: u64 = 64 * 1024;
 
 /// Nothing has been asked for, or the switch was turned off.
 pub const LABEL_OFF: &str = "off";
@@ -44,7 +47,7 @@ pub const LABEL_OFF: &str = "off";
 pub const LABEL_RUNNING: &str = "running";
 /// This daemon owns a proxy whose backend registry is empty.
 pub const LABEL_RUNNING_NO_BACKENDS: &str = "running_no_backends";
-/// Some other process owns the IronWire home and is answering on it.
+/// A pointer responds or the exclusive home lock is held; readiness is unproven.
 pub const LABEL_RUNNING_ELSEWHERE: &str = "running_elsewhere";
 /// Something that is not this daemon's proxy holds the port.
 pub const LABEL_PORT_IN_USE: &str = "port_in_use";
@@ -69,8 +72,8 @@ pub enum PrivateInferenceState {
         /// The bound loopback port.
         port: u16,
     },
-    /// Someone else's IronWire owns the home and answers on `port`. This
-    /// daemon bound nothing and stopped nothing.
+    /// A pointer responds or the home lock is held. This daemon bound nothing
+    /// and stopped nothing; the response alone is not identity or readiness proof.
     RunningElsewhere {
         /// The port the existing instance published.
         port: u16,
@@ -165,25 +168,45 @@ struct Pointer {
 
 /// The loopback port a pointer in `home` names, if it names one.
 fn pointed_port(home: &Path) -> Option<u16> {
-    let body = std::fs::read_to_string(home.join("endpoint.json")).ok()?;
-    let pointer: Pointer = serde_json::from_str(&body).ok()?;
-    let url = url::Url::parse(&pointer.control_url).ok()?;
-    let host = url.host_str()?;
-    if !matches!(host, "127.0.0.1" | "localhost" | "::1") {
+    let path = home.join("endpoint.json");
+    let metadata = super::ironwire_pointer::trustworthy_file(&path)?;
+    if metadata.len() > MAX_POINTER_BYTES {
         return None;
     }
-    url.port_or_known_default()
+    // Bound the read itself too: the file can grow after the metadata check.
+    let mut body = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(MAX_POINTER_BYTES + 1)
+        .read_to_end(&mut body)
+        .ok()?;
+    if body.len() as u64 > MAX_POINTER_BYTES {
+        return None;
+    }
+    let pointer: Pointer = serde_json::from_slice(&body).ok()?;
+    let url = url::Url::parse(&pointer.control_url).ok()?;
+    let host = url.host_str()?;
+    if url.scheme() != "http"
+        || !matches!(host, "127.0.0.1" | "localhost" | "[::1]")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    url.port_or_known_default().filter(|port| *port != 0)
 }
 
-/// The port of an IronWire owning this home that is not ours, if there is
-/// one.
-///
-/// Called only when this daemon holds no proxy of its own, so anything
-/// answering here belongs to someone else by construction -- there is no
-/// token to compare, because we have not minted one.
+/// An advisory response on the pointer's loopback port, not identity proof.
+/// No token is read or sent. A response conservatively avoids takeover; only
+/// IronWire's exclusive home lock is authoritative about ownership on start.
 async fn existing_instance(home: &Path) -> Option<u16> {
     let port = pointed_port(home)?;
     let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(PROBE_TIMEOUT)
         .build()
         .ok()?;
@@ -428,6 +451,169 @@ impl PrivateInference {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_pointer_is_bounded_and_accepts_only_plain_loopback_roots() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("endpoint.json");
+        for url in [
+            "https://127.0.0.1:1234",
+            "http://example.com:1234",
+            "http://user:secret@127.0.0.1:1234",
+            "http://127.0.0.1:1234/path",
+            "http://127.0.0.1:1234?query",
+            "http://127.0.0.1:1234#fragment",
+            "http://127.0.0.1:0",
+        ] {
+            std::fs::write(&path, serde_json::json!({"control_url":url}).to_string()).unwrap();
+            assert_eq!(pointed_port(home.path()), None, "{url}");
+        }
+        for url in [
+            "http://127.0.0.1:1234",
+            "http://localhost:1234/",
+            "http://[::1]:1234",
+        ] {
+            std::fs::write(&path, serde_json::json!({"control_url":url}).to_string()).unwrap();
+            assert_eq!(pointed_port(home.path()), Some(1234));
+        }
+        let mut bounded = br#"{"control_url":"http://127.0.0.1:1234"}"#.to_vec();
+        bounded.resize(MAX_POINTER_BYTES as usize, b' ');
+        std::fs::write(&path, &bounded).unwrap();
+        assert_eq!(pointed_port(home.path()), Some(1234));
+        bounded.push(b' ');
+        std::fs::write(&path, &bounded).unwrap();
+        assert_eq!(pointed_port(home.path()), None);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert_eq!(pointed_port(home.path()), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_pointer_refuses_symlinks_and_other_writers() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("endpoint.json");
+        let target = home.path().join("real.json");
+        std::fs::write(&target, r#"{"control_url":"http://127.0.0.1:1234"}"#).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert_eq!(pointed_port(home.path()), None);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::rename(&target, &path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert_eq!(pointed_port(home.path()), None);
+    }
+
+    #[tokio::test]
+    async fn discovery_probe_never_follows_a_health_redirect() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let hits = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&hits);
+        let target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_port = target.local_addr().unwrap().port();
+        let target_task = tokio::spawn(async move {
+            axum::serve(
+                target,
+                axum::Router::new().fallback(move || {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    async { axum::http::StatusCode::OK }
+                }),
+            )
+            .await
+            .unwrap();
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let task = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                axum::Router::new().fallback(move || async move {
+                    (
+                        axum::http::StatusCode::FOUND,
+                        [(
+                            axum::http::header::LOCATION,
+                            format!("http://127.0.0.1:{target_port}/outside"),
+                        )],
+                    )
+                }),
+            )
+            .await
+            .unwrap();
+        });
+        let home = tempfile::tempdir().unwrap();
+        write_pointer(home.path(), port);
+        assert_eq!(existing_instance(home.path()).await, None);
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        task.abort();
+        target_task.abort();
+    }
+
+    #[test]
+    fn discovery_probe_ignores_environment_proxy_in_isolated_process() {
+        const CHILD: &str = "TC_PRIVATE_PROBE_CHILD_HOME";
+        if let Some(home) = std::env::var_os(CHILD) {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            assert!(
+                runtime
+                    .block_on(existing_instance(Path::new(&home)))
+                    .is_some()
+            );
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        write_pointer(home.path(), listener.local_addr().unwrap().port());
+        let responder = std::thread::spawn(move || {
+            use std::io::Write;
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut request = [0; 1024];
+                    let _ = stream.read(&mut request);
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .unwrap();
+                    return true;
+                }
+                if std::time::Instant::now() >= deadline {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "daemon::private_inference::tests::discovery_probe_ignores_environment_proxy_in_isolated_process", "--nocapture"])
+            .env(CHILD, home.path())
+            .env("HTTP_PROXY", "http://127.0.0.1:1")
+            .env("http_proxy", "http://127.0.0.1:1")
+            .env("ALL_PROXY", "http://127.0.0.1:1")
+            .env("all_proxy", "http://127.0.0.1:1")
+            .env("NO_PROXY", "")
+            .env("no_proxy", "")
+            .output().unwrap();
+        let answered = responder.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            answered,
+            "the direct loopback service must receive the health request"
+        );
+    }
 
     /// The pointer IronWire publishes in its home, as a test writes it.
     fn write_pointer(home: &Path, port: u16) {

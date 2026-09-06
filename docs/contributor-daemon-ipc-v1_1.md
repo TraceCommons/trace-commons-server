@@ -1584,10 +1584,16 @@ on `get_settings`, `set_settings` and `status`. It is an object,
 | `off` | the switch is off and nothing is bound | `null` |
 | `running` | this daemon's proxy is serving and has a backend registered | the bound port |
 | `running_no_backends` | this daemon's proxy is serving but no backend is configured, so nothing will route through it | the bound port |
-| `running_elsewhere` | an IronWire this daemon did not start owns the home and is answering; nothing was bound and nothing was stopped | the existing instance's port |
+| `running_elsewhere` | a loopback discovery pointer responds, or the exclusive home lock is held; nothing was bound or stopped, and readiness is not established | the published port, or requested port when the lock owner has not published one |
 | `port_in_use` | something that is not this daemon's proxy holds the port | `null` |
 | `start_failed` | the proxy refused to start for any other reason | `null` |
 | `crashed` | a proxy this daemon started ended without being asked to | `null` |
+
+Existing-instance discovery reads at most 64 KiB from a regular, trusted pointer
+file and probes only the fixed loopback health path. The probe sends no token,
+ignores environment proxies, and never follows redirects. A successful health
+response is advisory: it conservatively avoids takeover but does not authenticate
+the endpoint. The exclusive home lock remains authoritative when starting.
 
 `running_no_backends` is deliberately not `running`: the proxy answers its
 health endpoint and no inference can pass through it, so a client that
