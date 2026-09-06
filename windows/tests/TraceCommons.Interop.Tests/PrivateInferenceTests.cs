@@ -556,6 +556,18 @@ public class PrivateInferenceTests
             Regex.Matches(body, Regex.Escape(raise)).Count);
     }
 
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public void MethodBodyAcceptsBothCheckoutLineEndings(string newline)
+    {
+        string source = string.Join(newline, new[]
+        {
+            "    public void Example()", "    {", "        return;", "    }", ""
+        });
+        Assert.Contains("return;", MethodBody(source, "public void Example("));
+    }
+
     /// <summary>
     /// The body of one method, from its signature to the line that closes it
     /// at method indentation. Crude on purpose: it is reading C# this suite
@@ -564,6 +576,9 @@ public class PrivateInferenceTests
     /// </summary>
     private static string MethodBody(string source, string signature)
     {
+        // Git checks source fixtures out with CRLF on Windows. The guard
+        // examines C# structure, not the checkout's line-ending convention.
+        source = source.Replace("\r\n", "\n", StringComparison.Ordinal);
         int start = source.IndexOf(signature, StringComparison.Ordinal);
         Assert.True(start >= 0, $"{signature} is gone from the view model");
         int end = source.IndexOf("\n    }\n", start, StringComparison.Ordinal);
