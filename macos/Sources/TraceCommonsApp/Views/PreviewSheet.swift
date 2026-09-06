@@ -146,9 +146,8 @@ struct PreviewSheet: View {
             footer
         }
         // The spec's canvas is the floor, not the fixed size: the transcript
-        // and search tabs are the ones a person reads, and a sheet that
-        // could not be dragged larger on a 27-inch display was the most
-        // common complaint about them. Ideal keeps the first presentation at
+        // and search tabs can use the additional reading space. Ideal
+        // keeps the first presentation at
         // the spec measure and the screenshot hook renders at exactly it.
         .frame(
             minWidth: SheetMetric.width, idealWidth: SheetMetric.width, maxWidth: .infinity,
@@ -167,6 +166,7 @@ struct PreviewSheet: View {
             .opacity(0)
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)
+            .focusable(false)
         }
         .tcScreen()
         .task(id: entry.entryID) {
