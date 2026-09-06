@@ -5,15 +5,23 @@ inference it records **actually happened** — a per-request receipt from the
 provider, verified inside the redaction witness enclave against the verbatim
 request and response bodies, before redaction destroys them.
 
-It ships **dormant** in 0.9.0 and it is dormant on purpose. This runbook is
+It shipped **dormant** in 0.9.0, on purpose. This runbook is
 how an operator takes it from dormant to enforced, what each switch costs,
 and how to get back.
 
-> **Read before enabling.** As of this writing the path has not been run end
-> to end against a live proxy, a live receipt endpoint and a live witness
-> together. The `app-v0.9.0` release notes say so, and no run record exists
-> under `docs/superpowers/reports/`. Treat the first enablement as an
-> experiment with predicted failure modes, not as a rollout.
+> **Read before enabling.** The path has been exercised in part, not end to
+> end. A run on 2026-09-06 confirmed live: a proxy serving a hosted model
+> unsubstituted, session correlation, body capture, and a receipt whose
+> signer verifies against the key the attestation report actually attests —
+> for both receipt kinds. What has **not** been run is the remainder: the
+> submit, the witness call, and the check that the stored envelope carries
+> no request or response body. That last check is the whole privacy
+> argument and has never been made directly, so treat the first enablement
+> as an experiment with predicted failure modes, not as a rollout.
+>
+> The run record, including the four corrections it forced to receipt
+> verification, is
+> [`../superpowers/reports/2026-09-06-attested-inference-first-run.md`](../superpowers/reports/2026-09-06-attested-inference-first-run.md).
 
 Related runbooks, all of which this one assumes rather than repeats:
 
