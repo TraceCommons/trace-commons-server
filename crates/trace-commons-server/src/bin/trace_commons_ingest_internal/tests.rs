@@ -2674,8 +2674,10 @@ async fn account_middleware_preserves_dual_auth_semantics() {
     let cookie_ok = rotation_test_get_passkeys(&state, &cookie_value).await;
     assert_eq!(cookie_ok.status(), StatusCode::OK, "cookie auth -> 200");
 
-    // Bearer path -> 200.
-    let bearer_ok = app(state.clone())
+    // Bearer path -> 401. A device upload claim is not an account credential
+    // (`account_ctx_refuses_a_device_bearer`); the middleware still has to reach
+    // that refusal rather than 500 or fall through to the cookie branch.
+    let bearer_refused = app(state.clone())
         .oneshot(
             axum::http::Request::builder()
                 .method("GET")
@@ -2686,7 +2688,11 @@ async fn account_middleware_preserves_dual_auth_semantics() {
         )
         .await
         .expect("response");
-    assert_eq!(bearer_ok.status(), StatusCode::OK, "bearer auth -> 200");
+    assert_eq!(
+        bearer_refused.status(),
+        StatusCode::UNAUTHORIZED,
+        "bearer auth -> 401"
+    );
 
     // Both credentials -> 400 ambiguous.
     let both = app(state.clone())
@@ -26775,8 +26781,17 @@ async fn postgres_rls_drill_records_readiness_smoke_evidence() {
             .any(|event| {
                 event.kind == "rollout_smoke_evidence"
                     && event.reason.as_deref().is_some_and(|reason| {
+                        // The recorded status tracks the runtime role, exactly as
+                        // asserted on `recorded_evidence` above: a connection that
+                        // bypasses RLS (a local superuser, commonly) is correctly
+                        // reported as failed, and pinning "passed" here would only
+                        // pass on a database the drill says is not ready.
                         reason.contains("check_name=postgres_rls_readiness")
-                            && reason.contains("status=passed")
+                            && reason.contains(if runtime_role_safe {
+                                "status=passed"
+                            } else {
+                                "status=failed"
+                            })
                     })
             })
     );
@@ -77385,12 +77400,17 @@ async fn gate_blocks_weak_remove_until_back_to_bootstrap() {
     cleanup_pg_trace_tenant(backend.as_ref(), tenant).await;
 }
 
-/// BEARER = WEAK: a device-bearer-authenticated request is treated as a WEAK
-/// session (`client_kind='device'`), so it is gated exactly like a device-link
-/// cookie when the account already holds a strong authenticator (403), and the
-/// carve-out lets it add the FIRST authenticator (200).
+/// REDEEMED LINK = WEAK: a session redeemed from a device login-link is a WEAK
+/// session (`client_kind='device'`), so it is gated when the account already
+/// holds a strong authenticator (403), and the carve-out lets it add the FIRST
+/// authenticator (200).
+///
+/// This used to drive the same gate from a raw device bearer. That is no longer
+/// a route to an account context at all -- see `account_ctx_refuses_a_device_bearer`
+/// -- so the weakest credential that still reaches these handlers is the
+/// redeemed link cookie, and that is what the gate has to be proven against.
 #[tokio::test]
-async fn gate_treats_device_bearer_as_weak() {
+async fn gate_treats_redeemed_device_link_session_as_weak() {
     let Some(backend) = postgres_backend_for_ingest_test().await else {
         return;
     };
@@ -77400,39 +77420,38 @@ async fn gate_treats_device_bearer_as_weak() {
     let db_mirror: Arc<dyn Database> = backend.clone();
     let state = test_state_with_webauthn(temp.path().to_path_buf(), Some(db_mirror));
 
-    // Mint links token-gate-bearer's device principal to a fresh account.
-    let _ = mint_login_link_handler(State(state.clone()), auth_headers("token-a"))
-        .await
-        .expect("mint links the principal to an account");
-
     use axum::response::IntoResponse;
-    // The bearer session resolves to a WEAK ctx.
-    let bearer_ctx = resolve_account_ctx(state.as_ref(), &auth_headers("token-a"))
+    // Minting and redeeming a device login-link links the device principal to a
+    // fresh account and yields a WEAK session ctx.
+    let link_headers = account_session_headers(&state, "token-a").await;
+    let link_ctx = resolve_account_ctx(state.as_ref(), &link_headers)
         .await
-        .expect("bearer resolves");
-    assert_eq!(bearer_ctx.client_kind, "device");
+        .expect("redeemed link session resolves");
+    // A redeemed link is a browser session; what matters for the gate is that it
+    // carries no strong authenticator.
+    assert_eq!(link_ctx.client_kind, "web");
     assert!(
-        !bearer_ctx.is_strong_session(),
-        "a device bearer is a weak session"
+        !link_ctx.is_strong_session(),
+        "a redeemed device link is a weak session"
     );
 
-    // Carve-out: with zero strong authenticators the bearer may add the first
-    // passkey -> register/start 200.
+    // Carve-out: with zero strong authenticators the weak session may add the
+    // first passkey -> register/start 200.
     let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let pk = account_passkey_register_start_handler(State(state.clone()), ext)
         .await
-        .expect("bearer may add the first authenticator (carve-out)");
+        .expect("weak session may add the first authenticator (carve-out)");
     assert_eq!(pk.into_response().status(), StatusCode::OK);
 
     // Now enroll a passkey end-to-end so the account holds 1 strong, then the
-    // bearer's next register/start is gated -> 403.
+    // weak session next register/start is gated -> 403.
     let weak_cookie = mint_redeem_session_cookie_value(&state, "token-a").await;
     let (_auth, _cred) = enroll_passkey_for_token(&state, &weak_cookie).await;
 
     let ext = account_ctx_ext(&state, &account_session_headers(&state, "token-a").await).await;
     let err = account_passkey_register_start_handler(State(state.clone()), ext)
         .await
-        .expect_err("a device bearer is gated once a strong authenticator exists");
+        .expect_err("a weak session is gated once a strong authenticator exists");
     assert_eq!(err.0, StatusCode::FORBIDDEN);
 
     cleanup_pg_trace_tenant(backend.as_ref(), tenant).await;
