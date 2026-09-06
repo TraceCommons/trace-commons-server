@@ -19,7 +19,7 @@ services:
     # By digest, never a tag: a tag is a moving target and a measurement
     # pinned over one is pinning nothing.
     #
-    # Built by the `witness-image` workflow from commit 0ed4f46 -- natively
+    # Built by the `witness-image` workflow from commit 484719f -- natively
     # amd64, because TDX is Intel, and in CI rather than on a developer
     # machine because this image is not reproducibly buildable. A measurement
     # therefore pins a specific artifact only its builder can produce, which
@@ -28,7 +28,7 @@ services:
     #
     # Replacing this means rebuilding and re-pinning the measurement
     # everywhere it is named -- in ingest and in every client.
-    image: ghcr.io/tracecommons/trace-commons-witness@sha256:052165938c552e1d3ab68e141de4bc39d86f11761875fbd096a1454cd76d3345
+    image: ghcr.io/tracecommons/trace-commons-witness@sha256:4d6bdbe51d7509033ee0370ab7083c50c14b4a875a16bbff882254ba9fdb8b9b
 
     # A restart re-derives the same signing key: dstack's KMS derives the app
     # key from the app id, which does not move. So a restart is invisible to a
@@ -126,7 +126,10 @@ services:
       # Rotation upstream, or a new model, means re-deriving and moving these
       # deliberately, and re-allowlisting the measurement everywhere.
       #
-      # TRACE_COMMONS_WITNESS_MODEL_KEY_PINS: "Qwen/Qwen3.6-35B-A3B-FP8=<key>"
+      # Derived 2026-09-06 from a nonce-bound ed25519 attestation report:
+      # the quote header was v4 / TEE 0x81 and report_data at offset 568
+      # equalled signing_address || nonce for this model.
+      TRACE_COMMONS_WITNESS_MODEL_KEY_PINS: "Qwen/Qwen3.6-35B-A3B-FP8=aba45f0b8f90869baab26db02e8b01354bb8f8730769c60650cb7a635da602d4"
 
       # The classifier, resolved at startup: a witness told to run
       # `full-pipeline` with no usable backend does not bind, and a backend
