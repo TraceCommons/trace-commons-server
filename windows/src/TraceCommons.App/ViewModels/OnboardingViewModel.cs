@@ -52,6 +52,7 @@ public sealed class OnboardingViewModel : INotifyPropertyChanged
     private string _invite = string.Empty;
     private string _instanceLine = string.Empty;
     private bool _inviteFailed;
+    private string _projectNotice = string.Empty;
     private bool _isBusy;
     private bool _scanOffered;
     private bool _useNearAiScan;
@@ -152,6 +153,29 @@ public sealed class OnboardingViewModel : INotifyPropertyChanged
         get => _inviteFailed;
         private set => Set(ref _inviteFailed, value);
     }
+
+    /// <summary>
+    /// What screen 5 says when a project-mode write did not land, empty when
+    /// there is nothing to report.
+    ///
+    /// Settings sets a notice on the same refusal. Without one here a refused
+    /// write is indistinguishable from a click that did nothing: the button
+    /// re-enables, the row reads the same, and the contributor is left believing
+    /// a consent field changed when it did not.
+    /// </summary>
+    public string ProjectNotice
+    {
+        get => _projectNotice;
+        private set
+        {
+            if (Set(ref _projectNotice, value))
+            {
+                Raise(nameof(HasProjectNotice));
+            }
+        }
+    }
+
+    public bool HasProjectNotice => _projectNotice.Length > 0;
 
     public NearAccountConnection NearAccount { get; }
     public bool CanUseWallet => !IsBusy;
@@ -385,6 +409,9 @@ public sealed class OnboardingViewModel : INotifyPropertyChanged
 
     public async Task LoadProjectsAsync()
     {
+        // A stale refusal must not outlive the state it described.
+        ProjectNotice = string.Empty;
+
         DaemonResponse response = await _host
             .CallAsync(DaemonProtocol.Methods.ListProjects)
             .ConfigureAwait(true);
@@ -418,18 +445,48 @@ public sealed class OnboardingViewModel : INotifyPropertyChanged
     {
         ArgumentNullException.ThrowIfNull(project);
 
-        if (!project.CanToggle || ProjectManualMode.Next(project.Mode) is not string next) return;
+        if (!project.CanToggle || ProjectManualMode.Next(project.Mode) is not string next)
+        {
+            return;
+        }
+
+        string projectId = project.ProjectId;
         project.IsPending = true;
         try
         {
             string payload = JsonSerializer.Serialize(
-                new ProjectModeRequest { ProjectId = project.ProjectId, Mode = next });
+                new ProjectModeRequest { ProjectId = projectId, Mode = next });
             DaemonResponse response = await _host
                 .CallAsync(DaemonProtocol.Methods.SetProjectMode, payload)
                 .ConfigureAwait(true);
-            if (!response.IsError) project.SetMode(next);
+
+            // The rows are rebuilt from a fresh list_projects rather than from
+            // `next`: what this screen shows about a consent field has to be
+            // what the daemon stores, and a write that was refused or that
+            // stored something else is invisible to a shell that believes its
+            // own request. The re-read runs on the failure path too -- that is
+            // the path where the two can disagree.
+            await LoadProjectsAsync().ConfigureAwait(true);
+            string? persisted = FindProject(projectId)?.Mode;
+            ProjectNotice = ProjectManualMode.NoticeFor(response.IsError, next, persisted);
         }
-        finally { project.IsPending = false; }
+        finally
+        {
+            project.IsPending = false;
+        }
+    }
+
+    private ProjectViewModel? FindProject(string projectId)
+    {
+        foreach (ProjectViewModel candidate in Projects)
+        {
+            if (string.Equals(candidate.ProjectId, projectId, StringComparison.Ordinal))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -621,33 +678,50 @@ public sealed class ProjectViewModel : INotifyPropertyChanged
     /// note REPLACES the mode rather than joining it, because "you'll always be
     /// asked" already says what "Ask me first" says.
     /// </summary>
-    public string SubLine => IsUnresolvable || _mode is "ask" or "ignore"
-        ? WatchCopy.SubLineFor(IsUnresolvable, _mode) : string.Empty;
+    public string SubLine => WatchCopy.SubLineFor(IsUnresolvable, _mode);
 
     public string Mode => _mode;
-    public bool IsIgnored => _mode == "ignore";
-    public string ActionText => _mode switch
-    {
-        "ignore" or "auto_upload" => WatchCopy.AskMeFirst,
-        "ask" => "Ignore",
-        _ => string.Empty,
-    };
+
+    /// <summary>
+    /// The button's words, empty when there is no transition out of this mode.
+    /// <see cref="HasAction"/> hides the control in that case rather than
+    /// leaving a disabled button with nothing written on it.
+    /// </summary>
+    public string ActionText => WatchCopy.ActionFor(_mode) ?? string.Empty;
+
+    public bool HasAction => WatchCopy.ActionFor(_mode) is not null;
+
     public bool CanToggle => !_isPending && ProjectManualMode.Next(_mode) is not null;
+
     public bool IsPending
     {
         get => _isPending;
-        set { _isPending = value; RaiseMode(); }
+        set
+        {
+            _isPending = value;
+            RaiseMode();
+        }
     }
 
-    public void SetMode(string mode)
-    {
-        _mode = mode;
-        RaiseMode();
-    }
+    // There is deliberately no SetMode here. A row's mode arrives from
+    // list_projects and nowhere else: the one caller this class had set it
+    // from the value the shell had just sent, which is the optimism the
+    // re-read in IgnoreProjectAsync replaced.
 
     private void RaiseMode()
     {
-        foreach (string property in new[] { nameof(Mode), nameof(IsIgnored), nameof(ActionText), nameof(CanToggle), nameof(SubLine) })
+        string[] properties =
+        {
+            nameof(Mode),
+            nameof(ActionText),
+            nameof(HasAction),
+            nameof(CanToggle),
+            nameof(SubLine),
+        };
+
+        foreach (string property in properties)
+        {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
+        }
     }
 }

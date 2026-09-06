@@ -271,14 +271,29 @@
                                         <TextBlock Style="{StaticResource TcCaptionTextStyle}"
                                                    Text="{x:Bind SubLine, Mode=OneWay}" TextWrapping="Wrap" />
                                     </StackPanel>
+                                    <!--
+                                        Hidden rather than disabled when the
+                                        mode has no transition out of it: a
+                                        disabled button with no words on it is
+                                        a zero-width control that says nothing.
+                                    -->
                                     <Button Grid.Column="1" Content="{x:Bind ActionText, Mode=OneWay}"
                                             VerticalAlignment="Top"
+                                            Visibility="{x:Bind HasAction, Mode=OneWay}"
                                             IsEnabled="{x:Bind CanToggle, Mode=OneWay}"
                                             Click="OnIgnoreProject" />
                                 </Grid>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <!--
+                        A refused project-mode write. Settings says so on the
+                        same refusal; without this the row simply re-enables
+                        and a refusal reads as a click that did nothing.
+                    -->
+                    <TextBlock Style="{StaticResource TcHeadingAlertTextStyle}" TextWrapping="Wrap"
+                               Text="{x:Bind ViewModel.ProjectNotice, Mode=OneWay}"
+                               Visibility="{x:Bind ViewModel.HasProjectNotice, Mode=OneWay}" />
                 </StackPanel>
             </ScrollViewer>
             <Button Grid.Row="4" Content="Continue" HorizontalAlignment="Right" Click="OnWatch" />
