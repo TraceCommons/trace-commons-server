@@ -1583,12 +1583,24 @@ on `get_settings`, `set_settings` and `status`. It is an object,
 | `state` | meaning | `port` |
 |---|---|---|
 | `off` | the switch is off and nothing is bound | `null` |
+| `stopping` | startup or an owned proxy is still draining and releasing resources | the previously bound port, or `null` while startup is unfinished |
 | `running` | this daemon's proxy is serving and has a backend registered | the bound port |
 | `running_no_backends` | this daemon's proxy is serving but no backend is configured, so nothing will route through it | the bound port |
 | `running_elsewhere` | a loopback discovery pointer responds, or the exclusive home lock is held; nothing was bound or stopped, and readiness is not established | the published port, or requested port when the lock owner has not published one |
 | `port_in_use` | something that is not this daemon's proxy holds the port | `null` |
 | `start_failed` | the proxy refused to start for any other reason | `null` |
-| `crashed` | a proxy this daemon started ended without being asked to | `null` |
+| `crashed` | startup, serving, or cleanup failed; release of owned resources may be unconfirmed | `null` |
+
+Turning hosting off persists the request before stopping the owned proxy. The
+reply may report `stopping` while requests drain; it does not mean the listener,
+pointer, or home lock has been released. A new on request waits for that cleanup
+before another listener can start. Daemon termination prevents any later restart
+and waits up to five seconds for cleanup, including waiting for a startup already
+in progress. On expiry the retained cleanup continues while the runtime lives;
+process exit or runtime destruction can interrupt remaining streams. Closing or
+dropping the embedded daemon requests cleanup without blocking synchronously.
+Drop-based cleanup requires unwinding; a `panic=abort` build terminates the
+process instead and cannot finish in-flight requests.
 
 Existing-instance discovery reads at most 64 KiB from an opened regular pointer
 file and probes only the fixed IPv4 loopback health path. Accepted hosts are
@@ -1610,7 +1622,11 @@ health endpoint and no inference can pass through it, so a client that
 rendered it as running would show a green light over a proxy that cannot
 work. `crashed` is sticky until the switch is turned off and on again,
 rather than restarting every poll tick, so a proxy that cannot stay up is
-visible instead of flickering.
+visible instead of flickering. If startup or shutdown lost its completion
+signal, Off does not claim cleanup succeeded. A newly accepted off/on cycle may
+retry through IronWire's exclusive home lock; only a successful start clears
+that uncertainty. If the prior owner still holds the lock, the failure remains
+visible and no second proxy is started.
 
 `private_inference_offer_seen` takes a boolean, and it is **not a fourth
 answer**: it records that the question was put, never what the answer was.

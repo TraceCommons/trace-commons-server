@@ -139,6 +139,16 @@ pub async fn run(store: ConfigStore, dry_run: bool) -> Result<()> {
     result
 }
 
+struct PrivateInferenceShutdown(std::sync::Weak<ipc::DaemonShared>);
+
+impl Drop for PrivateInferenceShutdown {
+    fn drop(&mut self) {
+        if let Some(shared) = self.0.upgrade() {
+            shared.request_private_inference_stop();
+        }
+    }
+}
+
 /// The pieces of a running daemon that a caller needing direct, in-process
 /// access to `shared` -- rather than only running the loop to completion the
 /// way `run` does -- holds onto.
@@ -157,6 +167,8 @@ pub async fn run(store: ConfigStore, dry_run: bool) -> Result<()> {
 /// `run_supervisor` itself and keeps the resulting `JoinHandle` for its own
 /// explicit shutdown.
 pub struct EmbeddedDaemon {
+    // Drop this before the last shared Arc, even if no server task remains.
+    private_inference_shutdown: PrivateInferenceShutdown,
     pub shared: Arc<ipc::DaemonShared>,
     lock_path: std::path::PathBuf,
     lock: std::fs::File,
@@ -169,7 +181,9 @@ pub struct EmbeddedDaemon {
 }
 
 impl EmbeddedDaemon {
-    /// Stop serving the socket and release the exclusive lock. Does *not*
+    /// Stop serving the socket and release the exclusive lock. Requests
+    /// terminal proxy cleanup, which may continue while the runtime lives.
+    /// Does *not*
     /// touch `shared.shutdown` or stop anything running the supervise loop
     /// -- `EmbeddedDaemon` no longer owns that task (see the struct doc), so
     /// a caller that spawned `run_supervisor` itself is responsible for
@@ -177,6 +191,7 @@ impl EmbeddedDaemon {
     /// for correctness, only for how long the loop keeps working past the
     /// request) calling this.
     pub fn close(self) {
+        drop(self.private_inference_shutdown);
         self.server.abort();
         // Ask the pool to stop first, so a worker between jobs exits on its
         // own; abort then covers the one that is mid-build, which cannot be
@@ -306,6 +321,7 @@ pub async fn start_embedded(store: ConfigStore) -> Result<EmbeddedDaemon> {
 
     match started {
         Ok((shared, server, preview_workers)) => Ok(EmbeddedDaemon {
+            private_inference_shutdown: PrivateInferenceShutdown(Arc::downgrade(&shared)),
             shared,
             lock_path,
             lock,
@@ -365,22 +381,14 @@ pub(crate) fn run_blocking<R>(f: impl FnOnce() -> R) -> R {
     }
 }
 
-/// The periodic work, with the hosted IronWire's lifetime wrapped around it.
+/// Run periodic work, then give owned proxy cleanup a five-second wait budget.
+/// The retained drain task continues while the daemon runtime lives; the budget
+/// includes waiting for any in-progress startup. Expiry does not claim Off.
 ///
-/// Private inference is applied from settings before the first tick, so a
-/// daemon that starts with the switch already on is hosting the proxy by the
-/// time it answers its first `status`, and it is stopped on the way out for
-/// every way the loop *returns* -- request, signal, or error. A proxy left
-/// running past the daemon that started it would hold the port, the pointer
-/// and the home lock against the next start.
-///
-/// Two exits skip this stop: a panic unwinding through `supervise_passes`,
-/// and this future being dropped rather than driven to completion. Neither
-/// leaks the port -- `EmbeddedProxy::drop` requests shutdown, and process
-/// exit releases everything regardless -- but the difference is real: the
-/// explicit stop *awaits* the drain, so in-flight requests finish and the
-/// pointer and home lock are released before this returns, where the drop
-/// path only asks and does not wait.
+/// A panic or dropped run future skips this awaited path. Closing or dropping
+/// EmbeddedDaemon requests terminal cleanup as a backstop. Runtime/process
+/// destruction can interrupt pending streams; neither path promises complete
+/// drainage after the host runtime has gone away.
 async fn supervise(shared: Arc<ipc::DaemonShared>, dry_run: bool) -> Result<()> {
     shared.reconcile_private_inference().await;
     let result = supervise_passes(&shared, dry_run).await;
@@ -396,6 +404,8 @@ async fn supervise_passes(shared: &Arc<ipc::DaemonShared>, dry_run: bool) -> Res
         std::time::Duration::from_secs(s.poll_interval_secs.max(1))
     };
     let mut ticker = tokio::time::interval(poll_interval);
+    let mut proxy_cleanup_tick = tokio::time::interval(std::time::Duration::from_millis(100));
+    proxy_cleanup_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut sigterm = signal_stream();
     let shutdown_signal = Arc::clone(&shared.shutdown_signal);
 
@@ -411,6 +421,12 @@ async fn supervise_passes(shared: &Arc<ipc::DaemonShared>, dry_run: bool) -> Res
             _ = shutdown_signal.notified() => {
                 tracing::info!("daemon stopping on request");
                 return Ok(());
+            }
+            _ = shared.private_inference_changed.notified() => {
+                shared.reconcile_private_inference().await;
+            }
+            _ = proxy_cleanup_tick.tick(), if shared.private_inference_is_stopping() => {
+                shared.reconcile_private_inference().await;
             }
             _ = ticker.tick() => {
                 let now = Utc::now();
@@ -1241,6 +1257,46 @@ mod tests {
     use super::*;
 
     use crate::daemon::test_support::at;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn private_inference_dropped_embedded_daemon_stops_owned_proxy() {
+        let (_dir, store) = crate::config::tests_support::temp_store();
+        let mut embedded = start_embedded(store).await.unwrap();
+        let home = tempfile::tempdir().unwrap();
+        embedded
+            .shared
+            .install_private_inference_for_test(home.path().to_path_buf(), 0);
+        embedded.shared.settings.lock().unwrap().private_inference = true;
+        embedded.shared.reconcile_private_inference().await;
+        assert!(home.path().join("endpoint.json").exists());
+        // Remove unrelated task references so this exercises field drop order,
+        // not a separately retained Shared Arc accidentally keeping the guard alive.
+        embedded.server.abort();
+        let _ = (&mut embedded.server).await;
+        for worker in &mut embedded.preview_workers {
+            worker.abort();
+            let _ = worker.await;
+        }
+        assert_eq!(Arc::strong_count(&embedded.shared), 1);
+        let weak = Arc::downgrade(&embedded.shared);
+        let confirmed = embedded
+            .shared
+            .private_inference_stop_confirmation_for_test();
+        drop(embedded);
+        assert!(weak.upgrade().is_none());
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while !confirmed.load(Ordering::Acquire) {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!home.path().join("endpoint.json").exists());
+        let next = ironwire_proxy::embed::start(home.path(), Some(0))
+            .await
+            .unwrap();
+        next.shutdown().await;
+    }
 
     /// The default `history_poll_secs`: half an hour.
     fn interval() -> chrono::Duration {
