@@ -2,14 +2,14 @@
     {
         "type": "git",
         "url": "https://github.com/nearai/ironclaw",
-        "commit": "0280dd1a48a4f813f123735b31558c459d1ce032",
-        "dest": "flatpak-cargo/git/ironclaw-0280dd1"
+        "commit": "6dccbfbcbddfdfb53c11d3876f94bf3e716b55f9",
+        "dest": "flatpak-cargo/git/ironclaw-6dccbfb"
     },
     {
         "type": "git",
         "url": "https://github.com/nearai/ironwire",
-        "commit": "ed5337548faad4c7dc4d236b4b1e5bcea57a0b84",
-        "dest": "flatpak-cargo/git/ironwire-ed53375"
+        "commit": "d1c21c1c490547da36c88e2f4d212f9419c74fa3",
+        "dest": "flatpak-cargo/git/ironwire-d1c21c1"
     },
     {
         "type": "archive",
@@ -2614,7 +2614,7 @@
     {
         "type": "shell",
         "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git/ironclaw-0280dd1/crates/contracts/ironclaw_common\" \"cargo/vendor/ironclaw_common\""
+            "cp -r --reflink=auto \"flatpak-cargo/git/ironclaw-6dccbfb/crates/contracts/ironclaw_common\" \"cargo/vendor/ironclaw_common\""
         ]
     },
     {
@@ -2632,30 +2632,12 @@
     {
         "type": "shell",
         "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git/ironclaw-0280dd1/crates/contracts/ironclaw_host_api\" \"cargo/vendor/ironclaw_host_api\""
+            "cp -r --reflink=auto \"flatpak-cargo/git/ironclaw-6dccbfb/crates/domains/ironclaw_llm\" \"cargo/vendor/ironclaw_llm\""
         ]
     },
     {
         "type": "inline",
-        "contents": "[package]\nname = \"ironclaw_host_api\"\nversion = \"0.1.0\"\nedition = \"2024\"\nrust-version = \"1.96\"\ndescription = \"Shared host API contracts for IronClaw Reborn\"\nauthors = [\"NEAR AI <support@near.ai>\"]\nlicense = \"MIT OR Apache-2.0\"\nhomepage = \"https://github.com/nearai/ironclaw\"\nrepository = \"https://github.com/nearai/ironclaw\"\npublish = false\n\n[package.metadata.ironclaw]\nlayer = \"contracts\"\n\n[features]\ntest-support = [\"dep:jsonschema\"]\n\n[dependencies]\nasync-trait = \"0.1\"\nserde_json = \"1\"\nsha2 = \"0.11\"\nthiserror = \"2\"\ntracing = \"0.1\"\nzeroize = \"1\"\n\n[dependencies.chrono]\nversion = \"0.4\"\nfeatures = [\"serde\"]\n\n[dependencies.jsonschema]\nversion = \"0.46\"\ndefault-features = false\noptional = true\n\n[dependencies.rust_decimal]\nversion = \"1\"\nfeatures = [\"serde\", \"serde-with-str\"]\n\n[dependencies.serde]\nversion = \"1\"\nfeatures = [\"derive\"]\n\n[dependencies.uuid]\nversion = \"1\"\nfeatures = [\"v4\", \"v5\", \"serde\"]\n\n[dev-dependencies]\nrust_decimal_macros = \"1\"\nstatic_assertions = \"1\"\ntoml = \"1.1\"\n\n[dev-dependencies.jsonschema]\nversion = \"0.46\"\ndefault-features = false\n\n[dev-dependencies.tokio]\nversion = \"1\"\nfeatures = [\"macros\", \"rt\"]\n",
-        "dest": "cargo/vendor/ironclaw_host_api",
-        "dest-filename": "Cargo.toml"
-    },
-    {
-        "type": "inline",
-        "contents": "{\"package\": null, \"files\": {}}",
-        "dest": "cargo/vendor/ironclaw_host_api",
-        "dest-filename": ".cargo-checksum.json"
-    },
-    {
-        "type": "shell",
-        "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git/ironclaw-0280dd1/crates/domains/ironclaw_llm\" \"cargo/vendor/ironclaw_llm\""
-        ]
-    },
-    {
-        "type": "inline",
-        "contents": "[package]\nname = \"ironclaw_llm\"\nversion = \"0.1.0\"\nedition = \"2024\"\nrust-version = \"1.96\"\ndescription = \"Multi-provider LLM integration with retry, failover, circuit breaker, and response caching\"\nauthors = [\"NEAR AI <support@near.ai>\"]\nlicense = \"MIT OR Apache-2.0\"\nhomepage = \"https://github.com/nearai/ironclaw\"\nrepository = \"https://github.com/nearai/ironclaw\"\npublish = false\n\n[package.metadata.ironclaw]\nlayer = \"substrates\"\n\n[package.metadata.dist]\ndist = false\n\n[features]\nbedrock = [\"dep:aws-config\", \"dep:aws-sdk-bedrockruntime\", \"dep:aws-smithy-types\"]\nregistry-provider-factory = []\ntest-support = []\n\n[dependencies]\nasync-trait = \"0.1\"\nanyhow = \"1\"\nbase64 = \"0.23.0\"\nbytes = \"1\"\ndirs = \"6\"\neventsource-stream = \"0.2\"\nfutures = \"0.3\"\nhex = \"0.4\"\nopen = \"5\"\nrand = \"0.10\"\nurlencoding = \"2\"\nregex = \"1\"\nrust_decimal_macros = \"1\"\nserde_json = \"1\"\nsha2 = \"0.11\"\nthiserror = \"2\"\ntracing = \"0.1\"\nurl = \"2\"\n\n[dependencies.ironclaw_common]\npath = \"../../contracts/ironclaw_common\"\nversion = \"0.4.2\"\n\n[dependencies.ironclaw_host_api]\npath = \"../../contracts/ironclaw_host_api\"\nversion = \"0.1.0\"\n\n[dependencies.ironclaw_safety]\npath = \"../../substrates/ironclaw_safety\"\nversion = \"0.2.2\"\n\n[dependencies.chrono]\nversion = \"0.4\"\nfeatures = [\"serde\"]\n\n[dependencies.reqwest]\nversion = \"0.13\"\ndefault-features = false\nfeatures = [\"form\", \"json\", \"multipart\", \"rustls\", \"stream\", \"system-proxy\"]\n\n[dependencies.rig-core]\nversion = \"0.36\"\ndefault-features = false\nfeatures = [\"reqwest\", \"rustls\"]\n\n[dependencies.rust_decimal]\nversion = \"1\"\nfeatures = [\"serde\", \"serde-with-str\", \"maths\"]\n\n[dependencies.secrecy]\nversion = \"0.10\"\nfeatures = [\"serde\"]\n\n[dependencies.serde]\nversion = \"1\"\nfeatures = [\"derive\"]\n\n[dependencies.tokio]\nversion = \"1\"\nfeatures = [\"sync\", \"io-util\", \"io-std\", \"time\", \"macros\", \"rt\", \"fs\", \"process\", \"net\"]\n\n[dependencies.uuid]\nversion = \"1\"\nfeatures = [\"v4\", \"serde\"]\n\n[dependencies.aws-config]\nversion = \"1\"\nfeatures = [\"behavior-version-latest\"]\noptional = true\n\n[dependencies.aws-sdk-bedrockruntime]\nversion = \"1\"\ndefault-features = false\nfeatures = [\"default-https-client\", \"rt-tokio\", \"behavior-version-latest\"]\noptional = true\n\n[dependencies.aws-smithy-types]\nversion = \"1\"\noptional = true\n\n[dev-dependencies]\nproptest = \"1\"\ntempfile = \"3\"\ntracing-test = \"0.2\"\n\n[dev-dependencies.insta]\nversion = \"1.46.3\"\nfeatures = [\"yaml\"]\n\n[dev-dependencies.tokio]\nversion = \"1\"\nfeatures = [\"full\", \"test-util\"]\n",
+        "contents": "[package]\nname = \"ironclaw_llm\"\nversion = \"0.1.0\"\nedition = \"2024\"\nrust-version = \"1.96\"\ndescription = \"Multi-provider LLM integration with retry, failover, circuit breaker, and response caching\"\nauthors = [\"NEAR AI <support@near.ai>\"]\nlicense = \"MIT OR Apache-2.0\"\nhomepage = \"https://github.com/nearai/ironclaw\"\nrepository = \"https://github.com/nearai/ironclaw\"\npublish = false\n\n[package.metadata.ironclaw]\nlayer = \"substrates\"\n\n[package.metadata.dist]\ndist = false\n\n[features]\nbedrock = [\"dep:aws-config\", \"dep:aws-sdk-bedrockruntime\", \"dep:aws-smithy-types\"]\nregistry-provider-factory = []\ntest-support = []\n\n[dependencies]\nasync-trait = \"0.1\"\nanyhow = \"1\"\nbase64 = \"0.23.0\"\nbytes = \"1\"\ndirs = \"6\"\neventsource-stream = \"0.2\"\nfutures = \"0.3\"\nhex = \"0.4\"\nopen = \"5\"\nrand = \"0.10\"\nurlencoding = \"2\"\nregex = \"1\"\nrust_decimal_macros = \"1\"\nserde_json = \"1\"\nsha2 = \"0.11\"\nthiserror = \"2\"\ntracing = \"0.1\"\nurl = \"2\"\n\n[dependencies.ironclaw_common]\npath = \"../../contracts/ironclaw_common\"\nversion = \"0.4.2\"\n\n[dependencies.ironclaw_safety]\npath = \"../../substrates/ironclaw_safety\"\nversion = \"0.2.2\"\n\n[dependencies.chrono]\nversion = \"0.4\"\nfeatures = [\"serde\"]\n\n[dependencies.reqwest]\nversion = \"0.13\"\ndefault-features = false\nfeatures = [\"form\", \"json\", \"multipart\", \"rustls\", \"stream\", \"system-proxy\"]\n\n[dependencies.rig-core]\nversion = \"0.33\"\ndefault-features = false\nfeatures = [\"reqwest-rustls\"]\n\n[dependencies.rust_decimal]\nversion = \"1\"\nfeatures = [\"serde\", \"serde-with-str\", \"maths\"]\n\n[dependencies.secrecy]\nversion = \"0.10\"\nfeatures = [\"serde\"]\n\n[dependencies.serde]\nversion = \"1\"\nfeatures = [\"derive\"]\n\n[dependencies.tokio]\nversion = \"1\"\nfeatures = [\"sync\", \"io-util\", \"io-std\", \"time\", \"macros\", \"rt\", \"fs\", \"process\", \"net\"]\n\n[dependencies.uuid]\nversion = \"1\"\nfeatures = [\"v4\", \"serde\"]\n\n[dependencies.aws-config]\nversion = \"1\"\nfeatures = [\"behavior-version-latest\"]\noptional = true\n\n[dependencies.aws-sdk-bedrockruntime]\nversion = \"1\"\ndefault-features = false\nfeatures = [\"default-https-client\", \"rt-tokio\", \"behavior-version-latest\"]\noptional = true\n\n[dependencies.aws-smithy-types]\nversion = \"1\"\noptional = true\n\n[dev-dependencies]\nproptest = \"1\"\ntempfile = \"3\"\ntracing-test = \"0.2\"\n\n[dev-dependencies.insta]\nversion = \"1.46.3\"\nfeatures = [\"yaml\"]\n\n[dev-dependencies.tokio]\nversion = \"1\"\nfeatures = [\"full\", \"test-util\"]\n",
         "dest": "cargo/vendor/ironclaw_llm",
         "dest-filename": "Cargo.toml"
     },
@@ -2668,7 +2650,7 @@
     {
         "type": "shell",
         "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git/ironclaw-0280dd1/crates/substrates/ironclaw_safety\" \"cargo/vendor/ironclaw_safety\""
+            "cp -r --reflink=auto \"flatpak-cargo/git/ironclaw-6dccbfb/crates/substrates/ironclaw_safety\" \"cargo/vendor/ironclaw_safety\""
         ]
     },
     {
@@ -2686,7 +2668,7 @@
     {
         "type": "shell",
         "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-ed53375/crates/ironwire_agents\" \"cargo/vendor/ironwire_agents\""
+            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-d1c21c1/crates/ironwire_agents\" \"cargo/vendor/ironwire_agents\""
         ]
     },
     {
@@ -2704,7 +2686,7 @@
     {
         "type": "shell",
         "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-ed53375/crates/ironwire_catalog\" \"cargo/vendor/ironwire_catalog\""
+            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-d1c21c1/crates/ironwire_catalog\" \"cargo/vendor/ironwire_catalog\""
         ]
     },
     {
@@ -2722,7 +2704,7 @@
     {
         "type": "shell",
         "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-ed53375/crates/ironwire_core\" \"cargo/vendor/ironwire_core\""
+            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-d1c21c1/crates/ironwire_core\" \"cargo/vendor/ironwire_core\""
         ]
     },
     {
@@ -2740,7 +2722,7 @@
     {
         "type": "shell",
         "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-ed53375/crates/ironwire_creds\" \"cargo/vendor/ironwire_creds\""
+            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-d1c21c1/crates/ironwire_creds\" \"cargo/vendor/ironwire_creds\""
         ]
     },
     {
@@ -2758,7 +2740,7 @@
     {
         "type": "shell",
         "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-ed53375/crates/ironwire_ledger\" \"cargo/vendor/ironwire_ledger\""
+            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-d1c21c1/crates/ironwire_ledger\" \"cargo/vendor/ironwire_ledger\""
         ]
     },
     {
@@ -2776,7 +2758,7 @@
     {
         "type": "shell",
         "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-ed53375/crates/ironwire_privacy\" \"cargo/vendor/ironwire_privacy\""
+            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-d1c21c1/crates/ironwire_privacy\" \"cargo/vendor/ironwire_privacy\""
         ]
     },
     {
@@ -2794,7 +2776,7 @@
     {
         "type": "shell",
         "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-ed53375/crates/ironwire_proxy\" \"cargo/vendor/ironwire_proxy\""
+            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-d1c21c1/crates/ironwire_proxy\" \"cargo/vendor/ironwire_proxy\""
         ]
     },
     {
@@ -2812,7 +2794,7 @@
     {
         "type": "shell",
         "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-ed53375/crates/ironwire_translate\" \"cargo/vendor/ironwire_translate\""
+            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-d1c21c1/crates/ironwire_translate\" \"cargo/vendor/ironwire_translate\""
         ]
     },
     {
@@ -2830,7 +2812,7 @@
     {
         "type": "shell",
         "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-ed53375/crates/ironwire_update\" \"cargo/vendor/ironwire_update\""
+            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-d1c21c1/crates/ironwire_update\" \"cargo/vendor/ironwire_update\""
         ]
     },
     {
@@ -2848,7 +2830,7 @@
     {
         "type": "shell",
         "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-ed53375/crates/ironwire_upstream\" \"cargo/vendor/ironwire_upstream\""
+            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-d1c21c1/crates/ironwire_upstream\" \"cargo/vendor/ironwire_upstream\""
         ]
     },
     {
@@ -2866,7 +2848,7 @@
     {
         "type": "shell",
         "commands": [
-            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-ed53375/crates/ironwire_usage\" \"cargo/vendor/ironwire_usage\""
+            "cp -r --reflink=auto \"flatpak-cargo/git/ironwire-d1c21c1/crates/ironwire_usage\" \"cargo/vendor/ironwire_usage\""
         ]
     },
     {
@@ -3573,14 +3555,14 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/open/open-5.4.3.crate",
-        "sha256": "7c603ab8300cf18bc3b14146b19fe3dfcc4843ae5a400cd0e7a30b95aa366634",
-        "dest": "cargo/vendor/open-5.4.3"
+        "url": "https://static.crates.io/crates/open/open-5.4.1.crate",
+        "sha256": "f9cfef937e9c486488c7e3d949ae31c0f1d06bdacd75b99c086cb35356e30408",
+        "dest": "cargo/vendor/open-5.4.1"
     },
     {
         "type": "inline",
-        "contents": "{\"package\": \"7c603ab8300cf18bc3b14146b19fe3dfcc4843ae5a400cd0e7a30b95aa366634\", \"files\": {}}",
-        "dest": "cargo/vendor/open-5.4.3",
+        "contents": "{\"package\": \"f9cfef937e9c486488c7e3d949ae31c0f1d06bdacd75b99c086cb35356e30408\", \"files\": {}}",
+        "dest": "cargo/vendor/open-5.4.1",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -4301,14 +4283,14 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/rig-core/rig-core-0.36.0.crate",
-        "sha256": "9ac7d75266ac1f79b1faeff611c85cb40be00a0a983db10036591424f0433dc1",
-        "dest": "cargo/vendor/rig-core-0.36.0"
+        "url": "https://static.crates.io/crates/rig-core/rig-core-0.33.0.crate",
+        "sha256": "a529b9b72f51a46a9ea87c9ba8031e36593de7a89461983f01d8c24462f9eb06",
+        "dest": "cargo/vendor/rig-core-0.33.0"
     },
     {
         "type": "inline",
-        "contents": "{\"package\": \"9ac7d75266ac1f79b1faeff611c85cb40be00a0a983db10036591424f0433dc1\", \"files\": {}}",
-        "dest": "cargo/vendor/rig-core-0.36.0",
+        "contents": "{\"package\": \"a529b9b72f51a46a9ea87c9ba8031e36593de7a89461983f01d8c24462f9eb06\", \"files\": {}}",
+        "dest": "cargo/vendor/rig-core-0.33.0",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -6225,19 +6207,6 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/windows-core/windows-core-0.62.2.crate",
-        "sha256": "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb",
-        "dest": "cargo/vendor/windows-core-0.62.2"
-    },
-    {
-        "type": "inline",
-        "contents": "{\"package\": \"b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb\", \"files\": {}}",
-        "dest": "cargo/vendor/windows-core-0.62.2",
-        "dest-filename": ".cargo-checksum.json"
-    },
-    {
-        "type": "archive",
-        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/windows-future/windows-future-0.2.1.crate",
         "sha256": "fc6a41e98427b19fe4b73c550f060b59fa592d7d686537eebf9385621bfbad8e",
         "dest": "cargo/vendor/windows-future-0.2.1"
@@ -6978,7 +6947,7 @@
     },
     {
         "type": "inline",
-        "contents": "[source.vendored-sources]\ndirectory = \"cargo/vendor\"\n\n[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.\"https://github.com/nearai/ironclaw\"]\ngit = \"https://github.com/nearai/ironclaw\"\nreplace-with = \"vendored-sources\"\nbranch = \"main\"\n\n[source.\"https://github.com/nearai/ironwire\"]\ngit = \"https://github.com/nearai/ironwire\"\nreplace-with = \"vendored-sources\"\nrev = \"ed5337548faad4c7dc4d236b4b1e5bcea57a0b84\"\n",
+        "contents": "[source.vendored-sources]\ndirectory = \"cargo/vendor\"\n\n[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.\"https://github.com/nearai/ironclaw\"]\ngit = \"https://github.com/nearai/ironclaw\"\nreplace-with = \"vendored-sources\"\nbranch = \"main\"\n\n[source.\"https://github.com/nearai/ironwire\"]\ngit = \"https://github.com/nearai/ironwire\"\nreplace-with = \"vendored-sources\"\nrev = \"d1c21c1c490547da36c88e2f4d212f9419c74fa3\"\n",
         "dest": "cargo",
         "dest-filename": "config"
     }

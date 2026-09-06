@@ -17,6 +17,7 @@ pub mod issuer_client;
 pub mod onboarding_copy;
 pub mod picker;
 pub mod pricing;
+pub mod private_inference_copy;
 pub mod routing;
 pub mod routing_copy;
 pub mod source;

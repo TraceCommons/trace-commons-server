@@ -211,7 +211,7 @@ jobs:
       # signing authority. The cold-build cost is the price of that.
 
       - name: Build the CLI
-        run: cargo build --release --bin trace-commons-contributor -p trace-commons-contributor --target x86_64-pc-windows-msvc
+        run: cargo build --locked --release --bin trace-commons-contributor -p trace-commons-contributor --target x86_64-pc-windows-msvc
 
       # The WinUI desktop app, from here to the second signing pass below.
       #
@@ -239,7 +239,7 @@ jobs:
       # runtime "core not found", so this is a hard prerequisite, not an
       # optimisation.
       - name: Build the contributor FFI cdylib
-        run: cargo build --release -p trace-commons-contributor-ffi --target x86_64-pc-windows-msvc
+        run: cargo build --locked --release -p trace-commons-contributor-ffi --target x86_64-pc-windows-msvc
 
       # Self-contained and unpackaged (WindowsPackageType=None, SelfContained,
       # WindowsAppSDKSelfContained -- all three set in the csproj), so the
@@ -635,7 +635,7 @@ jobs:
       # signing authority.
 
       - name: Build the contributor FFI cdylib
-        run: cargo build -p trace-commons-contributor-ffi --release
+        run: cargo build --locked -p trace-commons-contributor-ffi --release
 
       # Compile first, package later. The publisher the package must carry is
       # not known until a certificate has actually signed something, so the

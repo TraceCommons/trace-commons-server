@@ -203,7 +203,15 @@ public sealed partial class MainWindow : Window
         {
             XamlRoot = Content.XamlRoot,
             Title = "Quit Trace Commons?",
-            Content = QuitBody,
+            // The extra sentence is the Rust's, not this file's, and it is
+            // added only while the switch is on: with the listener inside
+            // this process, quitting stops answering model calls as well as
+            // stopping the watcher, and QuitBody above does not cover that.
+            // A contributor who never turned it on is not warned about
+            // losing it.
+            Content = ViewModel.PrivateInferenceQuitDetail is { } stopsRouting
+                ? QuitBody + "\n\n" + stopsRouting
+                : QuitBody,
             PrimaryButtonText = "Quit",
             CloseButtonText = "Cancel",
             DefaultButton = Microsoft.UI.Xaml.Controls.ContentDialogButton.Close,
@@ -742,6 +750,47 @@ public sealed partial class MainWindow : Window
     /// The card is cleared here as well so it does not linger for a round
     /// trip, and the daemon's next answer will agree.
     /// </remarks>
+    /// <summary>
+    /// Declines the offer to answer model calls on this computer.
+    /// </summary>
+    /// <remarks>
+    /// The daemon remembers the answer -- across relaunches and across shells
+    /// -- so this is not a local dismissal. Declining writes the marker
+    /// ALONE; writing the switch as false would make a refusal
+    /// indistinguishable from a change.
+    /// </remarks>
+    private async void OnDeclinePrivateInference(object sender, RoutedEventArgs e)
+    {
+        await AnswerPrivateInferenceOfferAsync(accepted: false);
+    }
+
+    /// <summary>
+    /// Accepts it. No confirmation sheet: this card IS the confirmation, and
+    /// it already names what turning the switch on exposes.
+    /// </summary>
+    private async void OnAcceptPrivateInference(object sender, RoutedEventArgs e)
+    {
+        await AnswerPrivateInferenceOfferAsync(accepted: true);
+    }
+
+    /// <summary>
+    /// Writes one answer and renders from the daemon's echo.
+    /// </summary>
+    /// <remarks>
+    /// Never optimistic. An answer the daemon refused is not an answer, and
+    /// the card staying up is the honest outcome: the next refresh asks the
+    /// shared table again with what the daemon really holds.
+    /// </remarks>
+    private async Task AnswerPrivateInferenceOfferAsync(bool accepted)
+    {
+        DaemonResponse response = await _host
+            .CallAsync(
+                DaemonProtocol.Methods.SetSettings,
+                PrivateInferenceSurface.SerializeOfferAnswer(accepted))
+            .ConfigureAwait(true);
+        ViewModel.SetPrivateInference(response.ResultAs<DaemonSettingsSnapshot>());
+    }
+
     private async void OnDeclineArming(object sender, RoutedEventArgs e)
     {
         string projectId = ViewModel.ArmingOfferProjectId;

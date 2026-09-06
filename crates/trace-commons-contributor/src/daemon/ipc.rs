@@ -2092,12 +2092,15 @@ fn handle_set_settings(shared: &DaemonShared, req: &Request) -> Response {
     // settings override) uses, so there is one definition of "a
     // valid settings object" for both. See its doc for why an
     // unrecognized key is rejected rather than ignored.
-    match super::settings::apply_settings_object(&mut settings, &req.params) {
+    // Rejected or unpersisted values must never reach the supervisor.
+    let mut candidate = settings.clone();
+    match super::settings::apply_settings_object(&mut candidate, &req.params) {
         Ok(false) => Response::err(req.id, ERR_BAD_PARAMS, "no-known-setting-supplied"),
         Ok(true) => {
-            if let Err(_e) = settings.save(&shared.store) {
+            if let Err(_e) = candidate.save(&shared.store) {
                 return Response::err(req.id, ERR_UNAVAILABLE, "settings-write-failed");
             }
+            *settings = candidate;
             if settings.private_inference != private_inference_before {
                 shared
                     .private_inference_generation
@@ -7112,6 +7115,56 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn rejected_private_inference_settings_never_reach_reconcile() {
+        let s = shared();
+        let home = tempfile::tempdir().unwrap();
+        let absent_home = home.path().join("never-created");
+        *s.private_inference.lock().await = Some(
+            super::super::private_inference::PrivateInference::with_port(absent_home.clone(), 0),
+        );
+        let response = handle_set_settings_async(
+            &s,
+            &req(
+                "set_settings",
+                serde_json::json!({"private_inference": true, "zz_unknown": true}),
+            ),
+        )
+        .await;
+        assert!(response.error.is_some());
+        assert!(!s.settings.lock().unwrap().private_inference);
+        assert!(!DaemonSettings::load(&s.store).unwrap().private_inference);
+        s.reconcile_private_inference().await;
+        assert_eq!(s.private_inference_value()["state"], "off");
+        assert!(!absent_home.exists());
+    }
+
+    #[tokio::test]
+    async fn unpersisted_private_inference_opt_in_never_reaches_reconcile() {
+        let s = shared();
+        let home = tempfile::tempdir().unwrap();
+        let absent_home = home.path().join("never-created");
+        *s.private_inference.lock().await = Some(
+            super::super::private_inference::PrivateInference::with_port(absent_home.clone(), 0),
+        );
+        let path = s.store.daemon_path(crate::config::DAEMON_SETTINGS_FILE);
+        std::fs::create_dir_all(&path).unwrap();
+        let response = handle_set_settings_async(
+            &s,
+            &req(
+                "set_settings",
+                serde_json::json!({"private_inference": true}),
+            ),
+        )
+        .await;
+        assert_eq!(response.error.unwrap().message, "settings-write-failed");
+        assert!(!s.settings.lock().unwrap().private_inference);
+        s.reconcile_private_inference().await;
+        assert_eq!(s.private_inference_value()["state"], "off");
+        assert!(!absent_home.exists());
+        assert!(path.is_dir());
+    }
+
     /// The switch is a settable key, it persists, and it is off until
     /// somebody sets it. An upgrade must never start a proxy because a
     /// settings file predates the key.
@@ -7148,6 +7201,55 @@ mod tests {
         );
         assert!(r.error.is_none(), "{:?}", r.error);
         assert!(!s.settings.lock().unwrap().private_inference);
+    }
+
+    /// The offer marker is readable, settable and survives a restart --
+    /// and recording that the question was asked starts nothing.
+    ///
+    /// A shell that could not read the marker back would have to keep its
+    /// own copy, and a shell whose write did not persist would ask again on
+    /// every launch, which is the nagging this key exists to prevent.
+    #[test]
+    fn the_offer_marker_round_trips_and_starts_nothing() {
+        let s = shared();
+        let before = handle_request(&s, &req("get_settings", serde_json::json!({})));
+        let before = before.result.expect("get_settings answers");
+        assert_eq!(
+            before["private_inference_offer_seen"],
+            serde_json::json!(false),
+            "a daemon nobody has asked through reports the offer unanswered"
+        );
+
+        let r = handle_request(
+            &s,
+            &req(
+                "set_settings",
+                serde_json::json!({"private_inference_offer_seen": true}),
+            ),
+        );
+        assert!(r.error.is_none(), "{:?}", r.error);
+        let echoed = r.result.expect("set_settings answers");
+        assert_eq!(
+            echoed["private_inference_offer_seen"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            echoed["private_inference"],
+            serde_json::json!(false),
+            "answering the question is not answering the switch"
+        );
+        assert_eq!(
+            echoed["private_inference_state"]["state"],
+            serde_json::json!(super::super::private_inference::LABEL_OFF),
+            "recording the answer must not have started anything"
+        );
+
+        let reloaded = super::super::settings::DaemonSettings::load(&s.store).unwrap();
+        assert!(
+            reloaded.private_inference_offer_seen,
+            "a restart must not put the question back"
+        );
+        assert!(!reloaded.private_inference);
     }
 
     /// Ask 127.0.0.1:`port` for IronWire's health endpoint using nothing

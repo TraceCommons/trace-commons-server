@@ -539,6 +539,18 @@ struct DaemonSettingsView: Decodable, Equatable {
     var admissionEvidenceRequired: Bool? = nil
     var ironwireAttestedBodies: Bool? = nil
     var inferenceEvidenceEnabled: Bool { ironwireAttestedBodies == true }
+    /// Whether this daemon was asked to answer model calls itself. What was
+    /// ASKED FOR; what happened is `privateInferenceState` beside it, and
+    /// the two differ exactly when the listener refused to start.
+    var privateInference: Bool? = nil
+    var privateInferenceOn: Bool { privateInference == true }
+    /// Whether the contributor has already been asked about that switch.
+    /// Absent on a daemon that predates the key, which reads as unanswered
+    /// -- and is what makes the offer appear once after an upgrade.
+    var privateInferenceOfferSeen: Bool? = nil
+    var privateInferenceAnswered: Bool { privateInferenceOfferSeen == true }
+    /// What the listener is actually doing.
+    var privateInferenceState: PrivateInferenceStateView? = nil
 
     /// The four source modes as the routing surface takes them. Absent
     /// means `unset`, which watches the conventional location and is
@@ -569,6 +581,26 @@ struct DaemonSettingsView: Decodable, Equatable {
         case ironwire
         case admissionEvidenceRequired = "admission_evidence_required"
         case ironwireAttestedBodies = "ironwire_attested_bodies"
+        case privateInference = "private_inference"
+        case privateInferenceOfferSeen = "private_inference_offer_seen"
+        case privateInferenceState = "private_inference_state"
+    }
+}
+
+/// `private_inference_state` as `get_settings`, `set_settings` and `status`
+/// all report it.
+///
+/// The label is carried as the daemon's own string and handed to the shared
+/// table, never parsed into a Swift enum: a state a later daemon grows would
+/// otherwise have to be spelled here before it could be shown, and the shared
+/// table already answers an unknown label with the sentence that claims
+/// nothing.
+struct PrivateInferenceStateView: Decodable, Equatable {
+    let state: String
+    let port: UInt16?
+
+    var surfaceState: PrivateInferenceState {
+        PrivateInferenceState(label: state, port: port)
     }
 }
 

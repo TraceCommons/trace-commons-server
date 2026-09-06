@@ -82,6 +82,7 @@ private struct Launcher: View {
         }
         appDelegate.compute = compute
         appDelegate.navigation = navigation
+        appDelegate.model = model
         model.start()
         Task {
             await compute.start()

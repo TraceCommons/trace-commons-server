@@ -137,6 +137,66 @@ final class AppModel: ObservableObject {
         stateLine: { TCRoutingCopy.stateLine(state: $0) },
         stateTone: { TCRoutingCopy.stateTone(state: $0) }
     )
+    // MARK: - Answering model calls on this computer
+
+    /// The offer's and the settings card's fixed words, decoded once from
+    /// the Rust.
+    ///
+    /// Nil only if the export or the decode failed, and both surfaces render
+    /// nothing at all in that case. An offer with a missing sentence would be
+    /// an offer with the exposure paragraph missing, which is worse than no
+    /// offer.
+    @Published private(set) var privateInferenceCopy: PrivateInferenceCopy? =
+        PrivateInferenceCopy.decode(fromJSON: TCPrivateInference.copyJSON() ?? "")
+
+    /// The two branch tables and the interpolated sentence, all decided in
+    /// the Rust. This shell owns no `switch` on this surface.
+    let privateInferenceCalls = PrivateInferenceCalls(
+        stateLine: { TCPrivateInference.stateLine(state: $0) },
+        stateTone: { TCPrivateInference.stateTone(state: $0) },
+        servingLine: { TCPrivateInference.servingLine(port: $0) },
+        shouldOffer: { TCPrivateInference.shouldOffer(answered: $0, on: $1) }
+    )
+
+    /// What the listener is doing, from the daemon's own report.
+    ///
+    /// Never nil: a daemon that has never heard of the field reads as the
+    /// empty label, which the shared table answers with the off sentence.
+    var privateInferenceState: PrivateInferenceState {
+        daemonSettings?.privateInferenceState?.surfaceState
+            ?? PrivateInferenceState(label: "", port: nil)
+    }
+
+    /// Whether to put the offer in front of the contributor right now.
+    ///
+    /// Asked of the shared table on every settings read rather than latched
+    /// at launch: the answer lives in the daemon, so a contributor who
+    /// answered in another window has answered.
+    var showsPrivateInferenceOffer: Bool {
+        guard let settings = daemonSettings, privateInferenceCopy != nil else { return false }
+        return PrivateInferenceSurface.shouldOffer(
+            answered: settings.privateInferenceAnswered,
+            on: settings.privateInferenceOn,
+            calls: privateInferenceCalls
+        )
+    }
+
+    /// Answer the offer. Both answers are written to the daemon, so "Not
+    /// now" is remembered across relaunches and across shells.
+    func answerPrivateInferenceOffer(accepted: Bool) {
+        perform("set_settings", work: { try $0.answerPrivateInferenceOffer(accepted: accepted) }) {
+            view in
+            self.publishIfChanged(\.daemonSettings, view)
+        }
+    }
+
+    /// Flip the switch on the settings card, and render from the echo.
+    func applyPrivateInference(_ on: Bool) {
+        perform("set_settings", work: { try $0.setPrivateInference(on) }) { view in
+            self.publishIfChanged(\.daemonSettings, view)
+        }
+    }
+
     // MARK: - The redaction witness
 
     /// The witness surface's fixed words, decoded once from the Rust.
