@@ -67,7 +67,9 @@
 
 use std::time::Duration;
 
-use trace_commons_attestation::receipt::{ReceiptAlgo, ReceiptPayload, verify_receipt};
+use trace_commons_attestation::receipt::{
+    ReceiptAlgo, ReceiptPayload, ReceiptSignatureKind, ReceiptVerdict, verify_receipt,
+};
 use trace_commons_operator_client::host_allowlist::HostAllowlist;
 
 use super::attested::AttestedCall;
@@ -171,11 +173,26 @@ pub fn parse_receipt_response(body: &str) -> Result<ReceiptPayload, ReceiptFetch
         // field, and it must not be read as the ECDSA default.
         Some(_) => return Err(ReceiptFetchError::ResponseMalformed),
     };
+    // Which attested key the provider says signed it. Absent reads as
+    // `Unrecognised` rather than as a guess: a receipt that names no kind
+    // names no key source, and the routing below refuses it. Present but not
+    // a string is malformed, for the same reason `signing_algo` is -- the
+    // provider said something this client cannot read.
+    //
+    // An unrecognised *string* is not malformed, though. It is a kind this
+    // client has not learned yet, and the honest outcome is an unattested
+    // submission rather than a parse failure that reads as a broken endpoint.
+    let signature_kind = match receipt.get("signature_kind") {
+        None => ReceiptSignatureKind::Unrecognised,
+        Some(serde_json::Value::String(s)) => ReceiptSignatureKind::from_wire(s),
+        Some(_) => return Err(ReceiptFetchError::ResponseMalformed),
+    };
     Ok(ReceiptPayload {
         text: field("text")?,
         signature: field("signature")?,
         signing_address: field("signing_address")?,
         signing_algo,
+        signature_kind,
     })
 }
 
@@ -376,25 +393,52 @@ pub fn receipt_matches_call(
     .map_err(|_| ReceiptFetchError::ReceiptUnverified)
 }
 
-/// The signer is checked against the **model's** attested key set, not the
-/// gateway key. A hosted-model receipt is `signature_kind: "provider_tee"`
-/// and its signer is per-model; the gateway key signs no receipt, so the
-/// gateway comparison this used to make refused every real receipt.
+/// The signer is checked against the key set the receipt's **own
+/// `signature_kind`** names, and against no other.
+///
+/// NEAR AI signs with a different attested key depending on the protocol the
+/// inference call used, for the same hosted model: a Chat Completions call
+/// yields `provider_tee`, signed by that model's key in `model_attestations`;
+/// a Responses API call yields `gateway`, signed by the key in
+/// `gateway_attestation`. The Codex CLI speaks the Responses API exclusively,
+/// so a client that only ever consults `model_attestations` reports every
+/// Codex-driven receipt as unattested.
+///
+/// One report answers both -- the same fetch returns `gateway_attestation`
+/// and `model_attestations` -- so routing costs no second request.
+///
+/// The kind selects **one** source. A `gateway` receipt is never tried
+/// against a model key, nor the reverse, and a kind this client does not
+/// recognise selects nothing and is refused; see
+/// [`trace_commons_attestation::receipt::attested_keys_for_receipt`].
+///
+/// `requested_model` is a fallback for the `provider_tee` arm only, and it is
+/// only ever reached by a two-part receipt: `verify_receipt` has already
+/// established that a three-part receipt's bound model *is* the requested one,
+/// so on every receipt that binds a model the two values are equal and the
+/// receipt's own name is what is used.
 ///
 /// # Errors
 ///
-/// [`ReceiptFetchError::SignerNotAttested`] when the report cannot be
-/// parsed, attests no ed25519 signer for this model, is for a different
-/// nonce, or names a different signer.
+/// [`ReceiptFetchError::SignerNotAttested`] when the receipt names no
+/// recognised kind, the report cannot be parsed, attests no ed25519 signer for
+/// the selected source, is for a different nonce, or names a different signer.
 pub fn signer_matches_report(
-    signer: &str,
+    verdict: &ReceiptVerdict,
     report_json: &str,
     nonce: &str,
-    model: &str,
+    requested_model: &str,
 ) -> Result<(), ReceiptFetchError> {
-    let attested = super::attestation_report::model_ed25519_keys(report_json, nonce, model)
-        .map_err(|_| ReceiptFetchError::SignerNotAttested)?;
-    if !super::attestation_report::signer_is_attested_for_model(signer, &attested) {
+    let model = verdict.model.as_deref().unwrap_or(requested_model);
+    let attested = trace_commons_attestation::receipt::attested_keys_for_receipt(
+        verdict.signature_kind,
+        report_json,
+        nonce,
+        Some(model),
+    )
+    .map_err(|_| ReceiptFetchError::SignerNotAttested)?;
+    if !super::attestation_report::signer_is_attested_for_model(&verdict.signing_address, &attested)
+    {
         return Err(ReceiptFetchError::SignerNotAttested);
     }
     Ok(())
@@ -452,10 +496,12 @@ pub async fn receipt_for_attested_call(
 
         let nonce = fresh_nonce_hex()?;
         let report = fetch_attestation_report(&client, allowlist, endpoint, model, &nonce).await?;
-        // The *verified* signer, not the claimed one. They are equal by the
-        // time this runs, and taking it from the verdict is what keeps that
-        // true if the two ever diverge.
-        signer_matches_report(&verdict.signing_address, &report, &nonce, model)?;
+        // The whole verdict, not just the signer: the comparison needs the
+        // *verified* signer (equal to the claimed one by the time this runs,
+        // and taking it from the verdict is what keeps that true if the two
+        // ever diverge), the model the receipt itself bound, and the kind
+        // that decides which attested key set it is checked against.
+        signer_matches_report(&verdict, &report, &nonce, model)?;
     }
 
     Ok(payload)
@@ -475,6 +521,31 @@ mod tests {
     use super::*;
 
     const BASE: &str = "https://qwen3-6-27b.completions.near.ai/v1";
+
+    /// A verdict as `verify_receipt` would have produced it, for the tests
+    /// that exercise the attestation comparison on its own.
+    ///
+    /// The hashes are not read by `signer_matches_report` -- they were
+    /// checked before it runs -- so they are placeholders here and the three
+    /// fields that matter are real: the signer, the model the receipt bound,
+    /// and the kind that selects which attested key set it is checked
+    /// against.
+    fn verdict(kind: ReceiptSignatureKind, signer: &str, model: Option<&str>) -> ReceiptVerdict {
+        ReceiptVerdict {
+            request_sha256: "0".repeat(64),
+            response_sha256: "0".repeat(64),
+            signing_address: signer.to_string(),
+            model: model.map(str::to_string),
+            signing_algo: ReceiptAlgo::Ed25519,
+            signature_kind: kind,
+        }
+    }
+
+    /// The common case in these tests: a chat-completions receipt, which
+    /// binds its model and is checked against that model's attested keys.
+    fn provider_verdict(signer: &str, model: &str) -> ReceiptVerdict {
+        verdict(ReceiptSignatureKind::ProviderTee, signer, Some(model))
+    }
 
     /// An attestable call, built through the real reader so its identifier
     /// and model are the ones a fetch would actually use.
@@ -828,6 +899,7 @@ mod tests {
             // A real, genuinely attested per-model key.
             signing_address: MODEL_A_KEY.to_string(),
             signing_algo: ReceiptAlgo::Ed25519,
+            signature_kind: ReceiptSignatureKind::ProviderTee,
         };
 
         assert_eq!(
@@ -840,8 +912,13 @@ mod tests {
         // address really is attested for this model.
         let report = attestation_report(ATTESTATION_NONCE);
         assert!(
-            signer_matches_report(&forged.signing_address, &report, ATTESTATION_NONCE, MODEL_A)
-                .is_ok(),
+            signer_matches_report(
+                &provider_verdict(&forged.signing_address, MODEL_A),
+                &report,
+                ATTESTATION_NONCE,
+                MODEL_A
+            )
+            .is_ok(),
             "the address alone passes the attestation comparison, which is \
              exactly why the signature has to be verified too"
         );
@@ -854,7 +931,7 @@ mod tests {
     fn a_matching_model_signer_over_a_good_report_is_accepted() {
         assert!(
             signer_matches_report(
-                MODEL_A_KEY,
+                &provider_verdict(MODEL_A_KEY, MODEL_A),
                 &attestation_report(ATTESTATION_NONCE),
                 ATTESTATION_NONCE,
                 MODEL_A,
@@ -872,7 +949,13 @@ mod tests {
     fn the_gateway_key_is_not_a_receipt_signer_for_any_model() {
         let report = attestation_report(ATTESTATION_NONCE);
         assert_eq!(
-            signer_matches_report(GATEWAY_KEY, &report, ATTESTATION_NONCE, MODEL_A).unwrap_err(),
+            signer_matches_report(
+                &provider_verdict(GATEWAY_KEY, MODEL_A),
+                &report,
+                ATTESTATION_NONCE,
+                MODEL_A
+            )
+            .unwrap_err(),
             ReceiptFetchError::SignerNotAttested
         );
     }
@@ -883,11 +966,23 @@ mod tests {
     fn another_models_signer_is_refused() {
         let report = attestation_report(ATTESTATION_NONCE);
         assert_eq!(
-            signer_matches_report(MODEL_B_KEY, &report, ATTESTATION_NONCE, MODEL_A).unwrap_err(),
+            signer_matches_report(
+                &provider_verdict(MODEL_B_KEY, MODEL_A),
+                &report,
+                ATTESTATION_NONCE,
+                MODEL_A
+            )
+            .unwrap_err(),
             ReceiptFetchError::SignerNotAttested
         );
         assert!(
-            signer_matches_report(MODEL_B_KEY, &report, ATTESTATION_NONCE, MODEL_B).is_ok(),
+            signer_matches_report(
+                &provider_verdict(MODEL_B_KEY, MODEL_B),
+                &report,
+                ATTESTATION_NONCE,
+                MODEL_B
+            )
+            .is_ok(),
             "the same key is attested for its own model"
         );
     }
@@ -898,7 +993,7 @@ mod tests {
     fn a_model_the_report_does_not_attest_is_refused() {
         assert_eq!(
             signer_matches_report(
-                MODEL_A_KEY,
+                &provider_verdict(MODEL_A_KEY, "Qwen/Qwen3.9-Nonexistent"),
                 &attestation_report(ATTESTATION_NONCE),
                 ATTESTATION_NONCE,
                 "Qwen/Qwen3.9-Nonexistent",
@@ -912,13 +1007,138 @@ mod tests {
     fn a_different_signer_over_a_good_report_is_refused() {
         assert_eq!(
             signer_matches_report(
-                "0000000000000000000000000000000000000000000000000000000000000000",
+                &provider_verdict(
+                    "0000000000000000000000000000000000000000000000000000000000000000",
+                    MODEL_A,
+                ),
                 &attestation_report(ATTESTATION_NONCE),
                 ATTESTATION_NONCE,
                 MODEL_A,
             )
             .unwrap_err(),
             ReceiptFetchError::SignerNotAttested
+        );
+    }
+
+    // ---- Both signature kinds -------------------------------------------
+    //
+    // NEAR AI signs with a different attested key depending on the protocol
+    // the call used, for the same hosted model: Chat Completions yields
+    // `provider_tee` (the model's key), the Responses API yields `gateway`
+    // (the gateway's key). Codex speaks only the Responses API, so a client
+    // consulting `model_attestations` alone reports every Codex-driven
+    // receipt as unattested.
+    // ---------------------------------------------------------------------
+
+    /// A `gateway` receipt is attested by the gateway key. Route it as
+    /// `provider_tee` -- the shipped behaviour -- and the same signer over the
+    /// same report is refused, which is the defect this fixes.
+    #[test]
+    fn a_gateway_receipt_is_attested_by_the_gateway_key() {
+        let report = attestation_report(ATTESTATION_NONCE);
+        // A gateway receipt from the Responses API binds no model, so the
+        // verdict carries none: the gateway arm does not need one.
+        let gateway = verdict(ReceiptSignatureKind::Gateway, GATEWAY_KEY, None);
+        assert!(
+            signer_matches_report(&gateway, &report, ATTESTATION_NONCE, MODEL_A).is_ok(),
+            "the gateway key attests a gateway-kind receipt"
+        );
+        assert_eq!(
+            signer_matches_report(
+                &provider_verdict(GATEWAY_KEY, MODEL_A),
+                &report,
+                ATTESTATION_NONCE,
+                MODEL_A
+            )
+            .unwrap_err(),
+            ReceiptFetchError::SignerNotAttested,
+            "and the model arm refuses it -- routing is what makes the \
+             difference, not the key"
+        );
+    }
+
+    /// The mirror: a model key does not attest a gateway-kind receipt. Each
+    /// kind has one source, and neither vouches for the other.
+    #[test]
+    fn a_model_key_does_not_attest_a_gateway_receipt() {
+        let report = attestation_report(ATTESTATION_NONCE);
+        assert_eq!(
+            signer_matches_report(
+                &verdict(ReceiptSignatureKind::Gateway, MODEL_A_KEY, Some(MODEL_A)),
+                &report,
+                ATTESTATION_NONCE,
+                MODEL_A
+            )
+            .unwrap_err(),
+            ReceiptFetchError::SignerNotAttested
+        );
+    }
+
+    /// A kind this client does not recognise names no key source and is
+    /// refused. Not checked against every key it holds.
+    #[test]
+    fn an_unrecognised_signature_kind_is_refused() {
+        let report = attestation_report(ATTESTATION_NONCE);
+        for signer in [MODEL_A_KEY, GATEWAY_KEY] {
+            assert_eq!(
+                signer_matches_report(
+                    &verdict(ReceiptSignatureKind::Unrecognised, signer, Some(MODEL_A)),
+                    &report,
+                    ATTESTATION_NONCE,
+                    MODEL_A
+                )
+                .unwrap_err(),
+                ReceiptFetchError::SignerNotAttested,
+                "an unrecognised kind is refused even for a genuinely \
+                 attested signer"
+            );
+        }
+    }
+
+    /// The kind is read off the wire. Absent means unrecognised, not a
+    /// default -- there is no safe default, since guessing one would check a
+    /// signer against a set the receipt never claimed.
+    #[test]
+    fn the_wire_signature_kind_reaches_the_payload() {
+        let body = |kind: &str| {
+            format!(
+                r#"{{"text":"a:b","signature":"cc","signing_address":"dd","signing_algo":"ed25519","signature_kind":"{kind}"}}"#
+            )
+        };
+        assert_eq!(
+            parse_receipt_response(&body("gateway"))
+                .expect("a receipt")
+                .signature_kind,
+            ReceiptSignatureKind::Gateway
+        );
+        assert_eq!(
+            parse_receipt_response(&body("provider_tee"))
+                .expect("a receipt")
+                .signature_kind,
+            ReceiptSignatureKind::ProviderTee
+        );
+        assert_eq!(
+            parse_receipt_response(&body("something_new"))
+                .expect("a receipt")
+                .signature_kind,
+            ReceiptSignatureKind::Unrecognised
+        );
+        assert_eq!(
+            parse_receipt_response(
+                r#"{"text":"a:b","signature":"cc","signing_address":"dd","signing_algo":"ed25519"}"#
+            )
+            .expect("a receipt")
+            .signature_kind,
+            ReceiptSignatureKind::Unrecognised,
+            "an absent kind is unrecognised, never a default"
+        );
+        // Present but not a string is malformed, matching `signing_algo`.
+        assert_eq!(
+            parse_receipt_response(
+                r#"{"text":"a:b","signature":"cc","signing_address":"dd","signature_kind":7}"#
+            )
+            .unwrap_err(),
+            ReceiptFetchError::ResponseMalformed
         );
     }
 
@@ -929,7 +1149,7 @@ mod tests {
         let other_nonce = "0".repeat(64);
         assert_eq!(
             signer_matches_report(
-                MODEL_A_KEY,
+                &provider_verdict(MODEL_A_KEY, MODEL_A),
                 &attestation_report(&other_nonce),
                 ATTESTATION_NONCE,
                 MODEL_A,

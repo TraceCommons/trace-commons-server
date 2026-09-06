@@ -49,7 +49,9 @@ use sha3::Keccak256;
 use tower::ServiceExt as _;
 
 use trace_commons_protocol::trace_contribution::ResidualPiiRisk;
-use trace_commons_server::near_attestation::receipt::{ReceiptAlgo, ReceiptPayload};
+use trace_commons_server::near_attestation::receipt::{
+    ReceiptAlgo, ReceiptPayload, ReceiptSignatureKind,
+};
 use trace_commons_server::redaction_witness::certificate::{
     CertificateDetails, WitnessCertificate,
 };
@@ -428,6 +430,7 @@ fn receipt_over(signer: &TestSigner, request_body: &str, response_body: &str) ->
         signature,
         signing_address: signer.address(),
         signing_algo: ReceiptAlgo::Ecdsa,
+        signature_kind: ReceiptSignatureKind::Unrecognised,
     }
 }
 
@@ -777,6 +780,7 @@ async fn an_ed25519_receipt_this_client_serialises_crosses_the_wire_intact() {
         signing_address: "cb6fc58f6bd685919fa42fb54d3fcfe03222e324bdda91f0bac6d5c73dc4f1c6"
             .to_string(),
         signing_algo: ReceiptAlgo::Ed25519,
+        signature_kind: ReceiptSignatureKind::Gateway,
     };
 
     let (status, label) = post_witness(service, client_request_body(&call, Some(receipt))).await;

@@ -40,7 +40,8 @@ use tokio::net::TcpListener;
 use trace_commons_server::witness_service::enclave::{DSTACK_SOCKET_PATH, DstackSocketAgent};
 use trace_commons_server::witness_service::http::{WitnessLoadBound, witness_router};
 use trace_commons_server::witness_service::inference::{
-    DEFAULT_MAX_BODY_BYTES, InferenceAttestationPolicy, parse_model_key_pins,
+    DEFAULT_MAX_BODY_BYTES, InferenceAttestationPolicy, parse_gateway_key_pins,
+    parse_model_key_pins,
 };
 use trace_commons_server::witness_service::surface::WitnessService;
 use trace_commons_server::witness_service::{
@@ -257,6 +258,51 @@ struct Args {
     /// without a value would otherwise get a pin-less witness from.
     #[arg(long, env = "TRACE_COMMONS_WITNESS_MODEL_KEY_PINS")]
     model_key_pins: Option<String>,
+
+    /// The ed25519 keys that may sign a **gateway**-kind inference receipt:
+    /// `key[,key...]`, each 64 hex characters with no `0x` and no `model=`
+    /// prefix. A gateway receipt whose signer is not listed is refused.
+    ///
+    /// # Why this exists beside the model pins
+    ///
+    /// NEAR AI issues two legitimate kinds of receipt for the **same hosted
+    /// model**, and the protocol decides which. A Chat Completions call
+    /// (`/v1/chat/completions`) yields `signature_kind: "provider_tee"`,
+    /// signed by that model's key -- pinned by
+    /// `TRACE_COMMONS_WITNESS_MODEL_KEY_PINS`. A Responses API call
+    /// (`/v1/responses`) yields `signature_kind: "gateway"`, signed by the
+    /// single key in the report's `gateway_attestation` -- pinned here.
+    ///
+    /// **The Codex CLI speaks the Responses API exclusively.** It dropped
+    /// `wire_api = "chat"`, so a deployment whose contributors use Codex
+    /// produces only gateway-signed receipts, and a witness with model pins
+    /// alone refuses every one of them. An operator whose contributors use
+    /// Codex needs this variable; one whose traffic is chat-completions needs
+    /// the model pins; a deployment seeing both needs both.
+    ///
+    /// # This is not the retired `TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN`
+    ///
+    /// Deliberately a different name, and the boot-time refusal on the old one
+    /// stays. The old variable applied the gateway key to *every* receipt,
+    /// which refused every `provider_tee` one; silently re-reading a value an
+    /// operator set under those semantics would give it new meaning they never
+    /// chose. Unset the old name and set this one.
+    ///
+    /// The value is a public key, obtained once and out of band from the same
+    /// report the model pins come from -- `GET /attestation/report?model=..&
+    /// signing_algo=ed25519&nonce=<64 hex>` -- taking `gateway_attestation`'s
+    /// `signing_address`, whose `report_data` must be `signing_address ||
+    /// nonce`. One fetch yields both pins.
+    ///
+    /// Unset means gateway receipts are unpinned. On a witness that pins the
+    /// other kind, unpinned means **refused**: pinning model keys is not
+    /// agreement to accept any gateway-signed receipt from any signer. On a
+    /// witness that pins nothing at all, everything is dormant as before.
+    ///
+    /// Malformed is a startup failure, never an ignored value -- including the
+    /// empty string.
+    #[arg(long, env = "TRACE_COMMONS_WITNESS_GATEWAY_RECEIPT_KEY_PINS")]
+    gateway_receipt_key_pins: Option<String>,
 }
 
 #[tokio::main]
@@ -295,6 +341,13 @@ async fn main() -> Result<()> {
     // fix, in a new place. This repo's rule is that a configured gate whose
     // dependency is gone refuses, so refuse, and name the replacement.
     //
+    // The bail stays even though gateway receipts are pinnable again, and
+    // that is why the new variable took a new name. The old one applied its
+    // key to *every* receipt, including `provider_tee` ones it could never
+    // match; re-reading a value set under those semantics would give it a
+    // meaning the operator never chose, on a control whose whole job is to
+    // decide who may sign.
+    //
     // Checked directly rather than through a clap argument: the point is to
     // notice a variable nothing is meant to parse. Presence alone is enough,
     // including when it is set to the empty string.
@@ -302,11 +355,14 @@ async fn main() -> Result<()> {
         bail!(
             "TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN is set but is no longer read. \
              It pinned the inference gateway's signing key, which signs no \
-             receipt, so it refused every real receipt. Unset it. To pin receipt \
-             signers, set TRACE_COMMONS_WITNESS_MODEL_KEY_PINS to \
-             `model=key[,model=key...]` using each model's own attested ed25519 \
-             key -- see deploy/witness/README.md for the derivation. Leaving it \
-             unset is the dormant default."
+             receipt from a chat-completions call, so it refused every one of \
+             those. Unset it. To pin receipt signers, set \
+             TRACE_COMMONS_WITNESS_MODEL_KEY_PINS to `model=key[,model=key...]` \
+             using each model's own attested ed25519 key, and, for \
+             Responses-API traffic such as the Codex CLI's, \
+             TRACE_COMMONS_WITNESS_GATEWAY_RECEIPT_KEY_PINS to the gateway's \
+             own attested key -- see deploy/witness/README.md for both \
+             derivations. Leaving both unset is the dormant default."
         );
     }
 
@@ -438,6 +494,46 @@ async fn main() -> Result<()> {
                 model_key_pins_sha256_prefix = %&digest[..8],
                 pinned_models = pins.len(),
                 "witness inference model key pins"
+            );
+            policy
+        }
+        None => inference_policy,
+    };
+
+    // The gateway pin, alongside the model pins rather than instead of them.
+    // A receipt's own `signature_kind` decides which set applies: `gateway`
+    // for a Responses-API receipt (every Codex-driven one), `provider_tee`
+    // for a chat-completions one. Resolved here for the same reason the model
+    // pins are -- a value that is not a key must fail the process rather than
+    // become a control that silently matches nothing.
+    let inference_policy = match args.gateway_receipt_key_pins.as_deref() {
+        Some(spec) => {
+            let malformed = || {
+                // Not echoed, for the reason the model-pin message gives.
+                anyhow::anyhow!(
+                    "TRACE_COMMONS_WITNESS_GATEWAY_RECEIPT_KEY_PINS must be \
+                     `key[,key...]`, each a 32-byte ed25519 key: 64 hex \
+                     characters, no `0x` prefix and no `model=` -- that spelling \
+                     belongs in TRACE_COMMONS_WITNESS_MODEL_KEY_PINS"
+                )
+            };
+            let keys = parse_gateway_key_pins(spec).map_err(|_| malformed())?;
+            let policy = inference_policy
+                .pinning_gateway_keys(keys)
+                .map_err(|_| malformed())?;
+            let keys = policy
+                .gateway_key_pins()
+                .expect("the pins were just accepted");
+            let mut hasher = sha2::Sha256::new();
+            for key in keys {
+                hasher.update(key.as_bytes());
+                hasher.update(b"\n");
+            }
+            let digest = hex::encode(hasher.finalize());
+            tracing::info!(
+                gateway_key_pins_sha256_prefix = %&digest[..8],
+                pinned_gateway_keys = keys.len(),
+                "witness inference gateway key pins"
             );
             policy
         }

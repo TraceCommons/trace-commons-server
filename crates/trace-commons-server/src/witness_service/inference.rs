@@ -199,16 +199,41 @@
 //! client skips it. The pin is the same comparison, made here, against keys
 //! the operator configured.
 //!
-//! **Per model, and that is the correction.** An earlier version of this
-//! pinned a single `gateway_attestation.signing_address`. That key signs no
-//! receipt. A hosted-model receipt comes back `signature_kind:
+//! **Per model, and that is the first correction.** An earlier version of this
+//! pinned a single `gateway_attestation.signing_address` and applied it to
+//! every receipt. A Chat Completions receipt comes back `signature_kind:
 //! "provider_tee"` with a signer that differs per model -- the key that
 //! appears in the report's `model_attestations`, and only when the report was
-//! requested with `signing_algo=ed25519`. One key therefore cannot match the
-//! signer set, and the shipped pin refused every real receipt. The pin is a
-//! map from model name to that model's attested key set, and the model is
+//! requested with `signing_algo=ed25519`. One gateway key therefore cannot
+//! match that signer, and the shipped pin refused every such receipt. The pin
+//! is a map from model name to that model's attested key set, and the model is
 //! read out of the **receipt's own text**, which is `{model}:{request_sha256}:
 //! {response_sha256}`.
+//!
+//! **Both kinds, and that is the second.** Correcting the first one to consult
+//! `model_attestations` *alone* over-corrected. NEAR AI issues two legitimate
+//! kinds of receipt for the **same hosted model**, and the *protocol* decides
+//! which:
+//!
+//! | request protocol | `signature_kind` | signer |
+//! |---|---|---|
+//! | Chat Completions (`/v1/chat/completions`) | `provider_tee` | the model's key in `model_attestations` |
+//! | Responses API (`/v1/responses`) | `gateway` | the key in `gateway_attestation` |
+//!
+//! Both captured live against `Qwen/Qwen3.6-35B-A3B-FP8`. The Codex CLI --
+//! which this project's own operator documentation recommends -- speaks the
+//! Responses API exclusively, having dropped `wire_api = "chat"`, so
+//! Codex-driven traffic is entirely gateway-signed and a model-pins-only
+//! witness refuses all of it.
+//!
+//! So there are two pin sets, [`InferenceAttestationPolicy::pinning_model_keys`]
+//! and [`InferenceAttestationPolicy::pinning_gateway_keys`], and the receipt's
+//! own `signature_kind` selects exactly one of them. Never both: a
+//! gateway-signed receipt admitted under a model pin, or the reverse, would
+//! mean a key attested for one role could vouch for the other. A kind this
+//! witness does not recognise selects nothing and is refused, and so is a kind
+//! whose pin set was left unset on a witness that pins the other -- pinning
+//! one kind is not agreement to accept the other unchecked.
 //!
 //! Pins rather than a live report fetch, because this module makes no
 //! outbound call on the request path and one that did would be trusting a
@@ -243,8 +268,8 @@ use trace_commons_protocol::trace_contribution::{
 use std::collections::BTreeMap;
 
 use crate::near_attestation::receipt::{
-    ReceiptAlgo, ReceiptPayload, normalize_ed25519_key, signer_is_attested_for_model,
-    verify_receipt,
+    ReceiptAlgo, ReceiptPayload, ReceiptSignatureKind, normalize_ed25519_key,
+    signer_is_attested_for_model, verify_receipt,
 };
 
 use super::WitnessError;
@@ -269,6 +294,10 @@ pub struct InferenceAttestationPolicy {
     /// for it, normalised. `None` is the dormant default; see
     /// [`Self::pinning_model_keys`].
     model_key_pins: Option<BTreeMap<String, Vec<String>>>,
+    /// The ed25519 keys this deployment trusts to sign a **gateway**-kind
+    /// receipt, normalised. `None` where none are pinned; see
+    /// [`Self::pinning_gateway_keys`].
+    gateway_key_pins: Option<Vec<String>>,
 }
 
 /// The requirement was configured in a way that would not require anything.
@@ -284,6 +313,53 @@ pub struct PolicyMisconfigured;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("the pinned model signing keys are not a `model=key` set of 32-byte ed25519 keys")]
 pub struct ModelKeyPinMalformed;
+
+/// The configured gateway key pins are not a usable set of ed25519 keys.
+///
+/// A separate type from [`ModelKeyPinMalformed`] because the two variables
+/// have different shapes -- one is `model=key`, the other is a bare key list
+/// -- and an operator who mixed them up must be told which one is wrong.
+/// Carries nothing, for the same reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the pinned gateway signing keys are not a set of 32-byte ed25519 keys")]
+pub struct GatewayKeyPinMalformed;
+
+/// Parse the `key[,key...]` spelling an operator configures for the gateway.
+///
+/// Bare keys with no `model=` prefix, because a gateway receipt binds no
+/// model: the gateway signs for whatever the Responses API served, and there
+/// is no per-model entry to key a pin by. More than one is accepted for the
+/// case a gateway is served by several enclaves, exactly as a model may pin
+/// more than one key.
+///
+/// Whitespace around each element is trimmed. Everything else is refused: a
+/// key that is not 32 bytes of hex, an element carrying an `=` (which is the
+/// model-pin spelling in the wrong variable, and a mistake worth naming rather
+/// than half-parsing), and an empty overall set.
+///
+/// # Errors
+///
+/// [`GatewayKeyPinMalformed`] for each of those.
+pub fn parse_gateway_key_pins(spec: &str) -> Result<Vec<String>, GatewayKeyPinMalformed> {
+    let mut keys: Vec<String> = Vec::new();
+    for element in spec.split(',') {
+        let element = element.trim();
+        if element.is_empty() {
+            continue;
+        }
+        if element.contains('=') {
+            return Err(GatewayKeyPinMalformed);
+        }
+        let key = normalize_ed25519_key(element).ok_or(GatewayKeyPinMalformed)?;
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    if keys.is_empty() {
+        return Err(GatewayKeyPinMalformed);
+    }
+    Ok(keys)
+}
 
 /// Parse the `model=key[,model=key...]` spelling an operator configures.
 ///
@@ -340,6 +416,7 @@ impl InferenceAttestationPolicy {
             required: false,
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
             model_key_pins: None,
+            gateway_key_pins: None,
         }
     }
 
@@ -359,6 +436,7 @@ impl InferenceAttestationPolicy {
             required: true,
             max_body_bytes,
             model_key_pins: None,
+            gateway_key_pins: None,
         })
     }
 
@@ -445,6 +523,63 @@ impl InferenceAttestationPolicy {
         Ok(self)
     }
 
+    /// Trust a `gateway`-kind receipt only when its signer is one of these
+    /// attested ed25519 keys.
+    ///
+    /// # Why there are two pins and not one
+    ///
+    /// NEAR AI issues two legitimate kinds of receipt for the **same hosted
+    /// model**, and the *protocol* decides which. A Chat Completions call gets
+    /// `signature_kind: "provider_tee"`, signed by that model's key in
+    /// `model_attestations`. A Responses API call gets
+    /// `signature_kind: "gateway"`, signed by the single key in
+    /// `gateway_attestation`. Both were captured live against
+    /// `Qwen/Qwen3.6-35B-A3B-FP8`.
+    ///
+    /// That is not a curiosity. The Codex CLI speaks the Responses API
+    /// exclusively -- it dropped `wire_api = "chat"` -- so a deployment whose
+    /// contributors run Codex produces only gateway-signed receipts, and a
+    /// witness pinning model keys alone refuses every one of them.
+    ///
+    /// # This is not the retired gateway pin
+    ///
+    /// An earlier release had a single `gateway_attestation.signing_address`
+    /// pin that was applied to **every** receipt. That was wrong and is not
+    /// coming back: it refused every `provider_tee` receipt, and reinstating
+    /// its semantics would mean the gateway key could vouch for a model
+    /// signer. These keys are consulted for `gateway`-kind receipts and for
+    /// nothing else, and the model pins for `provider_tee` and nothing else.
+    ///
+    /// # Unset is refusal, once anything is pinned
+    ///
+    /// A witness that pins nothing at all is dormant, exactly as before. But a
+    /// witness that pins *either* kind is a pinning witness, and a receipt of
+    /// the kind it did not pin is checked against an empty set and refused.
+    /// The alternative -- letting an unpinned kind through -- would mean an
+    /// operator who pinned model keys silently accepted any gateway-signed
+    /// receipt from any signer, which is the fail-open direction and precisely
+    /// the gap a pin exists to close.
+    ///
+    /// # Errors
+    ///
+    /// [`GatewayKeyPinMalformed`] when the set is empty or any key is not 32
+    /// bytes of hex, so a witness fails to start rather than holding pins that
+    /// can never match.
+    pub fn pinning_gateway_keys(
+        mut self,
+        keys: Vec<String>,
+    ) -> Result<Self, GatewayKeyPinMalformed> {
+        if keys.is_empty() {
+            return Err(GatewayKeyPinMalformed);
+        }
+        let keys = keys
+            .iter()
+            .map(|key| normalize_ed25519_key(key).ok_or(GatewayKeyPinMalformed))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.gateway_key_pins = Some(keys);
+        Ok(self)
+    }
+
     /// Whether this deployment refuses an unattested contribution.
     pub fn is_required(&self) -> bool {
         self.required
@@ -464,6 +599,23 @@ impl InferenceAttestationPolicy {
     /// likewise configuration; a count and a digest are what an operator gets.
     pub fn model_key_pins(&self) -> Option<&BTreeMap<String, Vec<String>>> {
         self.model_key_pins.as_ref()
+    }
+
+    /// The pinned gateway signing keys, normalised, or `None` where none are
+    /// pinned. Same disclosure rule as [`Self::model_key_pins`]: public keys,
+    /// but deployment configuration, so a count and a digest are what an
+    /// operator gets.
+    pub fn gateway_key_pins(&self) -> Option<&[String]> {
+        self.gateway_key_pins.as_deref()
+    }
+
+    /// Whether this deployment pins receipt signers at all.
+    ///
+    /// True as soon as **either** kind is pinned, which is what makes the
+    /// other kind refuse rather than pass unchecked. False leaves every path
+    /// exactly as it was before pins existed.
+    pub fn is_pinning(&self) -> bool {
+        self.model_key_pins.is_some() || self.gateway_key_pins.is_some()
     }
 }
 
@@ -641,13 +793,36 @@ pub fn check_inference_attestation(
     // rest of this module logs nothing -- the keys and the signer are
     // deployment configuration on one side and caller-visible data on the
     // other, and neither belongs on a per-request surface.
-    if let Some(pins) = policy.model_key_pins() {
-        let attested = verdict
-            .model
-            .as_deref()
-            .and_then(|model| pins.get(model))
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+    if policy.is_pinning() {
+        // Which pin set applies is decided by the receipt's own
+        // `signature_kind`, because NEAR AI signs with a different attested
+        // key depending on the protocol the call used -- for the same hosted
+        // model. Chat Completions yields `provider_tee`, signed per model;
+        // the Responses API yields `gateway`, signed by the gateway key. The
+        // Codex CLI speaks only the Responses API, so a witness that consults
+        // the model pins alone refuses every Codex-driven receipt.
+        //
+        // Exactly one set per kind, and never both. A gateway-signed receipt
+        // admitted under a model pin, or the reverse, would mean a key
+        // attested for one role could vouch for the other -- which is the
+        // property two separate attestations exist to deny.
+        //
+        // An unpinned kind resolves to the empty set and is therefore refused.
+        // That is the fail-closed reading and it is deliberate: an operator
+        // who pinned model keys did not thereby agree to accept any
+        // gateway-signed receipt from any signer.
+        let attested: &[String] = match verdict.signature_kind {
+            ReceiptSignatureKind::ProviderTee => verdict
+                .model
+                .as_deref()
+                .and_then(|model| policy.model_key_pins()?.get(model))
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+            ReceiptSignatureKind::Gateway => policy.gateway_key_pins().unwrap_or_default(),
+            // Names no key source, so there is nothing to check it against.
+            // Not a licence to try every pinned key.
+            ReceiptSignatureKind::Unrecognised => &[],
+        };
         let signed_by_a_pinned_key = verdict.signing_algo == ReceiptAlgo::Ed25519
             && signer_is_attested_for_model(&verdict.signing_address, attested);
         if !signed_by_a_pinned_key {
@@ -883,6 +1058,7 @@ mod tests {
             signing_address: address(&signer),
             text,
             signing_algo: ReceiptAlgo::Ecdsa,
+            signature_kind: ReceiptSignatureKind::Unrecognised,
         }
     }
 
@@ -895,6 +1071,7 @@ mod tests {
             signing_address: address(&signer),
             text,
             signing_algo: ReceiptAlgo::Ecdsa,
+            signature_kind: ReceiptSignatureKind::Unrecognised,
         }
     }
 
@@ -1359,6 +1536,7 @@ mod tests {
             signing_address: ed25519_key_hex(seed_hex),
             text,
             signing_algo: ReceiptAlgo::Ed25519,
+            signature_kind: ReceiptSignatureKind::ProviderTee,
         }
     }
 
@@ -1375,6 +1553,7 @@ mod tests {
             signing_address: ed25519_key_hex(seed_hex),
             text,
             signing_algo: ReceiptAlgo::Ed25519,
+            signature_kind: ReceiptSignatureKind::ProviderTee,
         }
     }
 
@@ -1941,6 +2120,325 @@ mod tests {
         assert_eq!(unpinned_key, wrong_bytes);
         assert_eq!(unpinned_model, wrong_bytes);
         assert_eq!(no_model, wrong_bytes);
+        assert_eq!(unpinned_key, Err(WitnessError::InferenceReceiptUnverified));
+    }
+
+    // ---- Gateway-kind receipts ------------------------------------------
+    //
+    // The same hosted model signs with a different attested key depending on
+    // the protocol: Chat Completions yields `provider_tee` (per-model key),
+    // the Responses API yields `gateway` (the gateway key). Codex speaks only
+    // the Responses API, so a witness with model pins alone refuses every
+    // Codex-driven receipt.
+    //
+    // The receipts below are two-part, which is the shape a live gateway
+    // receipt has -- it binds no model, because the gateway signs for
+    // whatever was served.
+    // ---------------------------------------------------------------------
+
+    /// A gateway-kind receipt, in the shape the Responses API returns.
+    fn gateway_receipt(seed_hex: &str, request_body: &str, response_body: &str) -> ReceiptPayload {
+        let mut receipt = two_part_ed25519_receipt(seed_hex, request_body, response_body);
+        receipt.signature_kind = ReceiptSignatureKind::Gateway;
+        receipt
+    }
+
+    fn gateway_pinned(
+        policy: InferenceAttestationPolicy,
+        keys: &[&str],
+    ) -> InferenceAttestationPolicy {
+        policy
+            .pinning_gateway_keys(keys.iter().map(|k| (*k).to_string()).collect())
+            .expect("well formed gateway pins")
+    }
+
+    /// The case that was refused in production: a Codex-shaped receipt,
+    /// signed by the attested gateway key, admitted by the gateway pin.
+    #[test]
+    fn a_gateway_receipt_signed_by_the_pinned_gateway_key_is_admitted() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        let policy = gateway_pinned(required(), &[&ed25519_key_hex(MODEL_A_SEED_HEX)]);
+
+        let outcome = check(
+            &policy,
+            Some(&gateway_receipt(MODEL_A_SEED_HEX, &request, &response)),
+            &raw,
+        )
+        .expect("a gateway receipt from the pinned gateway key");
+        assert_eq!(
+            outcome,
+            InferenceAttestationOutcome {
+                verified: 1,
+                declared_calls: 1
+            }
+        );
+    }
+
+    /// The defect, at the witness: a witness pinning only model keys refuses
+    /// a legitimate gateway receipt, however well it verifies. Adding the
+    /// gateway pin is the whole fix -- same receipt, same bodies.
+    #[test]
+    fn a_gateway_receipt_is_refused_where_only_model_keys_are_pinned() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        let receipt = gateway_receipt(MODEL_A_SEED_HEX, &request, &response);
+
+        // The signer is a real pinned key -- for the *model* set. Routing is
+        // what decides, not the key.
+        let model_only = pinned(required(), &[(MODEL, &ed25519_key_hex(MODEL_A_SEED_HEX))]);
+        assert_eq!(
+            check(&model_only, Some(&receipt), &raw),
+            Err(WitnessError::InferenceReceiptUnverified),
+            "an unpinned kind is refused, not admitted under the other pin"
+        );
+
+        let both = gateway_pinned(model_only, &[&ed25519_key_hex(MODEL_A_SEED_HEX)]);
+        assert!(
+            check(&both, Some(&receipt), &raw).is_ok(),
+            "pinning the gateway key admits exactly this receipt"
+        );
+    }
+
+    /// The mirror: a witness pinning only the gateway key refuses a
+    /// `provider_tee` receipt, even one signed by that same key. Neither pin
+    /// vouches for the other kind.
+    #[test]
+    fn a_provider_tee_receipt_is_refused_where_only_the_gateway_key_is_pinned() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        let policy = gateway_pinned(required(), &[&ed25519_key_hex(MODEL_A_SEED_HEX)]);
+
+        assert_eq!(
+            check(
+                &policy,
+                Some(&ed25519_receipt(
+                    MODEL_A_SEED_HEX,
+                    MODEL,
+                    &request,
+                    &response
+                )),
+                &raw
+            ),
+            Err(WitnessError::InferenceReceiptUnverified)
+        );
+    }
+
+    /// A gateway receipt from a key that is not the pinned gateway key is
+    /// refused. The pin is doing work, not merely selecting a set.
+    #[test]
+    fn a_gateway_receipt_from_an_unpinned_key_is_refused() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        let policy = gateway_pinned(required(), &[&ed25519_key_hex(MODEL_A_SEED_HEX)]);
+
+        assert_eq!(
+            check(
+                &policy,
+                Some(&gateway_receipt(IMPOSTOR_SEED_HEX, &request, &response)),
+                &raw
+            ),
+            Err(WitnessError::InferenceReceiptUnverified)
+        );
+    }
+
+    /// Both pins together admit both kinds, which is the configuration a
+    /// deployment seeing chat-completions and Codex traffic needs.
+    #[test]
+    fn both_pins_together_admit_both_kinds() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        let policy = gateway_pinned(
+            pinned(required(), &[(MODEL, &ed25519_key_hex(MODEL_A_SEED_HEX))]),
+            &[&ed25519_key_hex(MODEL_B_SEED_HEX)],
+        );
+
+        assert!(
+            check(
+                &policy,
+                Some(&ed25519_receipt(
+                    MODEL_A_SEED_HEX,
+                    MODEL,
+                    &request,
+                    &response
+                )),
+                &raw
+            )
+            .is_ok()
+        );
+        assert!(
+            check(
+                &policy,
+                Some(&gateway_receipt(MODEL_B_SEED_HEX, &request, &response)),
+                &raw
+            )
+            .is_ok()
+        );
+        // And the two sets do not leak into each other: the gateway's key
+        // does not sign for the model, nor the model's for the gateway.
+        assert!(
+            check(
+                &policy,
+                Some(&ed25519_receipt(
+                    MODEL_B_SEED_HEX,
+                    MODEL,
+                    &request,
+                    &response
+                )),
+                &raw
+            )
+            .is_err()
+        );
+        assert!(
+            check(
+                &policy,
+                Some(&gateway_receipt(MODEL_A_SEED_HEX, &request, &response)),
+                &raw
+            )
+            .is_err()
+        );
+    }
+
+    /// A receipt whose kind this witness does not recognise -- including one
+    /// that named none -- is refused under pins, whatever key signed it. It
+    /// names no source, and that is not a licence to try every pinned key.
+    #[test]
+    fn a_receipt_with_no_recognised_kind_is_refused_under_pins() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        let policy = gateway_pinned(
+            pinned(required(), &[(MODEL, &ed25519_key_hex(MODEL_A_SEED_HEX))]),
+            &[&ed25519_key_hex(MODEL_A_SEED_HEX)],
+        );
+
+        let mut receipt = ed25519_receipt(MODEL_A_SEED_HEX, MODEL, &request, &response);
+        receipt.signature_kind = ReceiptSignatureKind::Unrecognised;
+        assert_eq!(
+            check(&policy, Some(&receipt), &raw),
+            Err(WitnessError::InferenceReceiptUnverified),
+            "both sets pin this exact key, and it is still refused"
+        );
+    }
+
+    /// A witness that pins nothing is dormant, gateway receipts included.
+    /// Pins are what make an unpinned kind refuse; their absence is not.
+    #[test]
+    fn a_gateway_receipt_is_admitted_where_nothing_is_pinned() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        assert!(!required().is_pinning());
+        assert!(
+            check(
+                &required(),
+                Some(&gateway_receipt(IMPOSTOR_SEED_HEX, &request, &response)),
+                &raw
+            )
+            .is_ok()
+        );
+    }
+
+    /// The gateway pin spec is bare keys, and the model-pin spelling in this
+    /// variable is refused rather than half-parsed.
+    #[test]
+    fn the_gateway_pin_spec_parses_the_shape_an_operator_configures() {
+        let spec = format!(
+            " {} , {} ",
+            ed25519_key_hex(MODEL_A_SEED_HEX).to_ascii_uppercase(),
+            ed25519_key_hex(MODEL_B_SEED_HEX)
+        );
+        assert_eq!(
+            parse_gateway_key_pins(&spec).expect("a well formed spec"),
+            vec![
+                ed25519_key_hex(MODEL_A_SEED_HEX),
+                ed25519_key_hex(MODEL_B_SEED_HEX)
+            ]
+        );
+        // A repeated key does not double.
+        let repeated = format!(
+            "{},{}",
+            ed25519_key_hex(MODEL_A_SEED_HEX),
+            ed25519_key_hex(MODEL_A_SEED_HEX)
+        );
+        assert_eq!(
+            parse_gateway_key_pins(&repeated).expect("repeats"),
+            vec![ed25519_key_hex(MODEL_A_SEED_HEX)]
+        );
+
+        for bad in [
+            "",
+            "   ",
+            ",,",
+            // The model-pin spelling, in the wrong variable.
+            &format!("{MODEL}={}", ed25519_key_hex(MODEL_A_SEED_HEX)),
+            &format!("0x{}", ed25519_key_hex(MODEL_A_SEED_HEX)),
+            "not-a-key",
+        ] {
+            assert_eq!(
+                parse_gateway_key_pins(bad).err(),
+                Some(GatewayKeyPinMalformed),
+                "{bad:?} is not a usable gateway pin spec"
+            );
+        }
+        // And a set that is empty, or holds a key that is not one, is
+        // refused where the policy is built rather than becoming a control
+        // that can never match.
+        assert_eq!(
+            InferenceAttestationPolicy::not_required()
+                .pinning_gateway_keys(vec![])
+                .err(),
+            Some(GatewayKeyPinMalformed)
+        );
+        assert_eq!(
+            InferenceAttestationPolicy::not_required()
+                .pinning_gateway_keys(vec!["nope".to_string()])
+                .err(),
+            Some(GatewayKeyPinMalformed)
+        );
+    }
+
+    /// Anti-oracle, for the gateway pin too: a gateway receipt refused by the
+    /// pin is the same `WitnessError` as one bound to other bytes, so the two
+    /// are the same label on the wire.
+    #[test]
+    fn a_gateway_pin_failure_is_indistinguishable_from_any_other_receipt_failure() {
+        let request = request_body(MODEL, "hello");
+        let response = response_body("hi there");
+        let raw = contribution(&[(request.clone(), response.clone())]);
+        let policy = gateway_pinned(required(), &[&ed25519_key_hex(MODEL_A_SEED_HEX)]);
+
+        let unpinned_key = check(
+            &policy,
+            Some(&gateway_receipt(IMPOSTOR_SEED_HEX, &request, &response)),
+            &raw,
+        );
+        let wrong_bytes = check(
+            &policy,
+            Some(&gateway_receipt(
+                MODEL_A_SEED_HEX,
+                "some other request",
+                &response,
+            )),
+            &raw,
+        );
+        let unpinned_kind = check(
+            &policy,
+            Some(&ed25519_receipt(
+                MODEL_A_SEED_HEX,
+                MODEL,
+                &request,
+                &response,
+            )),
+            &raw,
+        );
+        assert_eq!(unpinned_key, wrong_bytes);
+        assert_eq!(unpinned_kind, wrong_bytes);
         assert_eq!(unpinned_key, Err(WitnessError::InferenceReceiptUnverified));
     }
 }

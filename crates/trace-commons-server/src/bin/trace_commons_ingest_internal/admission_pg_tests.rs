@@ -246,6 +246,8 @@ async fn actual_postgres_challenge_witness_ingest_and_terminal_retry() {
         signature: hex::encode(provider.sign(receipt_text.as_bytes()).as_ref()),
         signing_address: provider_key.clone(),
         signing_algo: trace_commons_server::near_attestation::receipt::ReceiptAlgo::Ed25519,
+        signature_kind:
+            trace_commons_server::near_attestation::receipt::ReceiptSignatureKind::ProviderTee,
     };
     use trace_commons_protocol::trace_contribution::{
         RawTraceCaptureTurn, RawTraceContribution, TraceContributionEventType,

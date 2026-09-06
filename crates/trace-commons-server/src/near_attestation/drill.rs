@@ -757,7 +757,7 @@ mod tests {
     use crate::near_attestation::AttestationReport;
     use crate::near_attestation::client::{AttestationStep, CompletionOutcome};
     use crate::near_attestation::quote::{Collateral, parse_collateral};
-    use crate::near_attestation::receipt::{ReceiptAlgo, ReceiptPayload};
+    use crate::near_attestation::receipt::{ReceiptAlgo, ReceiptPayload, ReceiptSignatureKind};
 
     const REPORT: &str = include_str!(
         "../../../trace-commons-attestation/tests/fixtures/near_ai_attestation_report.json"
@@ -952,6 +952,7 @@ mod tests {
                 signing_address: eth_address(&self.receipt_key),
                 text,
                 signing_algo: ReceiptAlgo::Ecdsa,
+                signature_kind: ReceiptSignatureKind::Unrecognised,
             })
         }
     }

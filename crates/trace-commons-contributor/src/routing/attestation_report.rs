@@ -51,6 +51,11 @@ pub enum AttestationReportError {
     UrlInvalid,
     #[error("attestation report attests no ed25519 signer for this model")]
     ModelNotAttested,
+    /// The receipt named a `signature_kind` this client cannot resolve to an
+    /// attested key source -- an unknown value, or no value at all. Refused
+    /// rather than checked against every key.
+    #[error("receipt signature kind names no attested key source")]
+    SignatureKindUnrecognised,
 }
 
 impl From<AttestedKeyError> for AttestationReportError {
@@ -62,6 +67,7 @@ impl From<AttestedKeyError> for AttestationReportError {
             AttestedKeyError::ReportDataMismatch => Self::ReportDataMismatch,
             AttestedKeyError::KeyMalformed => Self::KeyMalformed,
             AttestedKeyError::ModelNotAttested => Self::ModelNotAttested,
+            AttestedKeyError::SignatureKindUnrecognised => Self::SignatureKindUnrecognised,
         }
     }
 }
