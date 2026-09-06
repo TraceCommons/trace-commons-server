@@ -249,7 +249,7 @@ fn pointed_port(home: &Path) -> Option<u16> {
     let url = url::Url::parse(&pointer.control_url).ok()?;
     let host = url.host_str()?;
     if url.scheme() != "http"
-        || !matches!(host, "127.0.0.1" | "localhost" | "[::1]")
+        || !matches!(host, "127.0.0.1" | "localhost")
         || !url.username().is_empty()
         || url.password().is_some()
         || url.path() != "/"
@@ -526,15 +526,12 @@ mod tests {
             "http://127.0.0.1:1234?query",
             "http://127.0.0.1:1234#fragment",
             "http://127.0.0.1:0",
+            "http://[::1]:1234",
         ] {
             std::fs::write(&path, serde_json::json!({"control_url":url}).to_string()).unwrap();
             assert_eq!(pointed_port(home.path()), None, "{url}");
         }
-        for url in [
-            "http://127.0.0.1:1234",
-            "http://localhost:1234/",
-            "http://[::1]:1234",
-        ] {
+        for url in ["http://127.0.0.1:1234", "http://localhost:1234/"] {
             std::fs::write(&path, serde_json::json!({"control_url":url}).to_string()).unwrap();
             assert_eq!(pointed_port(home.path()), Some(1234));
         }

@@ -1590,7 +1590,10 @@ on `get_settings`, `set_settings` and `status`. It is an object,
 | `crashed` | a proxy this daemon started ended without being asked to | `null` |
 
 Existing-instance discovery reads at most 64 KiB from an opened regular pointer
-file and probes only the fixed loopback health path. On supported Unix targets,
+file and probes only the fixed IPv4 loopback health path. Accepted hosts are
+`127.0.0.1` and `localhost`; an IPv6-only pointer is not discovered through an
+unrelated IPv4 port. URL-shape restrictions are defense in depth because the
+request URL is constructed from the validated port, not used verbatim. On supported Unix targets,
 the opened object must match the checked device/inode and effective-user owner,
 remain unwritable by others, and is opened with no-follow/nonblocking flags so a
 replacement symlink or FIFO cannot bypass the check or block the open. Windows
