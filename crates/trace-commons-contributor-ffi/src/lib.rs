@@ -2399,6 +2399,36 @@ pub extern "C" fn tc_private_inference_should_offer(answered: i32, on: i32) -> i
     .unwrap_or(0)
 }
 
+/// Confirm a private-inference write. Each input is -1 (absent), 0 (false),
+/// or 1 (true). An absent request is a marker-only decline. Invalid values and
+/// caught panics refuse confirmation.
+#[unsafe(no_mangle)]
+pub extern "C" fn tc_private_inference_write_confirmed(
+    requested_on: i32,
+    echoed_seen: i32,
+    echoed_on: i32,
+) -> i32 {
+    guard(|| {
+        fn decode(value: i32) -> Option<Option<bool>> {
+            match value {
+                -1 => Some(None),
+                0 => Some(Some(false)),
+                1 => Some(Some(true)),
+                _ => None,
+            }
+        }
+        let (Some(requested), Some(seen), Some(on)) =
+            (decode(requested_on), decode(echoed_seen), decode(echoed_on))
+        else {
+            return Ok(0);
+        };
+        Ok(i32::from(
+            trace_commons_contributor::private_inference_copy::write_confirmed(requested, seen, on),
+        ))
+    })
+    .unwrap_or(0)
+}
+
 /// The settings screen's session-source row for one tool, assembled.
 ///
 /// `tool` is `claude`, `codex`, `gemini` or `cline`. `source_mode` is

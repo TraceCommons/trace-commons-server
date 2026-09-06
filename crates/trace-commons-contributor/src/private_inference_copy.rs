@@ -14,8 +14,9 @@
 //! side from a port number, not handed to a shell as a template. A template a
 //! shell fills in is a fourth place the wording can drift.
 //!
-//! The branch tables cross too. [`state_line`], [`state_tone`] and
-//! [`should_offer`] are the three decisions this surface makes, and each of
+//! The branch tables cross too. [`state_line`], [`state_tone`],
+//! [`should_offer`], [`write_confirmed`] and [`quit_needs_notice`] each own a
+//! shared decision, and each of
 //! them is the kind of `switch` that has historically been written out again
 //! in Swift, in C# and in Rust, and then disagreed in silence.
 //!
@@ -285,6 +286,22 @@ pub fn should_offer(answered: bool, on: bool) -> bool {
     !answered && !on
 }
 
+/// A write is acknowledged only by a successful daemon echo of its marker
+/// and any explicitly requested switch value. `None` is a marker-only decline;
+/// missing echoed values never stand in for an explicit false.
+#[must_use]
+pub fn write_confirmed(
+    requested_on: Option<bool>,
+    echoed_seen: Option<bool>,
+    echoed_on: Option<bool>,
+) -> bool {
+    echoed_seen == Some(true) && requested_on.is_none_or(|on| echoed_on == Some(on))
+}
+
+/// A transport failure may arrive after persistence; do not claim nothing changed.
+pub const WRITE_UNCONFIRMED: &str =
+    "The change could not be confirmed. Check the app's status and try again.";
+
 /// Whether quitting may end this app's model-call work. Requested off does
 /// not prove cleanup completed; foreign ownership is never this app's work.
 #[must_use]
@@ -331,6 +348,7 @@ pub struct PrivateInferenceCopy {
     pub state_start_failed: &'static str,
     pub state_crashed: &'static str,
     pub quit_also_stops: &'static str,
+    pub write_unconfirmed: &'static str,
 }
 
 /// The payload, built from the constants above.
@@ -358,6 +376,7 @@ pub fn private_inference_copy() -> PrivateInferenceCopy {
         state_start_failed: STATE_START_FAILED,
         state_crashed: STATE_CRASHED,
         quit_also_stops: QUIT_ALSO_STOPS,
+        write_unconfirmed: WRITE_UNCONFIRMED,
     }
 }
 
@@ -550,6 +569,23 @@ mod tests {
         assert!(!should_offer(true, true));
     }
 
+    #[test]
+    fn write_confirmation_requires_present_matching_echoes() {
+        for seen in [None, Some(false), Some(true)] {
+            for on in [None, Some(false), Some(true)] {
+                assert_eq!(write_confirmed(None, seen, on), seen == Some(true));
+                assert_eq!(
+                    write_confirmed(Some(true), seen, on),
+                    seen == Some(true) && on == Some(true)
+                );
+                assert_eq!(
+                    write_confirmed(Some(false), seen, on),
+                    seen == Some(true) && on == Some(false)
+                );
+            }
+        }
+    }
+
     /// The port sentence is finished on this side, and says nothing at all
     /// when there is no port.
     #[test]
@@ -568,7 +604,7 @@ mod tests {
         let fields = payload.as_object().expect("a JSON object");
         assert_eq!(
             fields.len(),
-            21,
+            22,
             "the payload's field count changed -- update the shells' decoders \
              and the tests that pin the set"
         );

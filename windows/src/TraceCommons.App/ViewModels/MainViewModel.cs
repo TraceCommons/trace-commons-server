@@ -463,6 +463,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// </summary>
     public bool PrivateInferenceOn => _privateInferenceOn;
 
+    public void ReportPrivateInferenceWriteFailure() =>
+        Notice = _privateInferenceCopy?.WriteUnconfirmed ?? string.Empty;
+
+    public void ClearPrivateInferenceWriteFailure()
+    {
+        if (Notice == _privateInferenceCopy?.WriteUnconfirmed) Notice = string.Empty;
+    }
+
     /// <summary>The quit confirmation's extra line, or null.</summary>
     public string? PrivateInferenceQuitDetail =>
         PrivateInferenceSurface.QuitDetail(_privateInferenceOn, _privateInferenceState, _privateInferenceCopy);

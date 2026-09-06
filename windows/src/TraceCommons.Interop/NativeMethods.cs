@@ -323,6 +323,9 @@ internal static class NativeMethods
     internal static extern int tc_private_inference_should_offer(int answered, int on);
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int tc_private_inference_write_confirmed(int requestedOn, int echoedSeen, int echoedOn);
+
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int tc_private_inference_quit_needs_notice(int requestedOn, [MarshalAs(UnmanagedType.LPUTF8Str)] string state);
 
     /// <summary>

@@ -1669,7 +1669,7 @@ retained-shutdown producer confirms cleanup; a port alone is metadata, not
 proof that calls can be answered.
 
 The companion C ABI copy payload (`tc_private_inference_copy`, not a daemon
-settings key) supplies these 21 fixed string fields:
+settings key) supplies these 22 fixed string fields:
 
 - `offer_title`, `offer_what`, `offer_exposure`, `offer_no_repoint`,
   `offer_accept`, `offer_decline`, `offer_asked_once`;
@@ -1677,11 +1677,24 @@ settings key) supplies these 21 fixed string fields:
 - `state_off`, `state_unreported`, `state_unknown`, `state_stopping`,
   `state_running`, `state_running_no_backends`, `state_running_elsewhere`,
   `state_port_in_use`, `state_start_failed`, `state_crashed`;
-- `quit_also_stops`.
+- `quit_also_stops`, `write_unconfirmed`.
 
 State sentences and tones are chosen by the shared Rust table rather than by
 shell-authored branching. Copy-field inventory parity is checked separately
 from successful decoding of required fields.
+
+The shared `tc_private_inference_write_confirmed` decision accepts optional
+requested-on, echoed-offer-seen, and echoed-on booleans (`-1` absent, `0` false,
+`1` true). Decline requests no switch and requires only a true marker echo;
+a settings switch requires both the marker and a present matching switch.
+Invalid inputs refuse confirmation. Shells keep their previous confirmed
+state and display `write_unconfirmed` on failures, including ambiguous
+transport failures that may have followed persistence. A daemon predating
+`private_inference_offer_seen` cannot acknowledge an answer: the offer remains
+until a supporting daemon confirms it. Missing values are not explicit off.
+The GTK switch starts disabled with the shared unavailable explanation until
+settings arrive. macOS serializes offer and settings writes through one
+pending guard; its toggle stays bound to the last confirmed settings.
 
 `private_inference_offer_seen` takes a boolean, and it is **not a fourth
 answer**: it records that the question was put, never what the answer was.

@@ -172,6 +172,9 @@ pub struct SettingsView {
     /// into the switch, so the signal that fires is not echoed back as a
     /// contributor declaring something.
     filling_private_inference: std::cell::Cell<bool>,
+    /// Last confirmed requested setting; no answer is not an off declaration.
+    confirmed_private_inference: std::cell::Cell<Option<bool>>,
+    private_inference_write_pending: std::cell::Cell<bool>,
     /// The port a running IronWire published, or `None` for a machine that
     /// published nothing.
     ///
@@ -374,6 +377,7 @@ impl SettingsView {
             .build();
         private_inference_label.add_css_class("tc-body");
         let private_inference_switch = gtk::Switch::builder().halign(gtk::Align::End).build();
+        private_inference_switch.set_sensitive(false);
         private_inference_switch.set_valign(gtk::Align::Center);
         private_inference_switch.update_property(&[gtk::accessible::Property::Label(
             copy::PRIVATE_INFERENCE_TOGGLE,
@@ -382,6 +386,11 @@ impl SettingsView {
         private_inference_row.append(&private_inference_switch);
         private_inference_card.append(&private_inference_row);
         let private_inference_status = gtk::Box::new(gtk::Orientation::Vertical, space::XS);
+        private_inference_status.append(&tone_row(
+            copy::PRIVATE_INFERENCE_STATE_UNKNOWN,
+            Tone::Neutral,
+            None,
+        ));
         private_inference_card.append(&private_inference_status);
         style::append_caveat(
             &private_inference_card,
@@ -657,6 +666,8 @@ impl SettingsView {
             private_inference_switch,
             private_inference_status,
             filling_private_inference: std::cell::Cell::new(false),
+            confirmed_private_inference: std::cell::Cell::new(None),
+            private_inference_write_pending: std::cell::Cell::new(false),
             routing_discovered_port: std::cell::Cell::new(None),
             witness_status,
             witness_form,
@@ -2870,6 +2881,10 @@ fn private_inference_tone(tone: copy::PrivateInferenceTone) -> Tone {
 /// on it would say the thing is running.
 fn render_private_inference(app: &Rc<App>, settings: &crate::model::Settings) {
     let view = &app.settings;
+    view.confirmed_private_inference
+        .set(Some(settings.private_inference));
+    view.private_inference_switch
+        .set_sensitive(!view.private_inference_write_pending.get());
     view.filling_private_inference.set(true);
     view.private_inference_switch
         .set_active(settings.private_inference);
@@ -2907,18 +2922,47 @@ fn render_private_inference(app: &Rc<App>, settings: &crate::model::Settings) {
 /// so the offer does not appear on the next launch for a contributor who
 /// found the switch themselves.
 fn send_private_inference(app: &Rc<App>, on: bool) {
+    let view = &app.settings;
+    // The signal fires after the thumb moved. Put back the confirmed value
+    // while waiting, so an error cannot leave an unconfirmed request on screen.
+    view.filling_private_inference.set(true);
+    view.private_inference_switch
+        .set_active(view.confirmed_private_inference.get().unwrap_or(false));
+    view.filling_private_inference.set(false);
+    if view.confirmed_private_inference.get().is_none()
+        || view.private_inference_write_pending.replace(true)
+    {
+        return;
+    }
+    view.private_inference_switch.set_sensitive(false);
     app.call(
         "set_settings",
         serde_json::json!({
             "private_inference": on,
             "private_inference_offer_seen": true,
         }),
-        |app, result| {
-            let Ok(value) = result else { return };
-            let Ok(settings) = serde_json::from_value::<crate::model::Settings>(value) else {
-                return;
-            };
-            render_private_inference(app, &settings);
+        move |app, result| {
+            app.settings.private_inference_write_pending.set(false);
+            app.settings.private_inference_switch.set_sensitive(true);
+            let confirmed = result.as_ref().is_ok_and(|value| {
+                copy::private_inference_write_confirmed(
+                    Some(on),
+                    value
+                        .get("private_inference_offer_seen")
+                        .and_then(serde_json::Value::as_bool),
+                    value
+                        .get("private_inference")
+                        .and_then(serde_json::Value::as_bool),
+                )
+            });
+            let settings = result
+                .ok()
+                .and_then(|value| serde_json::from_value::<crate::model::Settings>(value).ok());
+            if let Some(settings) = settings.filter(|_| confirmed) {
+                render_private_inference(app, &settings);
+            } else {
+                app.toast(copy::PRIVATE_INFERENCE_WRITE_UNCONFIRMED);
+            }
         },
     );
 }

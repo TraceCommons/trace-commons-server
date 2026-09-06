@@ -28,6 +28,16 @@ final class PrivateInferenceExportTests: XCTestCase {
         XCTAssertFalse(TCPrivateInference.quitNeedsNotice(on: true, state: "off"))
     }
 
+    func testWriteConfirmationDistinguishesMissingAndExplicitFalse() {
+        for seen: Bool? in [nil, false, true] {
+            for on: Bool? in [nil, false, true] {
+                XCTAssertEqual(TCPrivateInference.writeConfirmed(requestedOn: nil, echoedSeen: seen, echoedOn: on), seen == true)
+                XCTAssertEqual(TCPrivateInference.writeConfirmed(requestedOn: true, echoedSeen: seen, echoedOn: on), seen == true && on == true)
+                XCTAssertEqual(TCPrivateInference.writeConfirmed(requestedOn: false, echoedSeen: seen, echoedOn: on), seen == true && on == false)
+            }
+        }
+    }
+
     private func calls() -> PrivateInferenceCalls {
         // The production wiring, verbatim.
         PrivateInferenceCalls(

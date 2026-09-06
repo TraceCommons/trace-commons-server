@@ -783,12 +783,30 @@ public sealed partial class MainWindow : Window
     /// </remarks>
     private async Task AnswerPrivateInferenceOfferAsync(bool accepted)
     {
-        DaemonResponse response = await _host
-            .CallAsync(
-                DaemonProtocol.Methods.SetSettings,
-                PrivateInferenceSurface.SerializeOfferAnswer(accepted))
-            .ConfigureAwait(true);
-        ViewModel.SetPrivateInference(response.ResultAs<DaemonSettingsSnapshot>());
+        try
+        {
+            DaemonResponse response = await _host
+                .CallAsync(
+                    DaemonProtocol.Methods.SetSettings,
+                    PrivateInferenceSurface.SerializeOfferAnswer(accepted))
+                .ConfigureAwait(true);
+            var settings = response.ResultAs<DaemonSettingsSnapshot>();
+            if (PrivateInferenceSurface.WriteConfirmed(accepted ? true : (bool?)null, settings))
+            {
+                ViewModel.SetPrivateInference(settings);
+                ViewModel.ClearPrivateInferenceWriteFailure();
+            }
+            else
+                ViewModel.ReportPrivateInferenceWriteFailure();
+        }
+        catch
+        {
+            // A transport failure must not escape an async-void click handler
+            // and close the app. Keep the last confirmed answer; a later
+            // settings refresh can confirm whether the write reached disk.
+            System.Diagnostics.Trace.TraceWarning(nameof(AnswerPrivateInferenceOfferAsync));
+            ViewModel.ReportPrivateInferenceWriteFailure();
+        }
     }
 
     private async void OnDeclineArming(object sender, RoutedEventArgs e)

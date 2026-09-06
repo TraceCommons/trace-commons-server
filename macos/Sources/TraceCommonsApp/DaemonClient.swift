@@ -263,7 +263,7 @@ final class DaemonClient {
     /// never happened.
     func answerPrivateInferenceOffer(accepted: Bool) throws -> DaemonSettingsView {
         let settings = try setSettings(PrivateInferenceSurface.offerParams(accepted: accepted))
-        guard settings.privateInferenceAnswered else {
+        guard TCPrivateInference.writeConfirmed(requestedOn: accepted ? true : nil, echoedSeen: settings.privateInferenceOfferSeen, echoedOn: settings.privateInference) else {
             throw PrivateInferenceRefusal.unconfirmedWrite
         }
         return settings
@@ -277,7 +277,7 @@ final class DaemonClient {
     /// or `crashed`, and that is a sentence to render, not a failed write.
     func setPrivateInference(_ on: Bool) throws -> DaemonSettingsView {
         let settings = try setSettings(PrivateInferenceSurface.settingsParams(on: on))
-        guard settings.privateInferenceOn == on else {
+        guard TCPrivateInference.writeConfirmed(requestedOn: on, echoedSeen: settings.privateInferenceOfferSeen, echoedOn: settings.privateInference) else {
             throw PrivateInferenceRefusal.unconfirmedWrite
         }
         return settings
