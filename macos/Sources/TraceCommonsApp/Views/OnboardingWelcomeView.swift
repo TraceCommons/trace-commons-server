@@ -1,4 +1,5 @@
 import SwiftUI
+import TCBridge
 
 /// Onboarding screen 1, "What this is" -- the first thing a contributor ever
 /// sees. Copy is verbatim from the shared design spec
@@ -297,12 +298,12 @@ struct OnboardingWelcomeContent: View {
     /// type. Section 5.8 does not draw them -- it draws the hero and stops --
     /// but the scrubbing concession is not droppable, so they stay, set at
     /// `body.brand` under the hero rather than competing with it.
+    ///
+    /// The shared sentence follows source settings instead of keeping a
+    /// separate tool list that can drift from the adapters and other shells.
     private var supporting: some View {
         HStack(alignment: .top, spacing: CommunityBrand.Metric.heroGap) {
-            Text("""
-            This app watches for finished Claude Code and Codex sessions on this \
-            machine and shows them to you.
-            """)
+            Text(TCOnboardingCopy.load()?.welcomeBody ?? "")
             .frame(maxWidth: .infinity, alignment: .leading)
 
             // The link sits directly under the sentence that raises the

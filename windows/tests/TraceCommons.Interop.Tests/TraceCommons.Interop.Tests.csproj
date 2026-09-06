@@ -128,6 +128,27 @@
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!--
+    Every C# and XAML source of both shell projects, copied under
+    shell-source/ next to the test assembly.
+
+    ShellWordingTests reads the whole tree. The single-file copies above stay
+    exactly as they are: those surfaces are held to the strict rule that every
+    string literal in them is a wire value, and this wider copy is a second,
+    weaker net over everything else. It catches a hand-written sentence in a
+    file nobody thought to name. obj/ and bin/ are excluded so generated
+    sources (AssemblyInfo, XAML codegen) are never scanned.
+
+    The .txt suffix matches the convention the single-file copies use: it
+    keeps a copied source from ever being mistaken for a compilable one.
+  -->
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../src/**/*.cs;$(MSBuildThisFileDirectory)../../src/**/*.xaml"
+          Exclude="$(MSBuildThisFileDirectory)../../src/**/obj/**;$(MSBuildThisFileDirectory)../../src/**/bin/**"
+          Link="shell-source/%(RecursiveDir)%(Filename)%(Extension).txt"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TcFfiLibDir Condition="'$(TC_FFI_LIB_DIR)' != ''">$(TC_FFI_LIB_DIR)</TcFfiLibDir>
     <TcFfiLibDir Condition="'$(TcFfiLibDir)' == ''">$(MSBuildThisFileDirectory)../../../target/debug</TcFfiLibDir>
