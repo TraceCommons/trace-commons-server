@@ -1,11 +1,29 @@
-//! Reading the gateway signing key out of a NEAR AI attestation report.
+//! Reading signing keys out of a NEAR AI attestation report.
 //!
-//! `GET {base}/attestation/report?model=..&nonce=..` returns, among much
-//! else, a `gateway_attestation` whose `report_data` is
-//! `signing_address || request_nonce`. That concatenation, inside a TDX
-//! quote, is what binds the key to a nonce this client chose -- so a key
-//! read from a report whose `report_data` carries OUR nonce is one that was
-//! attested for us, now, rather than one copied from an old report.
+//! `GET {base}/attestation/report?model=..&signing_algo=ed25519&nonce=..`
+//! returns, among much else, a `gateway_attestation` and a
+//! `model_attestations` array. Each is an attestation object whose
+//! `report_data` is `signing_address || request_nonce`. That concatenation,
+//! inside a TDX quote, is what binds a key to a nonce this client chose -- so
+//! a key read from an attestation whose `report_data` carries OUR nonce is one
+//! that was attested for us, now, rather than one copied from an old report.
+//!
+//! # Which key signs a receipt
+//!
+//! **The per-model one, not the gateway one.** A hosted-model receipt comes
+//! back with `signature_kind: "provider_tee"` and a `signing_address` that
+//! differs per model; that key appears in `model_attestations`, never in
+//! `gateway_attestation`. The gateway key signs no receipt, so comparing a
+//! receipt's signer against it refuses every real receipt.
+//!
+//! `signing_algo` is a **query parameter** of the report endpoint, and that is
+//! the piece this originally missed: without `signing_algo=ed25519` the
+//! endpoint answers with the ECDSA model attestations, whose keys sign nothing
+//! we verify. [`attestation_report_url`] always sends it.
+//!
+//! `gateway_ed25519_key` is kept because it is still correct for what it
+//! names -- the gateway's own key -- and the OHTTP/gateway paths that want it
+//! are unaffected. It is simply not the key a receipt is checked against.
 //!
 //! **This module does not verify the quote.** It reads the report's
 //! self-description and checks its internal consistency. Until quote
@@ -15,7 +33,7 @@
 //! Nothing here logs. The report holds keys and identifiers; none of them
 //! belong on an operational surface.
 
-use trace_commons_attestation::receipt::{ReceiptAlgo, normalize_ed25519_key};
+use trace_commons_attestation::receipt::{AttestedKeyError, ReceiptAlgo, attested_ed25519_key};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum AttestationReportError {
@@ -31,6 +49,21 @@ pub enum AttestationReportError {
     KeyMalformed,
     #[error("attestation report base URL is not a valid https URL")]
     UrlInvalid,
+    #[error("attestation report attests no ed25519 signer for this model")]
+    ModelNotAttested,
+}
+
+impl From<AttestedKeyError> for AttestationReportError {
+    fn from(error: AttestedKeyError) -> Self {
+        match error {
+            AttestedKeyError::Malformed => Self::Malformed,
+            AttestedKeyError::NotEd25519 => Self::NotEd25519,
+            AttestedKeyError::NonceMismatch => Self::NonceMismatch,
+            AttestedKeyError::ReportDataMismatch => Self::ReportDataMismatch,
+            AttestedKeyError::KeyMalformed => Self::KeyMalformed,
+            AttestedKeyError::ModelNotAttested => Self::ModelNotAttested,
+        }
+    }
 }
 
 /// The URL a fetch would call.
@@ -56,11 +89,25 @@ pub fn attestation_report_url(
     }
     url.query_pairs_mut()
         .append_pair("model", model)
+        // Not optional and not configurable. `signing_algo` selects which
+        // `model_attestations` the endpoint returns, and the default is ECDSA
+        // -- whose keys sign nothing this client verifies. A report fetched
+        // without it looks entirely well formed and attests the wrong thing.
+        .append_pair("signing_algo", ReceiptAlgo::Ed25519.as_wire())
         .append_pair("nonce", nonce);
     Ok(url)
 }
 
 /// The gateway's ed25519 signing key, if the report binds it to `expected_nonce`.
+///
+/// This is **not** the key a receipt is signed by -- see the module docs. It
+/// remains here because it is correct for what it names, and because the same
+/// binding discipline applied to a different attestation object is what
+/// [`model_ed25519_keys`] does.
+///
+/// The parsing and the binding check live in
+/// [`trace_commons_attestation::receipt::attested_ed25519_key`], so a gateway
+/// attestation and a model attestation cannot come to be checked differently.
 ///
 /// # Errors
 ///
@@ -76,52 +123,36 @@ pub fn gateway_ed25519_key(
     let gateway = document
         .get("gateway_attestation")
         .ok_or(AttestationReportError::Malformed)?;
-    let field = |name: &str| {
-        gateway
-            .get(name)
-            .and_then(serde_json::Value::as_str)
-            .ok_or(AttestationReportError::Malformed)
-    };
-
-    let algo = field("signing_algo")?;
-    if ReceiptAlgo::from_wire(algo) != Some(ReceiptAlgo::Ed25519) {
-        return Err(AttestationReportError::NotEd25519);
-    }
-    // A key this short (or empty) could `strip_prefix` trivially against any
-    // `report_data`, making the check below vacuous. Refused here so
-    // `gateway_ed25519_key` can never return a string that is not actually a
-    // 32-byte hex key -- callers should not have to re-check that. The
-    // normalisation is the attestation crate's, so a key read from a report
-    // and a key pinned in a witness's configuration are the same spelling.
-    let key = normalize_ed25519_key(field("signing_address")?)
-        .ok_or(AttestationReportError::KeyMalformed)?;
-    // `request_nonce` is the provider's own label for the value; required for
-    // shape, but the binding this function trusts is `report_data` itself,
-    // checked below against the key it names and the nonce we asked for.
-    let _ = field("request_nonce")?;
-    let report_data = field("report_data")?.to_ascii_lowercase();
-    let expected_nonce = expected_nonce.to_ascii_lowercase();
-
-    // `report_data` must commit to the listed key first: a report_data whose
-    // prefix is not this report's own `signing_address` names a different
-    // key than the one it claims, and that is refused before the nonce is
-    // even inspected.
-    let attested_nonce = report_data
-        .strip_prefix(key.as_str())
-        .ok_or(AttestationReportError::ReportDataMismatch)?;
-    if attested_nonce != expected_nonce {
-        return Err(AttestationReportError::NonceMismatch);
-    }
-    Ok(key)
+    Ok(attested_ed25519_key(gateway, expected_nonce)?)
 }
 
-/// Whether a verified receipt's signer is the gateway key a report attested.
+/// The ed25519 keys the report attests **for `model`** -- the set a receipt's
+/// signer is actually checked against.
 ///
-/// Re-exported from `trace_commons_attestation::receipt`, where it moved so
-/// that the hosted witness -- which compares a receipt's signer against a key
-/// an operator pinned rather than one read from a live report -- makes the
-/// same comparison this client does, from the same code.
-pub use trace_commons_attestation::receipt::signer_is_attested;
+/// # Errors
+///
+/// [`AttestationReportError`] when the report is not the expected shape,
+/// attests no ed25519 signer for this model, or carries an entry for this
+/// model that does not bind to `expected_nonce`.
+pub fn model_ed25519_keys(
+    report_json: &str,
+    expected_nonce: &str,
+    model: &str,
+) -> Result<Vec<String>, AttestationReportError> {
+    Ok(trace_commons_attestation::receipt::model_ed25519_keys(
+        report_json,
+        expected_nonce,
+        model,
+    )?)
+}
+
+/// Whether a verified receipt's signer is a key a report attested.
+///
+/// Re-exported from `trace_commons_attestation::receipt`, where they moved so
+/// that the hosted witness -- which compares a receipt's signer against keys
+/// an operator configured rather than ones read from a live report -- makes
+/// the same comparison this client does, from the same code.
+pub use trace_commons_attestation::receipt::{signer_is_attested, signer_is_attested_for_model};
 
 #[cfg(test)]
 mod tests {
@@ -226,6 +257,71 @@ mod tests {
                 .unwrap()
                 .contains("model=Qwen%2FQwen3.6-35B-A3B-FP8")
         );
+        // Without this the endpoint answers with ECDSA model attestations,
+        // which attest no key that signs a receipt we verify.
+        assert!(
+            u.query().unwrap().contains("signing_algo=ed25519"),
+            "the report request must select the ed25519 model attestations"
+        );
+    }
+
+    /// The live per-model `provider_tee` keys, captured 2026-09-06, alongside
+    /// the gateway key. All three differ.
+    const MODEL_A: &str = "Qwen/Qwen3.6-35B-A3B-FP8";
+    const MODEL_A_KEY: &str = "aba45f0b8f90869baab26db02e8b01354bb8f8730769c60650cb7a635da602d4";
+    const MODEL_B: &str = "Qwen/Qwen3.8-27B";
+    const MODEL_B_KEY: &str = "73cf225ab4f09154ad8b299d4ac89425c7f25468a42ba9a87d09fcd4e87b8bf5";
+
+    fn full_report(nonce: &str) -> String {
+        let entry = |model: &str, key: &str| {
+            format!(
+                r#"{{"model_name":"{model}","signing_address":"{key}","signing_algo":"ed25519","request_nonce":"{nonce}","report_data":"{key}{nonce}"}}"#
+            )
+        };
+        format!(
+            r#"{{"gateway_attestation":{{"signing_address":"{KEY}","signing_algo":"ed25519","request_nonce":"{nonce}","report_data":"{KEY}{nonce}"}},"model_attestations":[{},{}]}}"#,
+            entry(MODEL_A, MODEL_A_KEY),
+            entry(MODEL_B, MODEL_B_KEY)
+        )
+    }
+
+    /// The two readers on one report: the gateway reader still returns the
+    /// gateway key, and the model reader returns a *different* key. Both are
+    /// correct; only the second one is what a receipt is checked against.
+    #[test]
+    fn the_model_key_and_the_gateway_key_are_different_keys() {
+        let report = full_report(NONCE);
+        assert_eq!(gateway_ed25519_key(&report, NONCE).unwrap(), KEY);
+        assert_eq!(
+            model_ed25519_keys(&report, NONCE, MODEL_A).unwrap(),
+            vec![MODEL_A_KEY.to_string()]
+        );
+        assert_ne!(MODEL_A_KEY, KEY);
+        assert!(!signer_is_attested(MODEL_A_KEY, KEY));
+    }
+
+    #[test]
+    fn a_model_the_report_does_not_attest_is_refused() {
+        assert_eq!(
+            model_ed25519_keys(&full_report(NONCE), NONCE, "Qwen/Qwen3.9-Nonexistent").unwrap_err(),
+            AttestationReportError::ModelNotAttested
+        );
+    }
+
+    #[test]
+    fn a_model_attestation_for_another_nonce_is_refused() {
+        assert_eq!(
+            model_ed25519_keys(&full_report(&"0".repeat(64)), NONCE, MODEL_A).unwrap_err(),
+            AttestationReportError::NonceMismatch
+        );
+    }
+
+    #[test]
+    fn a_signer_is_matched_against_the_whole_attested_set() {
+        let keys = model_ed25519_keys(&full_report(NONCE), NONCE, MODEL_B).unwrap();
+        assert!(signer_is_attested_for_model(MODEL_B_KEY, &keys));
+        assert!(!signer_is_attested_for_model(MODEL_A_KEY, &keys));
+        assert!(!signer_is_attested_for_model(KEY, &keys));
     }
 
     #[test]

@@ -79,7 +79,9 @@ Neither is the gateway ed25519 key
 (`cb6fc58f6bd685919fa42fb54d3fcfe03222e324bdda91f0bac6d5c73dc4f1c6`), and
 neither appears anywhere in the attestation report — not in
 `gateway_attestation`, and not in `model_attestations`, whose only entry for
-the model carries an unrelated ECDSA address.
+the model carries an unrelated ECDSA address. **[Superseded — see the
+correction at the end of this report: the report endpoint was queried without
+`signing_algo=ed25519`, and the ed25519 model attestation does exist.]**
 
 Both our verification paths pin the gateway key:
 
@@ -120,7 +122,8 @@ existed to find.
   attested enclave. This is the same gap already recorded for the ECDSA
   signer, now confirmed for ed25519 and shown to be per-model. Resolving it
   needs NEAR AI to publish a per-model attestation for the `provider_tee`
-  signing key, or a different binding entirely.
+  signing key, or a different binding entirely. **[Superseded — NEAR AI
+  already publishes exactly that; see the correction below.]**
 - The remaining legs (dry-run submit, witness call, and the Step 9
   stored-envelope body-absence check) were not reached.
 
@@ -136,3 +139,49 @@ existed to find.
   not headless, and its header-to-store correlation is unverified.
 - Proxy: nearai backend only, capture bodies on, pinned to one hosted model
   — pending the routing fix above.
+
+## Correction, later the same day
+
+Two findings above are wrong, and the error was in how this run queried the
+report endpoint rather than in what the endpoint offers.
+
+**`signing_algo` is a query parameter of `GET /v1/attestation/report`, and its
+default is ECDSA.** This run fetched
+`?model=<model>&nonce=<nonce>` with no `signing_algo`, so the endpoint returned
+the ECDSA model attestations — which is why the entry for the model appeared to
+carry "an unrelated ECDSA address" and why the ed25519 receipt signer appeared
+in no attestation. Fetching
+`?model=<model>&signing_algo=ed25519&nonce=<nonce>` returns
+`model_attestations` entries whose `signing_address` is exactly the
+`provider_tee` ed25519 key that signs that model's receipts. Verified against
+both models from this run:
+
+| Model | receipt signer, and its ed25519 model attestation |
+|---|---|
+| `Qwen/Qwen3.6-35B-A3B-FP8` | `aba45f0b8f90869baab26db02e8b01354bb8f8730769c60650cb7a635da602d4` |
+| `Qwen/Qwen3.8-27B` | `73cf225ab4f09154ad8b299d4ac89425c7f25468a42ba9a87d09fcd4e87b8bf5` |
+
+So the open design question — "the receipt signer has no attested binding
+available from the report endpoint today" — is **closed**, and it did not need
+anything new from NEAR AI.
+
+**Where the binding lives.** A `model_attestations` entry carries **no
+`report_data` field**; only `gateway_attestation` has one, as an echo of what
+its own quote already says. On a model attestation the binding is inside
+`intel_quote`, at the TDX `report_data` position — byte offset 568, 64 bytes —
+holding `signing_address || request_nonce` exactly. A verifier that requires a
+`report_data` field refuses every real model attestation.
+
+What stands unchanged from the findings above: the gateway key signs no
+receipt; the signer is per model, so one pinned key cannot be made correct by
+changing its value; and the deployed gateway pin refused every real receipt.
+
+Both verification paths were rewritten against the ed25519 model attestation,
+and the gateway pin variable was retired — the witness now refuses to start if
+it is still set, rather than starting unpinned while an operator believes it
+pins. The fixtures are live captures of the reports and receipts named above,
+so this specific mistake cannot recur silently.
+
+The dormancy warning in `docs/operator/attested-inference.md` stays: this
+correction fixes the verification, and does **not** mean a hosted exchange has
+completed end to end. The remaining legs listed above were still not reached.

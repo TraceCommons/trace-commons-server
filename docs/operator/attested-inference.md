@@ -320,8 +320,31 @@ Two operational consequences:
    be an allowlisted HTTPS origin with no query, fragment or userinfo, or the
    client refuses it as `inference_receipt_endpoint_invalid`.
    `TRACE_COMMONS_INFERENCE_RECEIPT_CHECK_ATTESTATION=true` (the literal word,
-   nothing else counts) additionally verifies the receipt signer's own
-   attestation.
+   nothing else counts) additionally **verifies the receipt** against the
+   call's own request and response bytes — signature, both digests, and that
+   the model the receipt *binds* is the model that served — and then fetches a
+   freshly-nonced attestation report for that model —
+   `GET {base}/attestation/report?model={model}&signing_algo=ed25519&nonce={64 hex}`
+   — and refuses the receipt unless its signer is one of the keys that
+   report attests **for that model**, bound as
+   `report_data == signing_address || nonce`.
+
+   `signing_algo=ed25519` is a query parameter of that endpoint and is not
+   optional: without it the report comes back with ECDSA model attestations,
+   whose keys sign no receipt this client verifies. Checking a receipt signer
+   against `gateway_attestation.signing_address` — which is what this did
+   before — refuses every real hosted-model receipt, because the gateway key
+   signs none of them.
+
+   The verification step is not decorative: without it the gate compares only
+   the `signing_address` the endpoint *claimed* against the attested set, so a
+   hostile receipt endpoint returning a genuinely attested address over a
+   bogus signature would pass. The witness refuses such a submission either
+   way — but the client would have reported it as attested.
+
+   Note what the client gate still does not do: it does not verify the
+   report's TDX quote. A key from it is a claim by the provider, checked for
+   internal consistency and freshness, not a proof.
 5. **`ironwire_attested_bodies` on**, over IPC, as above.
 
 ### The limitation to state plainly
@@ -340,10 +363,24 @@ Two further honesty notes that belong in any contributor-facing description:
   now, from this address. The provider already knew the call happened; it now
   learns it is being contributed. Nothing mitigates this while the receipt has
   to arrive with the submission.
-- **The `model` parameter is not signed.** The endpoint requires it, the
-  receipts NEAR AI signs today are the two-part `<requestHash>:<responseHash>`
-  form, and so the model the client sends establishes nothing. No downstream
-  surface may treat a receipt as binding a model.
+- **The `model` retrieval parameter is not signed** — but the receipt text
+  is. A hosted model returns the three-part form,
+  `{model}:{requestHash}:{responseHash}`, so the receipt does bind a model,
+  and that is the name to read. The query parameter the client sends when
+  fetching establishes nothing on its own and no surface may quote it as if
+  it did.
+
+### The witness side of the same key
+
+A witness that pins receipt signing keys pins them **per model**, in
+`TRACE_COMMONS_WITNESS_MODEL_KEY_PINS`, keyed by the model the receipt itself
+names. It replaces `TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN`, which is no longer
+read: that variable pinned the gateway key, which signs no receipt, so a
+witness holding it refused every real receipt under the folded
+`witness_inference_receipt_unverified` label. **Unset the old variable on
+upgrade** — a witness left with only the old one set runs unpinned. The
+derivation procedure and the fail-closed properties are in
+`deploy/witness/README.md`.
 
 ### Reading a client-side refusal
 

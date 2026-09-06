@@ -73,20 +73,60 @@ services:
       # certificates can lift the PII backstop hold at all.
       TRACE_COMMONS_WITNESS_REDACTION: "full-pipeline"
 
-      # The gateway key pin is DELIBERATELY UNSET.
+      # Receipt signing-key pins, per model. DELIBERATELY UNSET HERE.
       #
-      # It was set on 2026-09-06 to the gateway's ed25519 key. A live run that
-      # same day established that hosted-model receipts are not signed by the
+      # This replaces TRACE_COMMONS_WITNESS_GATEWAY_KEY_PIN, which this file
+      # set on 2026-09-06 to the gateway's ed25519 key. A live run that same
+      # day established that hosted-model receipts are not signed by the
       # gateway key at all: they carry `signature_kind: provider_tee` and a
       # PER-MODEL ed25519 key, published in the attestation report's
       # `model_attestations` when the report is fetched with
       # `signing_algo=ed25519`. One pinned key therefore cannot be correct for
       # more than one model, and the gateway key is correct for none -- with it
-      # set, every real receipt is refused.
-      #
-      # Left unset until the per-model verification lands, so the witness is
-      # dormant on this control rather than confidently wrong. See
+      # set, every real receipt was refused. See
       # docs/superpowers/reports/2026-09-06-attested-inference-first-run.md.
+      #
+      # The per-model verification that report called for has since landed, and
+      # the old variable is NO LONGER READ -- the witness refuses to start if
+      # it is still set, rather than starting unpinned while an operator
+      # believes it pins.
+      #
+      # Unset is the dormant state -- an offered receipt still has to verify,
+      # against the key it names -- so this file ships without pins rather
+      # than with a guess at which models this deployment routes to. Pinning a
+      # model that is not served costs nothing; failing to pin one that is
+      # served silently refuses its receipts under the same folded label as
+      # every other receipt failure, which is hard to debug from outside.
+      #
+      # To pin, derive each model's key set from a nonce-bound report and set
+      # `model=key[,model=key...]`. `signing_algo=ed25519` is NOT optional --
+      # without it the endpoint answers with ECDSA attestations, whose keys
+      # sign nothing verified here:
+      #
+      #   NONCE=$(openssl rand -hex 32)
+      #   curl -s "https://cloud-api.near.ai/v1/attestation/report\
+      #?model=<MODEL>&signing_algo=ed25519&nonce=$NONCE" \
+      #     | jq -r --arg n "$NONCE" --arg m "<MODEL>" \
+      #       '.model_attestations[] | select(.model_name==$m)
+      #        | select(.signing_algo=="ed25519")
+      #        | (.intel_quote | ascii_downcase) as $q
+      #        | select($q[0:4]=="0400" and $q[8:16]=="81000000")
+      #        | select($q[1136:1264] == (.signing_address + $n))
+      #        | .signing_address'
+      #
+      # A model attestation has NO report_data field -- only the gateway does.
+      # The binding is inside intel_quote at the TDX report_data position,
+      # byte 568 for 64 bytes, which is hex characters [1136:1264]. The header
+      # gate (v4, TEE type 0x81 = TDX) is the same one the code enforces: at
+      # any other version or TEE those bytes are a different field, and a pin
+      # derived without the gate is one the witness would refuse.
+      #
+      # The values are public keys, so they belong here rather than in a
+      # deploy-time secret -- which also puts them inside the measurement.
+      # Rotation upstream, or a new model, means re-deriving and moving these
+      # deliberately, and re-allowlisting the measurement everywhere.
+      #
+      # TRACE_COMMONS_WITNESS_MODEL_KEY_PINS: "Qwen/Qwen3.6-35B-A3B-FP8=<key>"
 
       # The classifier, resolved at startup: a witness told to run
       # `full-pipeline` with no usable backend does not bind, and a backend
