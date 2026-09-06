@@ -38,6 +38,7 @@ pub mod notify;
 pub mod policy;
 pub mod preview;
 pub mod preview_scheduler;
+pub mod private_inference;
 pub mod profile;
 pub mod project_key;
 pub mod queue;
@@ -356,9 +357,24 @@ pub(crate) fn run_blocking<R>(f: impl FnOnce() -> R) -> R {
     }
 }
 
+/// The periodic work, with the hosted IronWire's lifetime wrapped around it.
+///
+/// Private inference is applied from settings before the first tick, so a
+/// daemon that starts with the switch already on is hosting the proxy by the
+/// time it answers its first `status`, and it is stopped on the way out
+/// however the loop ended -- request, signal, or error. A proxy left running
+/// past the daemon that started it would hold the port, the pointer and the
+/// home lock against the next start.
+async fn supervise(shared: Arc<ipc::DaemonShared>, dry_run: bool) -> Result<()> {
+    shared.reconcile_private_inference().await;
+    let result = supervise_passes(&shared, dry_run).await;
+    shared.stop_private_inference().await;
+    result
+}
+
 /// The periodic work: watch, expire, and decide about digests, until asked to
 /// stop.
-async fn supervise(shared: Arc<ipc::DaemonShared>, dry_run: bool) -> Result<()> {
+async fn supervise_passes(shared: &Arc<ipc::DaemonShared>, dry_run: bool) -> Result<()> {
     let poll_interval = {
         let s = shared.settings.lock().expect("settings lock");
         std::time::Duration::from_secs(s.poll_interval_secs.max(1))
@@ -388,6 +404,12 @@ async fn supervise(shared: Arc<ipc::DaemonShared>, dry_run: bool) -> Result<()> 
                 // declared; otherwise bounded by the ledger's own short
                 // timeout, so this cannot stall the tick.
                 shared.refresh_routing().await;
+                // Applies a switch a client set over a transport that does
+                // not reach `handle_request_async` (the C ABI's pre-start
+                // settings override writes the file directly), and notices
+                // a proxy that ended on its own. Cheap when there is
+                // nothing to do, which is the ordinary case.
+                shared.reconcile_private_inference().await;
                 // Fixed labels, never `error = %e`. These errors are
                 // `anyhow::Error`s whose outermost context routinely embeds
                 // a filesystem path -- `write_atomic_0600`'s "creating temp
@@ -396,14 +418,14 @@ async fn supervise(shared: Arc<ipc::DaemonShared>, dry_run: bool) -> Result<()> 
                 // service manager these land in the journal, where the path
                 // carries the OS username. The condition worth logging is
                 // *which pass* failed, and health carries the rest.
-                if watcher::tick(&shared, now).await.is_err() {
+                if watcher::tick(shared, now).await.is_err() {
                     tracing::warn!(pass = "watch", "daemon pass failed");
                 }
-                expire_and_digest(&shared, now);
+                expire_and_digest(shared, now);
                 // Everything above is read-only bookkeeping; uploading is
                 // what dry-run withholds.
                 if !dry_run {
-                    if let Err(e) = drain_approved(&shared, now).await {
+                    if let Err(e) = drain_approved(shared, now).await {
                         // The one detail that is safe and load-bearing: a
                         // fail-closed precondition is a fixed label by
                         // construction (`SubmitPreconditionFailure`), and
@@ -414,10 +436,10 @@ async fn supervise(shared: Arc<ipc::DaemonShared>, dry_run: bool) -> Result<()> 
                             "daemon pass failed"
                         );
                     }
-                    if refresh_history(&shared, now).await.is_err() {
+                    if refresh_history(shared, now).await.is_err() {
                         tracing::warn!(pass = "history", "daemon pass failed");
                     }
-                    if refresh_community(&shared, now).await.is_err() {
+                    if refresh_community(shared, now).await.is_err() {
                         tracing::warn!(pass = "community", "daemon pass failed");
                     }
                 }

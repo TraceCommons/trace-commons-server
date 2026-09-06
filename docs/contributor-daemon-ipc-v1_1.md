@@ -448,7 +448,7 @@ pins. No account token, device key or PKCE verifier is returned to native views.
 | `discover_routing` | — | `found`, plus `port` and optionally `token_path` when found | reads the pointer a running IronWire published, so the declaring flow can pre-fill instead of asking; no network I/O and **never returns the token**; see "`discover_routing`" below |
 | `quiesce` | `timeout_secs` (optional, default 60, max 300) | `quiesced: true`, `waited_ms` | parks uploads for an update swap; `busy` / `quiesce-timeout` if in-flight work does not finish in time |
 | `get_settings` | — | settings; credential and local paths reported as booleans only | |
-| `set_settings` | any of `quiescence_secs`, `digest_interval_secs`, `approval_hold_secs`, `local_notifications`, `claude_root`, `codex_root`, `claude_source`, `codex_source`, `gemini_source`, `cline_source`, `ironwire`, `ironwire_attested_bodies`, `max_uploads_per_day`, `max_bytes_per_day` | updated settings | see "`set_settings`" below |
+| `set_settings` | any of `quiescence_secs`, `digest_interval_secs`, `approval_hold_secs`, `local_notifications`, `claude_root`, `codex_root`, `claude_source`, `codex_source`, `gemini_source`, `cline_source`, `ironwire`, `ironwire_attested_bodies`, `private_inference`, `max_uploads_per_day`, `max_bytes_per_day` | updated settings | see "`set_settings`" below |
 | `consent_options` | — | `scopes[]` of `{name, description, always_on, grants_data_use}` | |
 | `set_consent_scopes` | `scopes[]` (wire-name strings; omitted means floor scope only) | `consent_scopes[]` | requires an existing enrollment |
 | `enroll` | `grant` xor `invite`, `scopes[]` (optional) | `enrolled: bool`, and on success `tenant_id`, `device_key_id`, `consent_scopes[]` | performs real network I/O |
@@ -1488,7 +1488,8 @@ Takes a JSON object of settings to change. Every top-level key must be one
 of `quiescence_secs`, `digest_interval_secs`, `approval_hold_secs`,
 `local_notifications`, `claude_root`, `codex_root`, `claude_source`,
 `codex_source`, `gemini_source`, `cline_source`, `ironwire`,
-`ironwire_attested_bodies`, `max_uploads_per_day`, `max_bytes_per_day` --
+`ironwire_attested_bodies`, `private_inference`, `max_uploads_per_day`,
+`max_bytes_per_day` --
 a key this method does
 not recognize is
 refused outright (`bad_params` / `settings-unknown-field`), not silently
@@ -1541,6 +1542,41 @@ directory read is not configurable and is not this key: it is
 body store and the ledger always belong to the same proxy. With no proxy
 declared, with the proxy declared off, or with no witness configured,
 setting this changes nothing that leaves the machine.
+
+`private_inference` takes a boolean, and it is a **third, separate answer**
+again. `ironwire` says "read the ledger of a proxy running over there";
+this says "be the proxy": the daemon starts IronWire in its own process,
+using `$IRONWIRE_HOME`, else `~/.ironwire`, as its home, so the `ironwire`
+CLI and the existing ledger reader see the same ledger, token and pointer
+they always did.
+
+Default `false`, and a settings file written before this key existed loads
+with it off. Nothing turns it on by discovery: a pointer on disk means
+someone else is running IronWire, which is a different fact from the
+contributor asking this daemon to. Turning it on repoints no agent -- which
+tools route through IronWire stays a per-tool declaration -- and turning it
+off stops only the instance this daemon started.
+
+What actually happened is reported separately, as `private_inference_state`
+on `get_settings`, `set_settings` and `status`. It is an object,
+`{"state": <label>, "port": <number or null>}`, with these labels:
+
+| `state` | meaning | `port` |
+|---|---|---|
+| `off` | the switch is off and nothing is bound | `null` |
+| `running` | this daemon's proxy is serving and has a backend registered | the bound port |
+| `running_no_backends` | this daemon's proxy is serving but no backend is configured, so nothing will route through it | the bound port |
+| `running_elsewhere` | an IronWire this daemon did not start owns the home and is answering; nothing was bound and nothing was stopped | the existing instance's port |
+| `port_in_use` | something that is not this daemon's proxy holds the port | `null` |
+| `start_failed` | the proxy refused to start for any other reason | `null` |
+| `crashed` | a proxy this daemon started ended without being asked to | `null` |
+
+`running_no_backends` is deliberately not `running`: the proxy answers its
+health endpoint and no inference can pass through it, so a client that
+rendered it as running would show a green light over a proxy that cannot
+work. `crashed` is sticky until the switch is turned off and on again,
+rather than restarting every poll tick, so a proxy that cannot stay up is
+visible instead of flickering.
 
 `max_uploads_per_day` and `max_bytes_per_day` each take a positive integer,
 validated against a fixed ceiling (1,000 uploads; 5 GiB) rather than
