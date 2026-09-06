@@ -21,8 +21,8 @@ import SwiftUI
 /// animation, the mark's assembly, and "the coin only turns on the website".
 /// The face carries no `$`. Section 5.9.1's frame draws one, but section
 /// 7.3's standing rule is that no currency symbol appears in the native UI
-/// and the `$` lives only on the website's coin -- which is what the card's
-/// own disclaimer says out loud.
+/// and the `$` lives only on the website's coin -- which is why the card's
+/// own coin face carries no glyph.
 ///
 /// A single reusable view rather than two copies, since the two call sites
 /// (onboarding and `HistoryView`) must never drift on this wording.
