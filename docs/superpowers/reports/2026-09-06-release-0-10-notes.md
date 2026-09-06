@@ -9,8 +9,8 @@ with `gh release edit`.
 
 Everything below the rule is the notes text. Nothing above it is.
 
-**State of this draft.** It is written against `origin/main` at `a692cad8`,
-which is 74 commits past `app-v0.9.0`. The attested-inference sections were
+**State of this draft.** It is written against `origin/main` at `7abd0557`,
+which is 76 commits past `app-v0.9.0`. The attested-inference sections were
 rewritten after the four receipt-verification corrections landed (#676, #677,
 #678, #679): 0.10.0 ships that path working rather than dormant, with the
 limits stated below. There are no `TO CONFIRM` markers left; do not add one
@@ -116,8 +116,11 @@ and the request protocol decides which:
 
 Both are now verified, each against its own attested key, in the client and
 at the witness. The receipt's own `signature_kind` selects exactly one key
-source and never both; an unrecognised kind, and the absence of the field,
-name no source and are refused.
+source and never both; on a **pinning** witness an unrecognised kind, and the
+absence of the field, name no source and are refused. A witness that pins
+nothing — the default, and production today — is dormant on that check: it
+still verifies a receipt's signature against the key the receipt itself
+names, and refuses nothing for its kind.
 
 Two mistakes are worth naming, because both looked like working controls:
 
@@ -128,9 +131,18 @@ Two mistakes are worth naming, because both looked like working controls:
 - A `model_attestations` entry carries **no `report_data` field**. The
   binding lives inside `intel_quote` at the TDX `report_data` position — byte
   offset 568, 64 bytes, `signing_address || nonce`. Code that required the
-  JSON field refused every real model attestation. The fixtures are now live
-  captures of real reports and real receipts, so this class of mistake cannot
-  recur against a fixture written to match the bug.
+  JSON field refused every real model attestation. The receipt- and
+  report-verification fixtures are now live captures of real reports and real
+  receipts, so this class of mistake cannot recur against a fixture written to
+  match the bug.
+
+**What none of this establishes is the hardware.** The client reads NEAR AI's
+attestation report, checks its self-description and the internal binding
+(`report_data == signing_address || nonce`, out of the quote) — and stops
+there. **The TDX quote's own signature is not verified anywhere in this
+repository**, against Intel collateral or otherwise, and neither are the
+quote's measurements. A key obtained this way is a claim by NEAR AI, not a
+proof that an enclave made it. Tracked as issue #684.
 
 The Codex CLI matters here specifically: it speaks the Responses API
 exclusively, so all Codex-driven receipts are `gateway`-signed. A deployment
@@ -164,13 +176,19 @@ This is inherent to the receipt format and cannot be fixed here.
 
 ### What has been verified, and what has not
 
-Verified live, against NEAR AI, on hosted models: the daemon-hosted proxy
-serves a hosted model, the exchange is correlated to its session with bodies
-captured, the receipt is fetched, and its signer checks out against the
-ed25519 attestation that binds it — for **both** receipt kinds, captured
-against `Qwen/Qwen3.6-35B-A3B-FP8`. The proxy's own lifecycle (`running` /
-`running_elsewhere` / `off`, including reclaiming the home from a standalone
-proxy) was confirmed live in the same run.
+Verified live against NEAR AI, for **both** receipt kinds: the receipt is
+fetched, and its signer checks out against the ed25519 attestation that binds
+it.
+
+The rest of the chain up to that point — the daemon-hosted proxy serving a
+hosted model, the exchange correlated to its session with bodies captured, and
+the receipt fetched for that exchange — was run on the chat-completions
+(`provider_tee`) path only, against `Qwen/Qwen3.6-35B-A3B-FP8`. The gateway
+kind was exercised at the receipt, not through the proxy; and a gateway
+receipt names no model, so there is no model to attribute that capture to. The
+proxy's own lifecycle (`running` / `running_elsewhere` / `off`, including
+reclaiming the home from a standalone proxy) was confirmed live in the same
+run.
 
 **Not yet run:** the remaining legs — dry-run submit, the witness call, and
 the stored-envelope body-absence check. Attested inference has therefore
@@ -320,7 +338,9 @@ receipt scheme is pinned (#604). The witness gained a receipt signing-key pin
 (#650), deployed (#674) and then unset once a live run showed it was correct
 for no model (#677); that run is recorded (#676). Verification was rewritten
 against the model's attested ed25519 key (#678) and extended to both receipt
-kinds with separate pin variables (#679). The stale-container window is
+kinds with separate pin variables (#679), and the witness that reads both
+kinds was deployed pinning neither (#681) — step 1 of the rollout below. The
+stale-container window is
 recorded in the deploy README (#647), and the path from dormant to enforced is
 documented (#642).
 
