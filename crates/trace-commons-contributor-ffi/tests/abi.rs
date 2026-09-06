@@ -3497,3 +3497,23 @@ fn whether_to_offer_crosses_the_abi() {
     // Any non-zero is true, as the header says.
     assert_eq!(tc_private_inference_should_offer(2, 0), 0);
 }
+
+#[test]
+fn private_inference_write_confirmation_preserves_absent_values_and_rejects_invalid_inputs() {
+    use trace_commons_contributor_ffi::tc_private_inference_write_confirmed as confirmed;
+    for requested in [-1, 0, 1] {
+        for seen in [-1, 0, 1] {
+            for on in [-1, 0, 1] {
+                assert_eq!(
+                    confirmed(requested, seen, on),
+                    i32::from(seen == 1 && (requested == -1 || requested == on))
+                );
+            }
+        }
+    }
+    for invalid in [-2, 2, i32::MAX] {
+        assert_eq!(confirmed(invalid, 1, 1), 0);
+        assert_eq!(confirmed(1, invalid, 1), 0);
+        assert_eq!(confirmed(1, 1, invalid), 0);
+    }
+}

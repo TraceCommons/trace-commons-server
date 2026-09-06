@@ -386,6 +386,11 @@ impl SettingsView {
         private_inference_row.append(&private_inference_switch);
         private_inference_card.append(&private_inference_row);
         let private_inference_status = gtk::Box::new(gtk::Orientation::Vertical, space::XS);
+        private_inference_status.append(&tone_row(
+            copy::PRIVATE_INFERENCE_STATE_UNKNOWN,
+            Tone::Neutral,
+            None,
+        ));
         private_inference_card.append(&private_inference_status);
         style::append_caveat(
             &private_inference_card,
@@ -2933,14 +2938,28 @@ fn send_private_inference(app: &Rc<App>, on: bool) {
             "private_inference": on,
             "private_inference_offer_seen": true,
         }),
-        |app, result| {
+        move |app, result| {
             app.settings.private_inference_write_pending.set(false);
             app.settings.private_inference_switch.set_sensitive(true);
-            let Ok(value) = result else { return };
-            let Ok(settings) = serde_json::from_value::<crate::model::Settings>(value) else {
-                return;
-            };
-            render_private_inference(app, &settings);
+            let confirmed = result.as_ref().is_ok_and(|value| {
+                copy::private_inference_write_confirmed(
+                    Some(on),
+                    value
+                        .get("private_inference_offer_seen")
+                        .and_then(serde_json::Value::as_bool),
+                    value
+                        .get("private_inference")
+                        .and_then(serde_json::Value::as_bool),
+                )
+            });
+            let settings = result
+                .ok()
+                .and_then(|value| serde_json::from_value::<crate::model::Settings>(value).ok());
+            if let Some(settings) = settings.filter(|_| confirmed) {
+                render_private_inference(app, &settings);
+            } else {
+                app.toast(copy::PRIVATE_INFERENCE_WRITE_UNCONFIRMED);
+            }
         },
     );
 }

@@ -109,6 +109,7 @@ struct QueueContent: View {
                     onAccept: { model.answerPrivateInferenceOffer(accepted: true) },
                     onDecline: { model.answerPrivateInferenceOffer(accepted: false) }
                 )
+                .disabled(model.privateInferenceBusy)
             }
 
             if let offer = model.armingOffer {

@@ -145,9 +145,15 @@ public static class PrivateInferenceSurface
         ?? string.Empty;
 
     /// <summary>
-    /// Whether to put the offer in front of the contributor. Asked of the
-    /// shared table, never decided here.
+    /// Whether the daemon echoed the complete requested write. Missing
+    /// values stay distinct from false across the shared ABI.
     /// </summary>
+    public static bool WriteConfirmed(bool? requestedOn, DaemonSettingsSnapshot? settings) =>
+        NativeMethods.tc_private_inference_write_confirmed(
+            Encode(requestedOn), Encode(settings?.PrivateInferenceOfferSeen), Encode(settings?.PrivateInference)) != 0;
+
+    private static int Encode(bool? value) => value.HasValue ? (value.Value ? 1 : 0) : -1;
+
     public static bool ShouldOffer(bool answered, bool on) =>
         NativeMethods.tc_private_inference_should_offer(answered ? 1 : 0, on ? 1 : 0) != 0;
 

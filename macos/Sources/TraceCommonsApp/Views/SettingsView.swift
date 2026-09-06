@@ -1511,6 +1511,7 @@ struct SettingsContent: View {
                         set: { model.applyPrivateInference($0) }
                     )
                 )
+                .disabled(model.privateInferenceBusy || model.daemonSettings?.privateInference == nil)
                 .toggleStyle(.switch)
                 .tint(TC.green)
                 .font(TC.Font_.body)

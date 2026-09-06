@@ -19,6 +19,20 @@ namespace TraceCommons.Interop.Tests;
 /// </summary>
 public class PrivateInferenceTests
 {
+    [Fact]
+    public void WriteConfirmationDistinguishesMissingAndExplicitFalse()
+    {
+        foreach (bool? seen in new bool?[] { null, false, true })
+        foreach (bool? on in new bool?[] { null, false, true })
+        {
+            var settings = JsonSerializer.Deserialize<DaemonSettingsSnapshot>(JsonSerializer.Serialize(new { private_inference_offer_seen = seen, private_inference = on }));
+            Assert.Equal(seen == true, PrivateInferenceSurface.WriteConfirmed(null, settings));
+            Assert.Equal(seen == true && on == true, PrivateInferenceSurface.WriteConfirmed(true, settings));
+            Assert.Equal(seen == true && on == false, PrivateInferenceSurface.WriteConfirmed(false, settings));
+        }
+        Assert.False(PrivateInferenceSurface.WriteConfirmed(false, null));
+    }
+
     private static PrivateInferenceCopy Copy()
     {
         PrivateInferenceCopy? copy = PrivateInferenceSurface.Copy();

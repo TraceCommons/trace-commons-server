@@ -6,7 +6,7 @@ import XCTest
 /// The daemon a `DaemonClient` talks to in these tests: it records what was
 /// sent and answers with whatever the test decided, so the method name and
 /// the parameter bytes are assertable without a live socket, a state
-/// directory, or the FFI.
+/// directory. Shared decisions still cross the real FFI.
 ///
 /// `openPreview` throws rather than answering: no test here opens one, and
 /// a `TCPreview` cannot be built outside `TCBridge` anyway. It is on the
@@ -403,6 +403,25 @@ final class NativeFlowAdapterTests: XCTestCase {
         """
     }
 
+    func testPrivateInferenceAcceptRequiresBothEchoedKeys() throws {
+        let daemon = RecordingDaemon()
+        daemon.response = privateInferenceFrame(on: false, answered: true)
+        XCTAssertThrowsError(try DaemonClient(daemon: daemon).answerPrivateInferenceOffer(accepted: true))
+        // A marker-only decline must not turn off an existing listener.
+        daemon.response = privateInferenceFrame(on: true, answered: true)
+        XCTAssertTrue(try DaemonClient(daemon: daemon).answerPrivateInferenceOffer(accepted: false).privateInferenceOn)
+    }
+
+    func testPrivateInferenceSwitchCannotConfirmMissingMarkerOrMissingFalse() {
+        let daemon = RecordingDaemon()
+        daemon.response = privateInferenceFrame(on: false, answered: true)
+            .replacingOccurrences(of: "\"private_inference_offer_seen\":true,", with: "")
+        XCTAssertThrowsError(try DaemonClient(daemon: daemon).setPrivateInference(false))
+        daemon.response = privateInferenceFrame(on: false, answered: true)
+            .replacingOccurrences(of: "\"private_inference\":false,", with: "")
+        XCTAssertThrowsError(try DaemonClient(daemon: daemon).setPrivateInference(false))
+    }
+
     /// Declining records the answer and writes no switch.
     ///
     /// The switch is already false; writing it would make a refusal
@@ -560,5 +579,58 @@ extension SourceSettingsModelTests {
             XCTAssertEqual(model.status.consentScopes,
                 failRead ? ["debugging_evaluation"] : ["debugging_evaluation", "training"])
         }
+    }
+}
+
+private final class PendingPrivateInferenceDaemon: DaemonCalling, @unchecked Sendable {
+    let started: XCTestExpectation
+    let release = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var count = 0
+    var callCount: Int { lock.lock(); defer { lock.unlock() }; return count }
+    init(started: XCTestExpectation) { self.started = started }
+    func call(_ method: String, params paramsJSON: String) -> String {
+        lock.lock(); count += 1; lock.unlock()
+        started.fulfill()
+        _ = release.wait(timeout: .now() + 5)
+        return #"{"error":{"code":"unavailable","message":"settings-save-failed"}}"#
+    }
+    func searchOriginal(entryID: String, needle: String) -> Int? { nil }
+    func openPreview(entryID: String) throws -> TCPreview { throw TCDaemon.TCError.daemonGone }
+}
+
+final class PrivateInferencePendingWriteTests: XCTestCase {
+    @MainActor
+    func testPendingWriteRejectsSecondRequestAndFailureRetainsConfirmedState() async throws {
+        let started = expectation(description: "first write reached daemon")
+        let daemon = PendingPrivateInferenceDaemon(started: started)
+        defer { daemon.release.signal() }
+        let model = AppModel()
+        let initial = RecordingDaemon()
+        initial.response = settingsFrame.replacingOccurrences(of: "\"near_ai_configured\":false", with: "\"private_inference\":false,\"private_inference_offer_seen\":false,\"near_ai_configured\":false")
+        let confirmed = try DaemonClient(daemon: initial).settings()
+        model.setDaemonSettingsForTesting(confirmed)
+        model.setClientForTesting(DaemonClient(daemon: daemon))
+        model.applyPrivateInference(true)
+        model.answerPrivateInferenceOffer(accepted: false)
+        XCTAssertTrue(model.privateInferenceBusy)
+        XCTAssertEqual(model.daemonSettings, confirmed)
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertEqual(daemon.callCount, 1)
+        daemon.release.signal()
+        for _ in 0..<200 where model.privateInferenceBusy {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertFalse(model.privateInferenceBusy)
+        XCTAssertEqual(model.daemonSettings, confirmed)
+        XCTAssertEqual(model.lastActionError, try XCTUnwrap(model.privateInferenceCopy).writeUnconfirmed)
+        XCTAssertTrue(model.showsPrivateInferenceOffer)
+        initial.response = initial.response.replacingOccurrences(of: "\"private_inference\":false", with: "\"private_inference\":true").replacingOccurrences(of: "\"private_inference_offer_seen\":false", with: "\"private_inference_offer_seen\":true")
+        model.setClientForTesting(DaemonClient(daemon: initial))
+        model.applyPrivateInference(true)
+        for _ in 0..<200 where model.privateInferenceBusy { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertFalse(model.privateInferenceBusy)
+        XCTAssertTrue(model.daemonSettings?.privateInferenceOn == true)
+        XCTAssertNil(model.lastActionError)
     }
 }

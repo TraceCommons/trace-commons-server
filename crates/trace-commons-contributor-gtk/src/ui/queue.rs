@@ -721,6 +721,8 @@ pub fn render_private_inference_offer(app: &Rc<App>, settings: &crate::model::Se
             |app, result| {
                 if private_inference_answer_confirmed(&result, false) {
                     hide_private_inference_offer(app);
+                } else {
+                    app.toast(copy::PRIVATE_INFERENCE_WRITE_UNCONFIRMED);
                 }
             },
         );
@@ -742,6 +744,8 @@ pub fn render_private_inference_offer(app: &Rc<App>, settings: &crate::model::Se
                 if private_inference_answer_confirmed(&result, true) {
                     hide_private_inference_offer(app);
                     app.refresh();
+                } else {
+                    app.toast(copy::PRIVATE_INFERENCE_WRITE_UNCONFIRMED);
                 }
             },
         );
@@ -755,15 +759,15 @@ fn private_inference_answer_confirmed(
     accepted: bool,
 ) -> bool {
     result.as_ref().is_ok_and(|settings| {
-        settings
-            .get("private_inference_offer_seen")
-            .and_then(serde_json::Value::as_bool)
-            == Some(true)
-            && (!accepted
-                || settings
-                    .get("private_inference")
-                    .and_then(serde_json::Value::as_bool)
-                    == Some(true))
+        copy::private_inference_write_confirmed(
+            accepted.then_some(true),
+            settings
+                .get("private_inference_offer_seen")
+                .and_then(serde_json::Value::as_bool),
+            settings
+                .get("private_inference")
+                .and_then(serde_json::Value::as_bool),
+        )
     })
 }
 
@@ -1624,6 +1628,7 @@ pub(crate) fn approve_params(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     #[test]
     fn private_inference_offer_requires_a_confirmed_write() {
         use super::private_inference_answer_confirmed as confirmed;
@@ -1650,8 +1655,6 @@ mod tests {
             true
         ));
     }
-
-    use super::*;
 
     const TEST_ENTRY_ID: &str = "test-entry-id";
 

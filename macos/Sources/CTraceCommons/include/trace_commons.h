@@ -651,6 +651,9 @@ char*       tc_private_inference_serving_line(int32_t port);
  * for an interruption.
  */
 int32_t     tc_private_inference_should_offer(int32_t answered, int32_t on);
+/* Write acknowledgement: -1 = absent, 0 = false, 1 = true for each input.
+ * An absent request is a marker-only decline. Invalid values return 0. */
+int32_t     tc_private_inference_write_confirmed(int32_t requested_on, int32_t echoed_seen, int32_t echoed_on);
 
 /* The settings screen's session-source row for one tool, assembled.
  *

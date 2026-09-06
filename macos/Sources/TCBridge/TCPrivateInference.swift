@@ -65,6 +65,11 @@ public enum TCPrivateInference {
         state.withCString { tc_private_inference_quit_needs_notice(on ? 1 : 0, $0) != 0 }
     }
 
+    public static func writeConfirmed(requestedOn: Bool?, echoedSeen: Bool?, echoedOn: Bool?) -> Bool {
+        func encode(_ value: Bool?) -> Int32 { value.map { $0 ? 1 : 0 } ?? -1 }
+        return tc_private_inference_write_confirmed(encode(requestedOn), encode(echoedSeen), encode(echoedOn)) != 0
+    }
+
     public static func shouldOffer(answered: Bool, on: Bool) -> Bool {
         tc_private_inference_should_offer(answered ? 1 : 0, on ? 1 : 0) != 0
     }

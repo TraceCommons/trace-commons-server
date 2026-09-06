@@ -813,14 +813,17 @@ public sealed class ContributorSettingsViewModel : INotifyPropertyChanged
                     DaemonProtocol.Methods.SetSettings,
                     PrivateInferenceSurface.SerializeSwitch(on))
                 .ConfigureAwait(true);
-            if (response.ResultAs<DaemonSettingsSnapshot>() is { } settings)
+            if (response.ResultAs<DaemonSettingsSnapshot>() is { } settings &&
+                PrivateInferenceSurface.WriteConfirmed(on, settings))
             {
+                if (Notice == _privateInferenceCopy.WriteUnconfirmed) Notice = string.Empty;
                 FillPrivateInference(settings);
             }
             else
             {
-                // An error frame: the daemon refused the write and holds
-                // whatever it held before. Same correction as the guard above.
+                // The reply did not confirm the full write. Preserve the
+                // previous snapshot without claiming persistence failed.
+                Notice = _privateInferenceCopy.WriteUnconfirmed;
                 Raise(nameof(PrivateInferenceEnabled));
             }
         }
@@ -831,6 +834,8 @@ public sealed class ContributorSettingsViewModel : INotifyPropertyChanged
             // shell has none of its own to substitute. The SWITCH is not
             // left: it is snapped back to what the daemon last reported,
             // because a switch is not a sentence and a stuck one is a claim.
+            System.Diagnostics.Trace.TraceWarning(nameof(SetPrivateInferenceAsync));
+            Notice = _privateInferenceCopy.WriteUnconfirmed;
             Raise(nameof(PrivateInferenceEnabled));
         }
         finally

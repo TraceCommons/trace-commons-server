@@ -28,6 +28,7 @@ public struct PrivateInferenceCopy: Decodable, Equatable, Sendable {
     public let stateStartFailed: String
     public let stateCrashed: String
     public let quitAlsoStops: String
+    public let writeUnconfirmed: String
 
     /// `CaseIterable` so a test on the far side can compare the exported
     /// field set against the declared one in BOTH directions -- a field the
@@ -55,6 +56,7 @@ public struct PrivateInferenceCopy: Decodable, Equatable, Sendable {
         case stateStartFailed = "state_start_failed"
         case stateCrashed = "state_crashed"
         case quitAlsoStops = "quit_also_stops"
+        case writeUnconfirmed = "write_unconfirmed"
     }
 
     /// All or nothing, for the reason on the type.

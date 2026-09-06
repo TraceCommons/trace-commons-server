@@ -790,13 +790,22 @@ public sealed partial class MainWindow : Window
                     DaemonProtocol.Methods.SetSettings,
                     PrivateInferenceSurface.SerializeOfferAnswer(accepted))
                 .ConfigureAwait(true);
-            ViewModel.SetPrivateInference(response.ResultAs<DaemonSettingsSnapshot>());
+            var settings = response.ResultAs<DaemonSettingsSnapshot>();
+            if (PrivateInferenceSurface.WriteConfirmed(accepted ? true : (bool?)null, settings))
+            {
+                ViewModel.SetPrivateInference(settings);
+                ViewModel.ClearPrivateInferenceWriteFailure();
+            }
+            else
+                ViewModel.ReportPrivateInferenceWriteFailure();
         }
         catch
         {
             // A transport failure must not escape an async-void click handler
             // and close the app. Keep the last confirmed answer; a later
             // settings refresh can confirm whether the write reached disk.
+            System.Diagnostics.Trace.TraceWarning(nameof(AnswerPrivateInferenceOfferAsync));
+            ViewModel.ReportPrivateInferenceWriteFailure();
         }
     }
 
