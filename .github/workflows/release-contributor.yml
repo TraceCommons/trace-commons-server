@@ -146,7 +146,7 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           TRACE_COMMONS_UPDATE_PUBLIC_KEY_HEX: ${{ vars.TRACE_COMMONS_UPDATE_PUBLIC_KEY_HEX }}
-        run: cargo build --release --bin trace-commons-contributor --target "$TARGET"
+        run: cargo build --locked --release --bin trace-commons-contributor --target "$TARGET"
 
       # The checksum is published beside the binary so a contributor can
       # verify what they downloaded. It is not a signature and does not

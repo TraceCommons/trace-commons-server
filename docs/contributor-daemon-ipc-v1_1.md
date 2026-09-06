@@ -1655,6 +1655,26 @@ after an upgrade as well as on a fresh install: an installed build's
 settings file has no such key, so the first build that knows the key reads
 it as unanswered and asks once.
 
+`private_inference_offer_seen` takes a boolean, and it is **not a fourth
+answer**: it records that the question was put, never what the answer was.
+A client that offers the switch on first start writes `true` here on
+*either* button, so declining is remembered exactly as accepting is and the
+contributor is not asked again on the next launch. Nothing in the daemon
+reads it except a client deciding whether to ask; setting it starts nothing,
+stops nothing, and changes no other value.
+
+It lives here rather than in each application's own state file because the
+fact belongs to the machine and not to a window. On Linux the daemon
+outlives the GTK shell and a second shell would otherwise re-ask; on macOS
+and Windows the app is the daemon, and this file is the thing that survives
+a reinstall of neither more nor less than the settings do.
+
+Default `false`, and a settings file written before this key existed loads
+with it false. That default is what makes an offer appear on the first start
+after an upgrade as well as on a fresh install: an installed build's
+settings file has no such key, so the first build that knows the key reads
+it as unanswered and asks once.
+
 `max_uploads_per_day` and `max_bytes_per_day` each take a positive integer,
 validated against a fixed ceiling (1,000 uploads; 5 GiB) rather than
 accepted as an open field. The cap exists to bound a runaway client -- an
