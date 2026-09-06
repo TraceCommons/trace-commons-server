@@ -108,10 +108,17 @@ GitHub to `https://github.com/nearai/holonear.git`) at revision
 `resume/worker-ipc-protocol`, based on main
 `e366e5c8d3ff705d10cc7e738191ae6fa2bc5e26`. **This generating revision is
 UNMERGED**; its protocol proposal still requires Orchard
-maintainer approval. The branch is published for reproduction, but is not an
-approved upstream release or dependency.
+maintainer approval. The branch is published within the nearai organization in a private
+repository and is not publicly reproducible. Reproduction below requires
+authorized access; this is not an approved upstream release or dependency.
 
-In a checkout containing that revision, reproduce with:
+These vectors pin a **proposed** protocol and remain green even if the unmerged
+proposal changes. On Orchard merge, regenerate at the actual merged revision
+and update the fixture digest and metadata pins; [tracking issue #640](https://github.com/TraceCommons/trace-commons/issues/640)
+remains open until that regeneration is reviewed. This Trace issue does not
+substitute for Orchard maintainer approval.
+
+In an authorized internal checkout containing that revision, reproduce with:
 
 ```sh
 scripts/generate-worker-ipc-vectors.sh
@@ -128,6 +135,13 @@ The generating Orchard protocol crate is licensed MIT OR Apache-2.0.
 
 Orchard's actual `holonear-crypto` / ed25519-dalek path generated these
 signatures using two distinct public fixed test seeds for Status and Drain.
+The generator test bakes in seeds `[9; 32]` / `[17; 32]` and nonces
+`[10; 32]` / `[18; 32]`; these are not command-line inputs. The original
+source-derived fixture intentionally uses `[7; 32]` for both cases.
+The Trace test pins both metadata fields and these inputs against constants.
+Those tripwires detect metadata/input drift; because the seeds are public,
+they are not cryptographic proof of generator origin, and an external reader
+cannot independently inspect the private generator repository.
 The Trace `orchard_generated_vectors_pin_both_seeds_and_reject_tampering`
 test calls its production ring request signer and response verifier: exact
 request signatures and serialized bodies must agree, and wrong direction,

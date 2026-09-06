@@ -179,6 +179,8 @@ mod tests {
     use super::*;
     #[test]
     fn source_derived_vectors_pin_both_directions_and_reject_tampering() {
+        // The original source-derived cases intentionally reuse the same [7; 32] seed.
+        // Only the independently generated Orchard fixture exercises distinct seeds.
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../../tests/fixtures/worker_ipc_v0.json")).unwrap();
         verify_compatibility_vectors(&fixture);
@@ -191,9 +193,22 @@ mod tests {
             "../../tests/fixtures/orchard_worker_ipc_v0.json"
         ))
         .unwrap();
+        const GENERATOR_SOURCE_SHA256: &str =
+            "402e6d791a890030f863e2f246b5f82f71b12371143f8faf30deee78bd589d68";
+        const IMPLEMENTATION_SOURCE_REVISION: &str = "7d6f70512fb6cd9faf936fc27ca367a5cd539de5";
+        assert_eq!(fixture["generator_source_sha256"], GENERATOR_SOURCE_SHA256);
+        assert_eq!(
+            fixture["implementation_source_revision"],
+            IMPLEMENTATION_SOURCE_REVISION
+        );
         let cases = fixture["cases"].as_array().unwrap();
         assert_eq!(cases.len(), 2);
         assert_ne!(cases[0]["seed_hex"], cases[1]["seed_hex"]);
+        for (case, seed_byte) in cases.iter().zip([9_u8, 17]) {
+            assert_eq!(case["seed_hex"], hex::encode([seed_byte; 32]));
+            let request: SignedRequest = serde_json::from_value(case["request"].clone()).unwrap();
+            assert_eq!(request.body.nonce, [seed_byte + 1; 32]);
+        }
         verify_compatibility_vectors(&fixture);
     }
 
