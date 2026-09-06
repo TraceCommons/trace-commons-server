@@ -163,30 +163,31 @@ public sealed partial class MainWindow : Window
         "Quitting stops Trace Commons watching for finished sessions. Nothing is queued or "
         + "sent until you open it again. Anything already waiting stays waiting.";
 
-    /// <summary>
-    /// Intercepts the close so the consequence can be stated first.
-    /// </summary>
-    /// <remarks>
-    /// On the window's own close button as well as on the tray's Quit. Once
-    /// the app has a tray icon, "I closed the window" and "I stopped
-    /// contributing" become different acts on every other platform -- and on
-    /// this one they are still the same act, because the watcher is this
-    /// process. A contributor must not have to guess which it was.
-    /// </remarks>
+    /// <summary>Hide to a reachable tray; otherwise confirm before stopping the daemon.</summary>
     private async void OnAppWindowClosing(
         Microsoft.UI.Windowing.AppWindow sender,
         Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
     {
-        if (_quitConfirmed)
+        var outcome = CloseBehavior.OnWindowClose(_quitConfirmed, _tray.IsPresent, _quitDialogOpen);
+        if (outcome == CloseRequestOutcome.Quit)
         {
             return;
         }
 
-        // Cancelled first and re-closed after: AppWindow.Closing cannot be
-        // awaited, so the only way to ask a question is to refuse this close
-        // and start another one from the answer.
+        // Cancel synchronously before awaiting any confirmation.
         args.Cancel = true;
+        if (outcome == CloseRequestOutcome.HideToTray)
+        {
+            AppWindow.Hide();
+        }
+        else if (outcome == CloseRequestOutcome.AskToQuit)
+        {
+            await ConfirmQuitAsync();
+        }
+    }
 
+    private async Task ConfirmQuitAsync()
+    {
         if (_quitDialogOpen)
         {
             return;
@@ -227,11 +228,8 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception)
         {
-            // `args.Cancel = true` ran synchronously above, before the first
-            // await, so WinUI has already honoured the cancellation by the
-            // time any throw here is possible. The close is refused whatever
-            // happens next; the only question was whether the process
-            // survived to be closed again.
+            // The window-close path canceled synchronously; the tray path
+            // has not attempted to close. Any failure refuses the quit.
             //
             // The window then refuses to close without saying so, and that
             // is right rather than merely tolerable. This runs precisely
@@ -532,10 +530,10 @@ public sealed partial class MainWindow : Window
 
     private void OnTrayQuitRequested()
     {
-        _host.Dispatcher.TryEnqueue(() =>
+        _host.Dispatcher.TryEnqueue(async () =>
         {
-            Activate();
-            Close();
+            BringForward();
+            await ConfirmQuitAsync();
         });
     }
 
