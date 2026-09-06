@@ -36,15 +36,22 @@ dirs = "6"
 hex = "0.4"
 # IronWire's proxy, run in-process behind the private_inference switch.
 #
-# Approved normal-dependency budget: 83 new package names (223 upstream,
-# 140 shared at the measured baseline). Lock entries and target-only packages
-# are separate counts. The former 91 figure included a newer IronClaw main
-# resolution, not merely changes between IronWire revisions.
+# Measured normal-dependency cost (deduplicated package names): 220 before,
+# 303 after, exactly the approved 83 additions (223 upstream, 140 shared).
+# This adds axum's HTTP-server path and rusqlite's ledger to the contributor's
+# normal graph. Lock entries and target-only packages are separate counts.
+# The former 91 figure included a newer IronClaw main resolution, not merely
+# changes between IronWire revisions. Licenses remain compatible permissive
+# terms; curve25519-dalek and ed25519-dalek specifically use BSD-3-Clause.
 #
-# Pin the merged embed-policy correction. Both workspace locks also retain
-# reviewed IronClaw 6dccbfbcbddfdfb53c11d3876f94bf3e716b55f9 because upstream
-# still names branch=main; use --locked and review deliberate lock updates.
-# Dependencies retain compatible permissive licenses, including BSD variants.
+# Pinned to a revision, not a branch: this credential-holding embed API must
+# not change in a release without an explicit upstream revision review.
+# The pin includes the merged non-exhaustive UpdatePolicy correction.
+# Both workspace locks deliberately and temporarily roll IronClaw back to
+# reviewed 6dccbfbcbddfdfb53c11d3876f94bf3e716b55f9 (and rig-core/open with it).
+# Upstream still names branch=main: use --locked. Re-advance only in a reviewed
+# update that measures names/features/licenses, tests embedding and privacy
+# behavior, and updates both locks plus Flatpak sources together.
 ironwire_proxy = { git = "https://github.com/nearai/ironwire", rev = "d1c21c1c490547da36c88e2f4d212f9419c74fa3" }
 notify = "8.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
