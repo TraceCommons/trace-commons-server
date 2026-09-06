@@ -335,6 +335,44 @@ impl From<crate::eip191::Eip191Error> for ReceiptError {
     }
 }
 
+/// A gateway ed25519 signing key in the one spelling this crate compares:
+/// 64 lowercase hex characters, no `0x`.
+///
+/// Surrounding whitespace is trimmed and case is folded, because those are
+/// spellings of one key rather than different keys -- an operator pasting a
+/// value out of an attestation report must not get a pin that can never
+/// match. Everything else is refused: a `0x` prefix is not a spelling NEAR AI
+/// renders, and a short or non-hex string could compare or `strip_prefix`
+/// against something it is not.
+///
+/// `None` rather than an error type: every caller has its own name for a key
+/// that is not one, and this function has nothing to add to it.
+#[must_use]
+pub fn normalize_ed25519_key(key: &str) -> Option<String> {
+    let key = key.trim().to_ascii_lowercase();
+    if key.len() != 64 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(key)
+}
+
+/// Whether a verified receipt's signer is a given attested gateway key.
+///
+/// Case-insensitive, because a report renders the key lowercase and a receipt
+/// might not. Exact otherwise: a prefix, a suffix, or another scheme's
+/// address does not match. The empty-key guard is what stops an unset or
+/// unparsed key from matching everything, which is the way this check would
+/// fail open.
+///
+/// Lives here rather than beside either caller: the contributor compares a
+/// receipt against a key it read from a live report, and the witness compares
+/// one against a key an operator pinned. Same comparison, and it must not be
+/// written twice.
+#[must_use]
+pub fn signer_is_attested(receipt_signer: &str, attested_key: &str) -> bool {
+    !attested_key.is_empty() && receipt_signer.eq_ignore_ascii_case(attested_key)
+}
+
 /// Decode a 32-byte hex digest, in either case. `None` if it is not one.
 fn decode_sha256_hex(s: &str) -> Option<[u8; 32]> {
     if s.len() != 64 {

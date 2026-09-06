@@ -684,6 +684,42 @@ int32_t     tc_private_inference_should_offer(int32_t answered, int32_t on);
  * for tc_last_error.
  */
 char*       tc_source_check_line(const char* tool, const char* source_mode);
+
+/* Every fixed sentence on the consent surface, as an owned JSON object; free
+ * it with tc_string_free. NULL only on a caught panic.
+ *
+ * Keys: gate_statement, ready_help, not_pinned_help.
+ *
+ * ONE CALL, NOT ONE PER SENTENCE. Three sentences is not three exports: a
+ * per-sentence export would let a shell take two of them and hand-write the
+ * third, and one of the three is the claim about what leaves this machine that
+ * a contributor reads immediately above an irreversible button.
+ *
+ * Refuse the WHOLE payload if any field is empty rather than rendering a blank
+ * label. A missing sentence here is a missing claim.
+ */
+char*       tc_consent_copy(void);
+
+/* The tooltip that explains why Contribute is armed or off, chosen here.
+ *
+ * pinned is 1 when a preview parsed and carries an enrollment, and 0
+ * otherwise.
+ *
+ * ONLY 1 IS PINNED. 0 and every other value answer the not-pinned sentence.
+ * This is the fail-closed direction on this surface and it is not routing's:
+ * routing answers Neutral for a value it does not know because Neutral claims
+ * nothing, and there is no sentence here that claims nothing. A shell built
+ * against a later header must not be told the button is armed.
+ *
+ * THE BRANCH CROSSES, NOT ONLY THE WORDS. Do not take both sentences from
+ * tc_consent_copy and choose between them natively: three copies of that
+ * choice drift apart in silence while every string stays identical.
+ *
+ * Returns an owned string; free it with tc_string_free. NULL only on a caught
+ * panic.
+ */
+char*       tc_consent_gate_help(int32_t pinned);
+
 /* Shared settings copy JSON; caller frees with tc_string_free. */
 char*       tc_source_settings_copy(void);
 

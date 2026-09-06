@@ -1585,7 +1585,7 @@ on `get_settings`, `set_settings` and `status`. It is an object,
 | `off` | this daemon owns no running proxy | `null` |
 | `running` | this daemon's proxy is serving and has a backend registered | the bound port |
 | `running_no_backends` | this daemon's proxy is serving but no backend is configured, so nothing will route through it | the bound port |
-| `running_elsewhere` | another process owns the home; this daemon started and stopped nothing, and readiness is not implied by ownership | the existing instance's published or requested port |
+| `running_elsewhere` | a loopback discovery pointer responds, or the exclusive home lock is held; nothing was bound or stopped, and readiness is not established | the published port, or requested port when the lock owner has not published one |
 | `port_in_use` | something that is not this daemon's proxy holds the port | `null` |
 | `start_failed` | the proxy refused to start for any other reason | `null` |
 | `crashed` | startup, serving, or cleanup failed; release of owned resources may be unconfirmed | `null` |
@@ -1601,6 +1601,21 @@ process exit or runtime destruction can interrupt remaining streams. Closing or
 dropping the embedded daemon requests cleanup without blocking synchronously.
 Drop-based cleanup requires unwinding; a `panic=abort` build terminates the
 process instead and cannot finish in-flight requests.
+
+Existing-instance discovery reads at most 64 KiB from an opened regular pointer
+file and probes only the fixed IPv4 loopback health path. Accepted hosts are
+`127.0.0.1` and `localhost`; an IPv6-only pointer is not discovered through an
+unrelated IPv4 port. URL-shape restrictions are defense in depth because the
+request URL is constructed from the validated port, not used verbatim. On supported Unix targets,
+the opened object must match the checked device/inode and effective-user owner,
+remain unwritable by others, and is opened with no-follow/nonblocking flags so a
+replacement symlink or FIFO cannot bypass the check or block the open. Windows
+checks regular-file/reparse shape on the opened handle; this is not a DACL or
+Unix ownership guarantee. Advisory discovery fails closed on Unix targets other
+than shipped macOS and Linux x86_64/aarch64. The probe sends no token,
+ignores environment proxies, and never follows redirects. A successful health
+response is advisory: it conservatively avoids takeover but does not authenticate
+the endpoint. The exclusive home lock remains authoritative when starting.
 
 `running_no_backends` is deliberately not `running`: the proxy answers its
 health endpoint and no inference can pass through it, so a client that

@@ -83,12 +83,6 @@ public class ShellWordingTests
             { "TraceCommons.Interop/WeekBandCopy.cs", 1 },
             { "TraceCommons.Interop/WithdrawCopy.cs", 34 },
 
-            // The read gate. Its four sentences are the safety claim a
-            // contributor reads before approving, and they are the highest
-            // priority of everything on this list: a claim about what leaves
-            // the machine must not be written three times in three shells.
-            { "TraceCommons.Interop/ReadGate.cs", 4 },
-
             // View models that compose a sentence rather than reading one.
             // ContributorSettingsViewModel is the file the settings-screen
             // guard already watches for the witness row specifically; the rest
@@ -121,13 +115,22 @@ public class ShellWordingTests
 
     /// <summary>
     /// The surfaces whose wording already comes from Rust. Nothing may ever
-    /// buy them an allowance here: five of the six are held to the strict
-    /// every-literal rule by <c>NoWordingIsAuthoredInThisShell</c> and
-    /// <c>NoWordingIsAuthoredInTheWitnessSurface</c>, and a baseline entry
-    /// would be a quieter way of undoing that. The sixth,
+    /// buy them an allowance here: eight of the nine are held to the strict
+    /// every-literal rule by <c>NoWordingIsAuthoredInThisShell</c>,
+    /// <c>NoWordingIsAuthoredInTheWitnessSurface</c> and
+    /// <c>NoWordingIsAuthoredInTheConsentSurface</c>, and a baseline entry
+    /// would be a quieter way of undoing that. The ninth,
     /// <c>RoutingSurface.cs</c>, is the routing surface's other half: no
     /// strict guard names it, so zero here is the only thing holding it.
     /// </summary>
+    /// <remarks>
+    /// The consent trio -- <c>ConsentCopy.cs</c>, <c>ConsentSurface.cs</c>
+    /// and <c>ReadGate.cs</c> -- is held to the strict rule by
+    /// <c>NoWordingIsAuthoredInTheConsentSurface</c>. <c>ReadGate.cs</c> is
+    /// listed even though it now holds only the rule: it is where the four
+    /// consent sentences used to be, and a zero here is what makes one
+    /// coming back a failure rather than a re-negotiated allowance.
+    /// </remarks>
     private static readonly string[] RustOwnedSurfaces =
     {
         "TraceCommons.Interop/RoutingTools.cs",
@@ -136,6 +139,9 @@ public class ShellWordingTests
         "TraceCommons.Interop/WitnessSurface.cs",
         "TraceCommons.Interop/NearAccountConnection.cs",
         "TraceCommons.Interop/AdmissionPreparation.cs",
+        "TraceCommons.Interop/ConsentCopy.cs",
+        "TraceCommons.Interop/ConsentSurface.cs",
+        "TraceCommons.Interop/ReadGate.cs",
     };
 
     /// <summary>

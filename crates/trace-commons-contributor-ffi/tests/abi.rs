@@ -16,19 +16,19 @@ use trace_commons_contributor_ffi::{
     TC_WITNESS_STATE_REFUSING_PIN_MALFORMED, TC_WITNESS_STATE_REFUSING_UNPINNED,
     TC_WITNESS_STATE_UNREADABLE, TC_WITNESS_TONE_ATTENTION, TC_WITNESS_TONE_CLEAR,
     TC_WITNESS_TONE_HELD, TC_WITNESS_TONE_NEUTRAL, TC_WITNESS_TONE_REFUSED, tc_call,
-    tc_daemon_start, tc_daemon_start_with_settings, tc_daemon_stop, tc_discover_sources, tc_handle,
-    tc_handle_free, tc_invite_issuer_host, tc_last_error, tc_preview, tc_preview_body,
-    tc_preview_open, tc_preview_search, tc_preview_summary_json, tc_preview_turns_json,
-    tc_private_inference_copy, tc_private_inference_quit_needs_notice,
-    tc_private_inference_serving_line, tc_private_inference_should_offer,
-    tc_private_inference_state_line, tc_private_inference_state_tone, tc_routing_copy,
-    tc_routing_discovery_line, tc_routing_last_checked, tc_routing_state_line,
-    tc_routing_state_tone, tc_routing_token_line, tc_routing_tool_tone, tc_routing_tool_word,
-    tc_routing_unreachable_line, tc_scrub_detector_names, tc_search_original, tc_source_check_line,
-    tc_string_free, tc_subscribe, tc_unsubscribe, tc_witness_clear, tc_witness_configure,
-    tc_witness_copy, tc_witness_last_result_json, tc_witness_last_result_line,
-    tc_witness_last_result_tone, tc_witness_state_line, tc_witness_state_tone,
-    tc_witness_status_json, tc_witness_trust_state,
+    tc_consent_copy, tc_consent_gate_help, tc_daemon_start, tc_daemon_start_with_settings,
+    tc_daemon_stop, tc_discover_sources, tc_handle, tc_handle_free, tc_invite_issuer_host,
+    tc_last_error, tc_preview, tc_preview_body, tc_preview_open, tc_preview_search,
+    tc_preview_summary_json, tc_preview_turns_json, tc_private_inference_copy,
+    tc_private_inference_quit_needs_notice, tc_private_inference_serving_line,
+    tc_private_inference_should_offer, tc_private_inference_state_line,
+    tc_private_inference_state_tone, tc_routing_copy, tc_routing_discovery_line,
+    tc_routing_last_checked, tc_routing_state_line, tc_routing_state_tone, tc_routing_token_line,
+    tc_routing_tool_tone, tc_routing_tool_word, tc_routing_unreachable_line,
+    tc_scrub_detector_names, tc_search_original, tc_source_check_line, tc_string_free,
+    tc_subscribe, tc_unsubscribe, tc_witness_clear, tc_witness_configure, tc_witness_copy,
+    tc_witness_last_result_json, tc_witness_last_result_line, tc_witness_last_result_tone,
+    tc_witness_state_line, tc_witness_state_tone, tc_witness_status_json, tc_witness_trust_state,
 };
 
 fn cstr(p: &Path) -> CString {
@@ -3319,6 +3319,52 @@ fn private_inference_quit_notice_tracks_actual_owned_work() {
         unsafe { tc_private_inference_quit_needs_notice(0, std::ptr::null()) },
         0
     );
+}
+
+#[test]
+fn the_consent_bundle_crossing_the_abi_is_the_one_in_the_rust() {
+    // The whole point of the slice: the sentences a shell renders at the
+    // moment of consent are the ones this repo defines, not a transcription
+    // in Swift or C# that stops matching the day one of them changes.
+    let json = take_owned(tc_consent_copy());
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+
+    // Compared against the payload itself, not against words written here:
+    // pinning the literals in this test would be the same transcription bug
+    // one layer down. The shells' own suites pin nothing either -- they
+    // assert the field set, which is what a rename must break.
+    let expected = serde_json::to_value(trace_commons_contributor::consent_copy::consent_copy())
+        .expect("the payload serialises");
+    assert_eq!(
+        parsed, expected,
+        "the ABI must hand over the payload unchanged"
+    );
+}
+
+#[test]
+fn the_gate_help_branch_crosses_the_abi() {
+    use trace_commons_contributor::consent_copy as copy;
+    assert_eq!(take_owned(tc_consent_gate_help(1)), copy::GATE_READY_HELP);
+    assert_eq!(
+        take_owned(tc_consent_gate_help(0)),
+        copy::GATE_NOT_PINNED_HELP
+    );
+}
+
+#[test]
+fn an_unknown_pinned_value_is_not_told_the_button_is_armed() {
+    // Fail-closed, and specific to this surface: routing's unknown values
+    // answer Neutral because Neutral claims nothing, but there is no
+    // sentence here that claims nothing. The one that claims less is the
+    // one an unknown value gets.
+    use trace_commons_contributor::consent_copy as copy;
+    for value in [-1, 2, 7, i32::MIN, i32::MAX] {
+        assert_eq!(
+            take_owned(tc_consent_gate_help(value)),
+            copy::GATE_NOT_PINNED_HELP,
+            "{value} must not arm the button"
+        );
+    }
 }
 
 // --- the private-inference surface ---------------------------------------
