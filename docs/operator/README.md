@@ -52,6 +52,7 @@ the link.
 | Checking whether a background driver is alive | [`./driver-liveness.md`](./driver-liveness.md) |
 | Running or scheduling admin drills | [`./drills.md`](./drills.md) |
 | Proving the NEAR AI inference endpoint is the enclave you pinned | [`./near-attestation-drill.md`](./near-attestation-drill.md) |
+| Taking attested inference from dormant to enforced | [`./attested-inference.md`](./attested-inference.md) |
 | Deploying the redaction witness on dstack (this project's first CVM) | [`../../deploy/witness/README.md`](../../deploy/witness/README.md) |
 | Looking up an env var | [`./env-reference.md`](./env-reference.md) |
 | Driving review / admin / worker / tenant workflows from a CLI | [`./operator-binaries.md`](./operator-binaries.md) |
@@ -92,6 +93,12 @@ Every runbook in this directory, with a one-line description.
   activity for the A2.6 agent-traces bake-off across candidate gate models.
 - [`./architecture.md`](./architecture.md) — one-page deployment topology
   (KMS, PostgreSQL, GCS, GPU host, ingest binary).
+- [`./attested-inference.md`](./attested-inference.md) — taking attested
+  inference from dormant to enforced: the three switches and who owns each,
+  the four `TRACE_COMMONS_WITNESS_*` ingest variables and how to prove the
+  running process read them, the measurement-pinning contract (every witness
+  redeploy moves `compose_hash` and therefore MRCONFIGID) with the
+  stale-container trap, what a contributor needs, and rollback to dormant.
 - [`./audit-trail-forensics.md`](./audit-trail-forensics.md) — how to query
   and verify the audit chain when investigating a dispute or anomaly.
 - [`./backup-restore.md`](./backup-restore.md) — what is backed up where,
