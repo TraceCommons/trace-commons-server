@@ -75,7 +75,10 @@ struct QueueContent: View {
             }
 
             if let health = model.health {
-                HealthBanner(health: health)
+                HealthBanner(
+                    health: health,
+                    onAction: health.reviewsQueue ? { location = .root } : nil
+                )
             }
             if let budget = model.budgetHealth {
                 HealthBanner(health: budget)
@@ -88,9 +91,7 @@ struct QueueContent: View {
                 )
             }
             if let error = model.lastActionError {
-                Text(error)
-                    .font(TC.Font_.meta)
-                    .foregroundStyle(.secondary)
+                ActionErrorBanner(text: error) { model.lastActionError = nil }
             }
             if let notice = model.lastActionNotice {
                 Text(notice)

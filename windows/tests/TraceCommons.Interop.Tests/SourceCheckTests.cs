@@ -42,10 +42,10 @@ public class SourceCheckTests
             "Claude Code sessions read from the usual place",
             Line(SourceChecks.Claude, "unset"));
         Assert.Equal(
-            "Claude Code marked not used, so nothing is opened for it",
+            "Claude Code marked not used, so nothing is opened for it. Previously queued sessions are not removed",
             Line(SourceChecks.Claude, "off"));
         Assert.Equal(
-            "Codex marked not used, so nothing is opened for it",
+            "Codex marked not used, so nothing is opened for it. Previously queued sessions are not removed",
             Line(SourceChecks.Codex, "off"));
     }
 
@@ -64,7 +64,7 @@ public class SourceCheckTests
         Assert.Equal("Cline sessions folder set", Line("cline", "watch"));
         Assert.Equal("Cline is not set up, so nothing is opened for it", Line("cline", "unset"));
         Assert.Equal(
-            "Cline marked not used, so nothing is opened for it",
+            "Cline marked not used, so nothing is opened for it. Previously queued sessions are not removed",
             Line("cline", "off"));
     }
 

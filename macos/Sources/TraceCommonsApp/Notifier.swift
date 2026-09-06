@@ -1,4 +1,5 @@
 import Foundation
+import TCBridge
 import TCShellCore
 import UserNotifications
 
@@ -29,10 +30,11 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         Bundle.main.bundleIdentifier != nil
     }
 
-    /// Registers the two-action category. Authorization is requested at the
-    /// end of onboarding in the finished product, with an explanation; that
-    /// flow is not built yet, so this asks once at launch and carries on
-    /// regardless of the answer.
+    /// Registers the two-action category. Deliberately does NOT ask for
+    /// authorization: the macOS design spec has that asked at the end of
+    /// onboarding with a sentence saying what notifications are for, not
+    /// sprung at first launch before the app has said what it is. See
+    /// `requestAuthorization`, which the Done screen and Settings call.
     func configure() {
         guard available else { return }
         let center = UNUserNotificationCenter.current()
@@ -54,10 +56,47 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             options: []
         )
         center.setNotificationCategories([category])
-        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    /// The 4-hour digest. Passive, so Focus and Do Not Disturb hold it.
+    /// Where the system stands on this app's notifications, or nil where
+    /// there is no notification centre to ask (a bare `swift run` binary).
+    ///
+    /// Read fresh at each call, never cached: the contributor can flip
+    /// this in System Settings while the window is open, and a value held
+    /// from launch would then claim a state that is no longer true.
+    func authorizationStatus() async -> UNAuthorizationStatus? {
+        guard available else { return nil }
+        return await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    }
+
+    /// Puts the system's permission prompt up. Answers whether the
+    /// contributor allowed it. Called only from a button that sits under a
+    /// sentence explaining what the notifications are -- never at launch.
+    func requestAuthorization() async -> Bool {
+        guard available else { return false }
+        return (try? await UNUserNotificationCenter.current()
+            .requestAuthorization(options: [.alert, .sound])) ?? false
+    }
+
+    /// Where the contributor turns notifications back on after saying no.
+    /// The pane URL opens macOS notification settings.
+    static let systemSettingsURL = URL(
+        string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+    )!
+
+    /// The one sentence that says what a notification from this app is.
+    /// Shown above the permission button on the Done screen and in Settings.
+    static let copy = TCOnboardingCopy.load()
+    static var purpose: String { copy?.notificationPurpose ?? "" }
+
+    static func canPostDigest(_ status: UNAuthorizationStatus?) -> Bool {
+        switch status {
+        case .authorized?, .provisional?, .ephemeral?: return true
+        default: return false
+        }
+    }
+
+    /// The configured digest. Passive, so Focus and Do Not Disturb hold it.
     ///
     /// Fires for either half: sessions waiting for review, or sessions that
     /// were contributed without being asked about since the last one. It used
@@ -101,7 +140,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             content: content,
             trigger: nil
         )
-        UNUserNotificationCenter.current().add(request)
+        Task {
+            guard Self.canPostDigest(await authorizationStatus()), !Task.isCancelled else { return }
+            try? await UNUserNotificationCenter.current().add(request)
+        }
     }
 
     private static func joined(_ labels: [String]) -> String {
