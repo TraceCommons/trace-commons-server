@@ -91,12 +91,99 @@ remain closed until those gates and real-device lifecycle validation pass.
 
 ## Evidence scope and local credential boundary
 
-The IPC vectors were derived from reading revision
+The original `worker_ipc_v0.json` vectors were derived from reading revision
 `ef4e6e2479e8395f7d972d3342bad97851f2104e`. They are reproducible local protocol
 fixtures, not captured responses or upstream-generated interoperability evidence.
 The signed fake-worker child exercises real endpoint publication, request checking,
 readiness, state transitions and drain, but implements the same source-derived
 model. An independently generated upstream transcript remains a release gate.
+
+### Orchard-generated compatibility fixture (UNMERGED source)
+
+`crates/trace-commons-contributor/tests/fixtures/orchard_worker_ipc_v0.json`
+contains exact bytes generated in the `nearai/orchard` repository
+(configured remote `https://github.com/nearai/orchard.git`, now redirected by
+GitHub to `https://github.com/nearai/holonear.git`) at revision
+`4d2227661d9a0feab8aa1e1f0baeea011b11d001`, branch
+`resume/worker-ipc-protocol`, based on main
+`e366e5c8d3ff705d10cc7e738191ae6fa2bc5e26`. **This generating revision is
+UNMERGED**; its protocol proposal still requires Orchard
+maintainer approval. The branch is published within the nearai organization in a private
+repository and is not publicly reproducible. Reproduction below requires
+authorized access; this is not an approved upstream release or dependency.
+
+These vectors pin a **proposed** protocol and remain green even if the unmerged
+proposal changes. On Orchard merge, regenerate at the actual merged revision
+and update the fixture digest and metadata pins; [tracking issue #640](https://github.com/TraceCommons/trace-commons/issues/640)
+remains open until that regeneration is reviewed. This Trace issue does not
+substitute for Orchard maintainer approval.
+
+In an authorized internal checkout containing that revision, reproduce with:
+
+```sh
+scripts/generate-worker-ipc-vectors.sh
+```
+
+The script runs `UPDATE_WORKER_IPC_VECTORS=1 cargo test -p holonear-protocol
+--lib worker_ipc::tests::orchard_generated_vectors_are_stable --locked`.
+Copy `crates/holonear-protocol/tests/fixtures/worker_ipc/orchard_v0.json`
+without reformatting. Its SHA-256 is
+`eb7a86d64173203a39e332f40cc795da5f3e631c0951526b523258b88c30b23b`.
+The fixture also records the generator module's SHA-256
+`402e6d791a890030f863e2f246b5f82f71b12371143f8faf30deee78bd589d68` and the
+original worker implementation revision
+`7d6f70512fb6cd9faf936fc27ca367a5cd539de5`.
+The generating Orchard protocol crate is licensed MIT OR Apache-2.0.
+
+#### What a reader without access can and cannot check
+
+A third party with only this repository **can**:
+
+- recompute the fixture's SHA-256 and confirm it is the digest published
+  above -- `orchard_fixture_provenance_fields_are_present_and_match_the_documentation`
+  does exactly this in-tree, over `include_bytes!` of the committed file, and
+  also asserts that the fixture's provenance fields are present, well formed,
+  and identical to the values named in this document;
+- re-verify every signature in the fixture against Trace's own production
+  request signer and response verifier, and confirm the tampering arms fail.
+
+That same reader **cannot**:
+
+- regenerate the fixture. The generating repository is private to the nearai
+  organization, so the reproduce command above runs only in an authorized
+  checkout;
+- establish from this repository that Orchard, rather than a local
+  regeneration by Trace, produced the bytes. The seeds are public and the
+  signature scheme is deterministic, so bytes produced by Trace's own signer
+  would satisfy every cryptographic assertion here identically. The digest
+  and metadata pins are drift tripwires -- they detect a *changed* fixture --
+  not evidence of origin.
+
+The claim this fixture supports is therefore cross-implementation message
+compatibility as captured at a named revision, not independently verifiable
+upstream provenance.
+
+Orchard's actual `holonear-crypto` / ed25519-dalek path generated these
+signatures using two distinct public fixed test seeds for Status and Drain.
+The generator test bakes in seeds `[9; 32]` / `[17; 32]` and nonces
+`[10; 32]` / `[18; 32]`; these are not command-line inputs. The original
+source-derived fixture intentionally uses `[7; 32]` for both cases.
+The Trace test pins both metadata fields and these inputs against constants.
+Those tripwires detect metadata/input drift; because the seeds are public,
+they are not cryptographic proof of generator origin, and an external reader
+cannot independently inspect the private generator repository.
+The Trace `orchard_generated_vectors_pin_both_seeds_and_reject_tampering`
+test calls its production ring request signer and response verifier: exact
+request signatures and serialized bodies must agree, and wrong direction,
+nonce, version, instance or payload must fail. Both crypto implementations
+therefore agree on these messages; the original source-derived fixture remains
+separate and retains its existing test.
+
+This is cross-implementation message compatibility, not a running-node
+transcript, pool assignment, completed workload, signed package, independently
+trusted package manifest, release provenance or production launch authorization.
+No test executes Orchard code or needs an Orchard checkout or network access.
+Production compute and its remaining release gates stay unchanged.
 
 The per-launch seed is passed through the child process environment. After spawn,
 the parent removes the credential from its `Command` configuration and clears the

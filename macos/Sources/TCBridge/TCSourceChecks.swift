@@ -12,6 +12,14 @@ import Foundation
 /// place the wording can drift. The GTK and Windows shells render the same
 /// row from the same Rust.
 public enum TCSourceChecks {
+    public static func settingsCopy() -> SourceSettingsCopy? {
+        guard let raw = tc_source_settings_copy() else { return nil }
+        defer { tc_string_free(raw) }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try? decoder.decode(SourceSettingsCopy.self, from: Data(String(cString: raw).utf8))
+    }
+
     /// The wire key for Claude Code's session source.
     public static let claude = "claude"
 
@@ -50,5 +58,15 @@ public enum TCSourceChecks {
         else { return nil }
         defer { tc_string_free(raw) }
         return String(cString: raw)
+    }
+}
+
+public struct SourceSettingsCopy: Decodable, Sendable {
+    public let heading, explanation, saveFailed, consentSaveFailed, unavailable: String
+    public let selectedFolder, noCandidate, watchCandidate, chooseFolder, retry: String
+    public let tools: [String: Tool]
+    public struct Tool: Decodable, Sendable {
+        public let key, decline: String
+        public let unsetScansConventional: Bool
     }
 }

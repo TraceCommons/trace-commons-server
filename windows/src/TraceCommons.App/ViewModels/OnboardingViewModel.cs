@@ -55,6 +55,7 @@ public sealed class OnboardingViewModel : INotifyPropertyChanged
     private string _invite = string.Empty;
     private string _instanceLine = string.Empty;
     private bool _inviteFailed;
+    private string _projectNotice = string.Empty;
     private bool _isBusy;
     private bool _scanOffered;
     private bool _useNearAiScan;
@@ -155,6 +156,29 @@ public sealed class OnboardingViewModel : INotifyPropertyChanged
         get => _inviteFailed;
         private set => Set(ref _inviteFailed, value);
     }
+
+    /// <summary>
+    /// What screen 5 says when a project-mode write did not land, empty when
+    /// there is nothing to report.
+    ///
+    /// Settings sets a notice on the same refusal. Without one here a refused
+    /// write is indistinguishable from a click that did nothing: the button
+    /// re-enables, the row reads the same, and the contributor is left believing
+    /// a consent field changed when it did not.
+    /// </summary>
+    public string ProjectNotice
+    {
+        get => _projectNotice;
+        private set
+        {
+            if (Set(ref _projectNotice, value))
+            {
+                Raise(nameof(HasProjectNotice));
+            }
+        }
+    }
+
+    public bool HasProjectNotice => _projectNotice.Length > 0;
 
     public NearAccountConnection NearAccount { get; }
     public bool CanUseWallet => !IsBusy;
@@ -388,6 +412,9 @@ public sealed class OnboardingViewModel : INotifyPropertyChanged
 
     public async Task LoadProjectsAsync()
     {
+        // A stale refusal must not outlive the state it described.
+        ProjectNotice = string.Empty;
+
         DaemonResponse response = await _host
             .CallAsync(DaemonProtocol.Methods.ListProjects)
             .ConfigureAwait(true);
@@ -409,10 +436,10 @@ public sealed class OnboardingViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Excludes a project from watching.
+    /// Excludes a project or restores manual review after an accidental Ignore.
     /// </summary>
     /// <remarks>
-    /// Ignore is offered here and auto-upload deliberately is not. Excluding
+    /// Only manual review and Ignore are offered here. Excluding
     /// the client repo is a live thought at this moment and never returns,
     /// whereas arming automation before a single preview has been seen is
     /// asking for trust that has not been earned yet.
@@ -421,16 +448,48 @@ public sealed class OnboardingViewModel : INotifyPropertyChanged
     {
         ArgumentNullException.ThrowIfNull(project);
 
-        string payload = JsonSerializer.Serialize(
-            new ProjectModeRequest { ProjectId = project.ProjectId, Mode = "ignore" });
-
-        DaemonResponse response = await _host
-            .CallAsync(DaemonProtocol.Methods.SetProjectMode, payload)
-            .ConfigureAwait(true);
-        if (!response.IsError)
+        if (!project.CanToggle || ProjectManualMode.Next(project.Mode) is not string next)
         {
-            project.SetMode("ignore");
+            return;
         }
+
+        string projectId = project.ProjectId;
+        project.IsPending = true;
+        try
+        {
+            string payload = JsonSerializer.Serialize(
+                new ProjectModeRequest { ProjectId = projectId, Mode = next });
+            DaemonResponse response = await _host
+                .CallAsync(DaemonProtocol.Methods.SetProjectMode, payload)
+                .ConfigureAwait(true);
+
+            // The rows are rebuilt from a fresh list_projects rather than from
+            // `next`: what this screen shows about a consent field has to be
+            // what the daemon stores, and a write that was refused or that
+            // stored something else is invisible to a shell that believes its
+            // own request. The re-read runs on the failure path too -- that is
+            // the path where the two can disagree.
+            await LoadProjectsAsync().ConfigureAwait(true);
+            string? persisted = FindProject(projectId)?.Mode;
+            ProjectNotice = ProjectManualMode.NoticeFor(response.IsError, next, persisted);
+        }
+        finally
+        {
+            project.IsPending = false;
+        }
+    }
+
+    private ProjectViewModel? FindProject(string projectId)
+    {
+        foreach (ProjectViewModel candidate in Projects)
+        {
+            if (string.Equals(candidate.ProjectId, projectId, StringComparison.Ordinal))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -585,7 +644,8 @@ public sealed class ConsentScopeViewModel : INotifyPropertyChanged
 
 public sealed class ProjectViewModel : INotifyPropertyChanged
 {
-    private bool _isIgnored;
+    private string _mode;
+    private bool _isPending;
 
     public ProjectViewModel(ProjectSetting project)
     {
@@ -599,7 +659,7 @@ public sealed class ProjectViewModel : INotifyPropertyChanged
         // the opaque id.
         IsUnresolvable = project.IsUnresolvedBucket;
         ProjectLabel = WatchCopy.LabelFor(IsUnresolvable, project.ProjectLabel);
-        _isIgnored = project.Mode == "ignore";
+        _mode = project.Mode;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -621,26 +681,50 @@ public sealed class ProjectViewModel : INotifyPropertyChanged
     /// note REPLACES the mode rather than joining it, because "you'll always be
     /// asked" already says what "Ask me first" says.
     /// </summary>
-    public string SubLine => WatchCopy.SubLineFor(IsUnresolvable, _isIgnored ? "ignore" : "ask");
+    public string SubLine => WatchCopy.SubLineFor(IsUnresolvable, _mode);
 
-    public bool IsIgnored
+    public string Mode => _mode;
+
+    /// <summary>
+    /// The button's words, empty when there is no transition out of this mode.
+    /// <see cref="HasAction"/> hides the control in that case rather than
+    /// leaving a disabled button with nothing written on it.
+    /// </summary>
+    public string ActionText => WatchCopy.ActionFor(_mode) ?? string.Empty;
+
+    public bool HasAction => WatchCopy.ActionFor(_mode) is not null;
+
+    public bool CanToggle => !_isPending && ProjectManualMode.Next(_mode) is not null;
+
+    public bool IsPending
     {
-        get => _isIgnored;
+        get => _isPending;
         set
         {
-            if (_isIgnored == value)
-            {
-                return;
-            }
-
-            _isIgnored = value;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsIgnored)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsNotIgnored)));
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SubLine)));
+            _isPending = value;
+            RaiseMode();
         }
     }
 
-    public bool IsNotIgnored => !_isIgnored;
+    // There is deliberately no SetMode here. A row's mode arrives from
+    // list_projects and nowhere else: the one caller this class had set it
+    // from the value the shell had just sent, which is the optimism the
+    // re-read in IgnoreProjectAsync replaced.
 
-    public void SetMode(string mode) => IsIgnored = mode == "ignore";
+    private void RaiseMode()
+    {
+        string[] properties =
+        {
+            nameof(Mode),
+            nameof(ActionText),
+            nameof(HasAction),
+            nameof(CanToggle),
+            nameof(SubLine),
+        };
+
+        foreach (string property in properties)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(property));
+        }
+    }
 }
