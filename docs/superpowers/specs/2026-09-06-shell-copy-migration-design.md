@@ -5,12 +5,14 @@
 **Status:** draft proposal, 2026-09-06. Author: agent dispatch. Not reviewed.
 
 The rule is core-owns-the-words: a sentence a contributor reads is composed
-once, in `crates/trace-commons-contributor`, and every shell reads it. Two
-surfaces already work that way. The rest of the app does not.
+once, in `crates/trace-commons-contributor`, and every shell reads it. Routing,
+witness and compute already carry core-owned copy; other surfaces still
+transcribe it. The inventory below distinguishes merged code from open PRs.
 
 ## What is actually true today
 
-Measured, not estimated. PR #644's `ShellWordingTests.cs` counts the string
+Historical baseline, measured at PR #644 (`c6f097e5`), not a count of the
+remaining work after subsequent copy changes. PR #644's `ShellWordingTests.cs` counts the string
 literals that read as a sentence across both Windows shell projects and pins
 each file at the number it holds:
 
@@ -28,20 +30,25 @@ The same sentences are hand-transcribed a second time into
 `crates/trace-commons-contributor-gtk/src/copy.rs` (3,188 lines). Neither of
 those two shells has a ratchet at all, so their counts are not known.
 
-They have already diverged, and the divergence is visible from the tree:
+Integration checkpoint (2026-09-06, main `8c796948`):
 
-- **Source list.** `copy.rs:1565` (`ONBOARD_WELCOME_BODY_2`) and
-  `windows/src/TraceCommons.App/OnboardingWindow.xaml:37` both say "Claude
-  Code and Codex". PR #612 rewrites the macOS wording to name all four
-  supported sources. After it merges, two shells will name two sources and
-  one will name four, and nothing in the repo fails.
-- **A stale timing promise in five places.** "at most one notification every
-  4 hours" appears in `copy.rs:1741`,
-  `macos/Sources/TraceCommonsApp/Views/OnboardingDoneView.swift:50`,
-  `windows/src/TraceCommons.App/OnboardingWindow.xaml:292`,
-  `windows/src/TraceCommons.App/MainWindow.xaml.cs:426`, and is separately
-  *implemented* by `windows/src/TraceCommons.Interop/DigestCadence.cs`. The
-  sentence is a promise about a constant it cannot see.
+- **Merged #610:** `compute/controller.rs::ComputeCopy` and
+  `contributor-ffi/src/compute.rs::tc_compute_copy_json` already provide core
+  copy. Reuse that contract; copy migration must preserve compute's separate
+  controller lifetime, consent and disabled production defaults.
+- **Open #611, `9a31a286`:** adds `source_copy::source_settings_copy` and
+  `tc_source_settings_copy`, including registry-backed unset-source semantics
+  and the warning that turning a source off retains previously queued sessions.
+- **Open #612, `023dd742`:** adds `onboarding_copy` and `tc_onboarding_copy`.
+  All three shells consume the generic configured-source and digest wording;
+  it no longer names two or four sources or promises a fixed four-hour interval.
+  The Windows four-hour check is an additional conservative backstop, not the
+  daemon's configurable scheduling policy. These fixes supersede the earlier
+  divergence examples; do not recreate their bundles in a later slice.
+
+Refresh these PR states and the per-file baseline at the start of slice 0.
+The following divergence still needs a reviewed resolution:
+
 - **A safety claim with a divergent neighbour.** `ReadGate.Statement` is
   identical in all three shells only because a Rust test
   (`the_three_shells_print_the_same_statement`) opens the Swift and C# files
@@ -52,8 +59,9 @@ They have already diverged, and the divergence is visible from the tree:
 
 ## The shape that already works
 
-`routing_copy.rs` and `witness_copy.rs` are the precedent, and this proposal
-is deliberately nothing more than applying them to the other 39 files.
+`routing_copy.rs`, `witness_copy.rs` and the merged compute copy are
+precedents. Their error and tone contracts differ and must remain distinct;
+the historical 39-file inventory needs reconciliation with the open PRs above.
 
 - The fixed strings of a surface are one `#[derive(Serialize)]` struct built
   by one function (`routing_copy()`, `witness_copy()`), nested into
@@ -66,10 +74,11 @@ is deliberately nothing more than applying them to the other 39 files.
   branch on. The **branch crosses too**: `tc_routing_tool_word(source_mode,
   wiring)` returns the chosen word and `tc_routing_tool_tone(...)` returns
   how to paint it, from the same inputs, so the two cannot fall out of step.
-- Tones are a small integer enum, and **anything a build has not heard of
-  degrades to `TC_ROUTING_TONE_NEUTRAL`** — the value that claims nothing.
-  There is no failure return on a tone call, because a shell that got an
-  error would have to choose a tone itself.
+- Tone namespaces and unknown-value behavior are surface-specific.
+  Routing uses `TC_ROUTING_TONE_*` and unknown values become Neutral.
+  Witness uses the disjoint `TC_WITNESS_TONE_*` range (10–14), including
+  `TC_WITNESS_TONE_REFUSED`; unknown witness values must render Refused.
+  `trace_commons.h` documents this fail-closed boundary explicitly.
 - Each shell holds a thin decode: `RoutingSurface.Parse` (C#) refuses the
   *whole* payload if any field is empty rather than rendering a blank;
   `TCRoutingCopy` (Swift) returns the JSON and decodes in `TCShellCore` so it
@@ -144,14 +153,12 @@ Alternatives weighed:
   that. If a bundle ever has to break shape, the export name carries it —
   `tc_health_copy_v2` — which the header diff makes impossible to miss.
 
-Tones: any migrated sentence whose emphasis varies gets a paired
-`tc_<surface>_<thing>_tone(...)` returning the same numbering the routing
-tones use, never failing, and **unknown values degrade to Neutral**. Note the
-known gap recorded in
-`project_app_shell_settings_architecture`: the ABI tone enum has no `REFUSED`
-value and unknown tones already degrade to Neutral in the shells. Migrating a
-refusal sentence must not smuggle in a new tone quietly — a new tone value is
-an ABI change with its own review, and old shells will paint it Neutral.
+Tones: preserve each surface's existing numbering and unknown-value policy.
+A paired line/tone API must share the same inputs and branch semantics, but
+must not reuse routing's Neutral fallback for a refusal or consent surface.
+Witness already has a Refused value and requires unknown values to render
+Refused. New tone namespaces or values require explicit ABI review; migrating
+copy is not authorization to change an existing fail-closed contract.
 
 ## 3. Migration order
 
@@ -255,8 +262,13 @@ Proposal, matching the existing `TOOLS-SURFACE-BEGIN` / `-END` marker sweep in
   commit. This is already enforced and needs no change.
 - Each ABI shell keeps a live round-trip test through the real dylib
   (`NativeRoundTripTests` on Windows is the model) asserting the bundle
-  decodes with no empty field — which is how a shell learns its decode struct
-  has fallen behind the Rust struct.
+  decodes with no empty required field. That detects missing Rust fields
+  required by the decoder, not newly added fields the decoder silently ignores.
+  For complete migration coverage, separately compare the exported recursive
+  field inventory against each shell's declared consumed fields (with any
+  intentionally unused fields explicitly documented). A test must fail when a
+  new Rust field is added without updating that inventory. Keep this parity
+  check in tests; do not silently change runtime compatibility policy.
 
 ## 6. Parameterized sentences
 
@@ -271,10 +283,13 @@ Three cases, all with existing precedent:
 1. **The value is knowable in Rust.** Compose it there and let nothing cross
    inward. `RoutingCopy::folder_note` is a `String` rather than a `&'static
    str` for exactly this reason: it names the folder this machine would read,
-   and all three shells read it from the bundle. **The four-hour promise is
-   this case** — the sentence must be formatted in Rust from the same
-   constant that implements the cadence, so a changed interval cannot leave
-   a stale promise in five files again.
+   and all three shells read it from the bundle. **Digest cadence is runtime
+   state, not a single constant:** `DaemonSettings.digest_interval_secs` is
+   writable and `daemon/mod.rs` passes the current setting to `digest_due`.
+   Any numeric sentence must use the confirmed runtime value, with a refresh
+   path after settings changes. Alternatively retain #612's truthful generic
+   maximum-frequency wording. Windows' additional four-hour suppression gate
+   must not be presented as the shared daemon interval.
 2. **The value is shell-side and locale-free** — a port, a count, a model
    name, a path the shell resolved. A per-sentence export taking typed
    arguments: `tc_routing_unreachable_line(port)`,
@@ -292,11 +307,13 @@ Three cases, all with existing precedent:
 
 And where a sentence is *chosen* rather than filled, the choice crosses:
 `tc_<surface>_<thing>_line(...)` plus `tc_<surface>_<thing>_tone(...)`, the
-tone never failing and degrading to Neutral, per §2.
+tone preserving the surface-specific unknown-value policy in §2.
 
 ## 7. Rough size and slicing
 
-Sentence counts are the Windows baseline; each slice carries the
+Sentence counts below are the historical #644 Windows baseline, not a new
+measurement; reconcile #611/#612 before allocating overlapping work. Each
+accepted existing bundle is reused rather than replaced. Each slice carries the
 corresponding Swift and GTK sites, which are not yet counted (slice 0 fixes
 that). Estimates are relative, not calendar.
 
@@ -309,7 +326,7 @@ that). Estimates are relative, not calendar.
 | 4 | `HistoryCopy` 30, `HealthCopy` 22, `TrayModel` 11, `SubmitToast` 10, `WeekBandCopy` 1 | 74 | `TrayModel` and `SubmitToast` carry branch tables; expect `_line`/`_tone` pairs. |
 | 5 | `SessionRootsCopy` 14, `UpdateProtocol` 10, `ProjectIgnoreCopy` 8, `ArmingOffer` 4, `OriginalSearchOutcome` 4, `WatchCopy` 4, `SubagentCopy` 2, `PreviewCardOutcome` 1 | 47 | Remainder of the interop classes. Ends with the XAML spike (`SessionRootsWindow.xaml`, 3). |
 | 6 | View models 63 + code-behind 10 | 73 | Composition, not transcription. §6 applies throughout; expect new argument-taking exports. |
-| 7 | XAML: `PreviewSheet` 20, `MainWindow` 19, `OnboardingWindow` 18, `SettingsView` 16, `HistoryView` 8, `SessionRootsWindow` 3 | 84 | Needs the binding decision from the spike. Includes the two-vs-four-sources and four-hour divergences. |
+| 7 | XAML: `PreviewSheet` 20, `MainWindow` 19, `OnboardingWindow` 18, `SettingsView` 16, `HistoryView` 8, `SessionRootsWindow` 3 | 84 | Needs the binding decision from the spike. Reconcile the already-shared #612 onboarding text; do not migrate it twice. |
 | 8 | Empty the baseline, pin it, rewrite the guard's claim | 0 | One commit. |
 
 Slices 2 through 5 are independent of each other once slice 1 has settled the
