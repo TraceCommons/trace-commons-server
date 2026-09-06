@@ -1591,6 +1591,17 @@ on `get_settings`, `set_settings` and `status`. It is an object,
 | `crashed` | a proxy this daemon started ended without being asked to | `null` |
 | `stopping` | retained shutdown is awaiting outstanding startup, calls or cleanup; the requested switch may already be off | last owned port, or `null` before binding |
 
+Turning hosting off persists the request before stopping the owned proxy. The
+reply may report `stopping` while requests drain; it does not mean the listener,
+pointer, or home lock has been released. A new on request waits for that cleanup
+before another listener can start. Daemon termination prevents any later restart
+and waits up to five seconds for cleanup, including waiting for a startup already
+in progress. On expiry the retained cleanup continues while the runtime lives;
+process exit or runtime destruction can interrupt remaining streams. Closing or
+dropping the embedded daemon requests cleanup without blocking synchronously.
+Drop-based cleanup requires unwinding; a `panic=abort` build terminates the
+process instead and cannot finish in-flight requests.
+
 `running_no_backends` is deliberately not `running`: the proxy answers its
 health endpoint and no inference can pass through it, so a client that
 rendered it as running would show a green light over a proxy that cannot
