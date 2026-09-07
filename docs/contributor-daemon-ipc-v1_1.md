@@ -1669,7 +1669,7 @@ retained-shutdown producer confirms cleanup; a port alone is metadata, not
 proof that calls can be answered.
 
 The companion C ABI copy payload (`tc_private_inference_copy`, not a daemon
-settings key) supplies these 27 fixed string fields:
+settings key) supplies these 41 fixed string fields:
 
 - `destination`, `subtitle`;
 - `offer_title`, `offer_what`, `offer_exposure`, `offer_no_repoint`,
@@ -1679,7 +1679,22 @@ settings key) supplies these 27 fixed string fields:
   `state_running`, `state_running_no_backends`, `state_running_elsewhere`,
   `state_port_in_use`, `state_start_failed`, `state_crashed`;
 - `quit_also_stops`, `write_unconfirmed`;
-- `settings_moved`, `tray_turn_off`, `tray_open_to_turn_on`.
+- `settings_moved`, `tray_turn_off`, `tray_open_to_turn_on`;
+- `harnesses_title`, `harnesses_what`, `harnesses_none_found`;
+- `harness_not_connected`, `harness_connected_nothing_seen`,
+  `harness_answering`;
+- `harness_connect`, `harness_disconnect`;
+- `harness_preview_title`, `harness_preview_confirm`,
+  `harness_preview_cancel`;
+- `harness_slot_taken`, `harness_needs_restart`,
+  `harness_unreadable_config`.
+
+The three per-harness states are not two. `harness_connected_nothing_seen`
+says a tool's own settings send its calls here; `harness_answering` says a
+call actually arrived, and it is the only one of the three that means the
+tool works. `harness_slot_taken` reports a slot left exactly as the
+contributor had it and must never be rendered as a fault or paired with an
+action that takes it over.
 
 State sentences and tones are chosen by the shared Rust table rather than by
 shell-authored branching. Copy-field inventory parity is checked separately

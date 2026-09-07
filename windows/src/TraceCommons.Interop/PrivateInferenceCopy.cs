@@ -123,6 +123,69 @@ public sealed record PrivateInferenceCopy
     [JsonPropertyName("tray_open_to_turn_on")]
     public string TrayOpenToTurnOn { get; init; } = string.Empty;
 
+    /// <summary>The heading over the list of tools found on this computer.</summary>
+    [JsonPropertyName("harnesses_title")]
+    public string HarnessesTitle { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The line under that heading. It says the choice is made one tool at a
+    /// time, and that the list is what this app knows how to look for rather
+    /// than a claim about every tool that exists.
+    /// </summary>
+    [JsonPropertyName("harnesses_what")]
+    public string HarnessesWhat { get; init; } = string.Empty;
+
+    [JsonPropertyName("harness_not_connected")]
+    public string HarnessNotConnected { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Settings are right and nothing has arrived yet. Never drawn the same
+    /// way as <see cref="HarnessAnswering"/>: a value in a file is not
+    /// evidence that a call was ever answered.
+    /// </summary>
+    [JsonPropertyName("harness_connected_nothing_seen")]
+    public string HarnessConnectedNothingSeen { get; init; } = string.Empty;
+
+    /// <summary>The only per-harness state that means a call was answered.</summary>
+    [JsonPropertyName("harness_answering")]
+    public string HarnessAnswering { get; init; } = string.Empty;
+
+    [JsonPropertyName("harness_connect")]
+    public string HarnessConnect { get; init; } = string.Empty;
+
+    [JsonPropertyName("harness_disconnect")]
+    public string HarnessDisconnect { get; init; } = string.Empty;
+
+    /// <summary>The heading over the preview shown before anything is written.</summary>
+    [JsonPropertyName("harness_preview_title")]
+    public string HarnessPreviewTitle { get; init; } = string.Empty;
+
+    [JsonPropertyName("harness_preview_confirm")]
+    public string HarnessPreviewConfirm { get; init; } = string.Empty;
+
+    [JsonPropertyName("harness_preview_cancel")]
+    public string HarnessPreviewCancel { get; init; } = string.Empty;
+
+    /// <summary>
+    /// A slot that already had a value in it, which was left alone. Reported,
+    /// never offered: this must not be drawn as a fault to be cleared, and no
+    /// shell may pair it with an action that takes the slot.
+    /// </summary>
+    [JsonPropertyName("harness_slot_taken")]
+    public string HarnessSlotTaken { get; init; } = string.Empty;
+
+    /// <summary>A tool holding an old setting in a process that is still running.</summary>
+    [JsonPropertyName("harness_needs_restart")]
+    public string HarnessNeedsRestart { get; init; } = string.Empty;
+
+    /// <summary>No tool was found, said in terms of what was looked for.</summary>
+    [JsonPropertyName("harnesses_none_found")]
+    public string HarnessesNoneFound { get; init; } = string.Empty;
+
+    /// <summary>A settings file that could not be read, and was therefore refused.</summary>
+    [JsonPropertyName("harness_unreadable_config")]
+    public string HarnessUnreadableConfig { get; init; } = string.Empty;
+
     /// <summary>Every sentence for the complete-payload check, not a rendering order.</summary>
     public string[] Sentences =>
         new[]
@@ -154,5 +217,19 @@ public sealed record PrivateInferenceCopy
             SettingsMoved,
             TrayTurnOff,
             TrayOpenToTurnOn,
+            HarnessesTitle,
+            HarnessesWhat,
+            HarnessNotConnected,
+            HarnessConnectedNothingSeen,
+            HarnessAnswering,
+            HarnessConnect,
+            HarnessDisconnect,
+            HarnessPreviewTitle,
+            HarnessPreviewConfirm,
+            HarnessPreviewCancel,
+            HarnessSlotTaken,
+            HarnessNeedsRestart,
+            HarnessesNoneFound,
+            HarnessUnreadableConfig,
         };
 }

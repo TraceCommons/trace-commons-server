@@ -36,6 +36,25 @@ public struct PrivateInferenceCopy: Decodable, Equatable, Sendable {
     public let settingsMoved: String
     public let trayTurnOff: String
     public let trayOpenToTurnOn: String
+    /// The heading over the list of tools found on this computer.
+    public let harnessesTitle: String
+    /// The line under that heading, qualifying what the list is.
+    public let harnessesWhat: String
+    public let harnessNotConnected: String
+    public let harnessConnectedNothingSeen: String
+    /// The only per-harness state that means a call was answered.
+    public let harnessAnswering: String
+    public let harnessConnect: String
+    public let harnessDisconnect: String
+    public let harnessPreviewTitle: String
+    public let harnessPreviewConfirm: String
+    public let harnessPreviewCancel: String
+    /// A slot already in use, reported and never offered.
+    public let harnessSlotTaken: String
+    public let harnessNeedsRestart: String
+    public let harnessesNoneFound: String
+    /// A file that could not be read, refused rather than rewritten.
+    public let harnessUnreadableConfig: String
 
     /// `CaseIterable` so a test on the far side can compare the exported
     /// field set against the declared one in BOTH directions -- a field the
@@ -69,6 +88,20 @@ public struct PrivateInferenceCopy: Decodable, Equatable, Sendable {
         case settingsMoved = "settings_moved"
         case trayTurnOff = "tray_turn_off"
         case trayOpenToTurnOn = "tray_open_to_turn_on"
+        case harnessesTitle = "harnesses_title"
+        case harnessesWhat = "harnesses_what"
+        case harnessNotConnected = "harness_not_connected"
+        case harnessConnectedNothingSeen = "harness_connected_nothing_seen"
+        case harnessAnswering = "harness_answering"
+        case harnessConnect = "harness_connect"
+        case harnessDisconnect = "harness_disconnect"
+        case harnessPreviewTitle = "harness_preview_title"
+        case harnessPreviewConfirm = "harness_preview_confirm"
+        case harnessPreviewCancel = "harness_preview_cancel"
+        case harnessSlotTaken = "harness_slot_taken"
+        case harnessNeedsRestart = "harness_needs_restart"
+        case harnessesNoneFound = "harnesses_none_found"
+        case harnessUnreadableConfig = "harness_unreadable_config"
     }
 
     /// All or nothing, for the reason on the type.
