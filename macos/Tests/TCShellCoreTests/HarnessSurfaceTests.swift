@@ -1,0 +1,362 @@
+import XCTest
+
+@testable import TCShellCore
+
+/// The harness list's decoding and its branches, without the dylib.
+///
+/// The injected calls deliberately do NOT reimplement the Rust branch
+/// tables: a fake that reproduced the real mapping would let this suite pass
+/// while the shell had stopped asking the shared table at all. Every one of
+/// them is a spy or a stub returning a value the test chose.
+final class HarnessSurfaceTests: XCTestCase {
+    private let payload = """
+        {"destination":"DESTINATION","subtitle":"SUBTITLE",
+         "offer_title":"T","offer_what":"WHAT","offer_exposure":"EXPOSURE",
+         "offer_no_repoint":"NO-REPOINT","offer_accept":"ACCEPT",
+         "offer_decline":"DECLINE","offer_asked_once":"ONCE",
+         "settings_title":"S-TITLE","settings_toggle":"S-TOGGLE",
+         "settings_applies_at_once":"S-AT-ONCE","state_off":"S-OFF","state_unknown":"S-UNKNOWN","state_unreported":"S-UNREPORTED","state_stopping":"S-STOPPING",
+         "state_running":"S-RUNNING","state_running_no_backends":"S-NO-BACKENDS",
+         "state_running_elsewhere":"S-ELSEWHERE","state_port_in_use":"S-PORT",
+         "state_start_failed":"S-FAILED","state_crashed":"S-CRASHED",
+         "quit_also_stops":"QUIT","write_unconfirmed":"UNCONFIRMED","settings_moved":"MOVED","tray_turn_off":"TRAYOFF","tray_open_to_turn_on":"TRAYON",
+         "harnesses_title":"H-TITLE","harnesses_what":"H-WHAT",
+         "harness_not_connected":"H-NOT-CONNECTED",
+         "harness_connected_nothing_seen":"H-NOTHING-SEEN",
+         "harness_answering":"H-ANSWERING","harness_connect":"H-CONNECT",
+         "harness_disconnect":"H-DISCONNECT",
+         "harness_preview_title":"H-PREVIEW","harness_preview_confirm":"H-CONFIRM",
+         "harness_preview_cancel":"H-CANCEL","harness_slot_taken":"H-TAKEN",
+         "harness_needs_restart":"H-RESTART","harnesses_none_found":"H-NONE",
+         "harness_unreadable_config":"H-UNREADABLE"}
+        """
+
+    private func copy() -> PrivateInferenceCopy {
+        guard let copy = PrivateInferenceCopy.decode(fromJSON: payload) else {
+            XCTFail("the fixture payload must decode")
+            fatalError("unreachable")
+        }
+        return copy
+    }
+
+    private static let oneRow = """
+        {"catalog_present":false,"destination_port":8891,
+         "harnesses":[{"id":"claude","name":"Claude Code","installed":true,
+           "connected":false,"config_path":"/Users/x/.claude/settings.json",
+           "connect_command":"tc connect claude","family":"anthropic",
+           "state":"not_connected","last_call_at":null,
+           "can_connect":true,"can_disconnect":false}],
+         "activity":{"readable":true,"window_hours":24,"last_call_at":null,"families":[]}}
+        """
+
+    // MARK: - The list
+
+    /// A row this build cannot read must not silently become a connected one.
+    func testAMalformedPayloadYieldsNoRowsRatherThanAGuess() {
+        let list = HarnessSurface.list(fromJSON: #"{"harnesses":[{"name":"x"}]}"#)
+        XCTAssertEqual(list.harnesses.count, 0)
+        XCTAssertNil(list.destinationPort)
+    }
+
+    /// The file path is part of the row, always. A tool nobody expected to be
+    /// set up is a question about which file, every time.
+    func testTheRowCarriesTheFileItWouldChange() {
+        let list = HarnessSurface.list(fromJSON: Self.oneRow)
+        XCTAssertEqual(list.harnesses.count, 1)
+        XCTAssertEqual(list.harnesses[0].configPath, "/Users/x/.claude/settings.json")
+        XCTAssertEqual(list.harnesses[0].connectCommand, "tc connect claude")
+        XCTAssertEqual(list.destinationPort, 8891)
+        XCTAssertFalse(list.catalogPresent)
+    }
+
+    /// A tool with nowhere to write is listed with a nil path rather than
+    /// dropped: "we have never heard of it" and "we cannot find its file"
+    /// are different answers.
+    func testARowWithNoConfigPathStillDecodes() {
+        let json = Self.oneRow.replacingOccurrences(
+            of: "\"config_path\":\"/Users/x/.claude/settings.json\"", with: "\"config_path\":null")
+        let list = HarnessSurface.list(fromJSON: json)
+        XCTAssertEqual(list.harnesses.count, 1)
+        XCTAssertNil(list.harnesses[0].configPath)
+    }
+
+    // MARK: - The state, and what may be painted as working
+
+    /// The state code is asked of the shared table, never matched on here.
+    func testTheStateCodeIsAskedOfTheSharedTable() {
+        let seen = SpyBox()
+        let calls = HarnessCalls(
+            stateCode: { seen.record($0); return 33 },
+            planOutcomeCode: { _ in 40 },
+            actionAvailable: { _, _, _ in false })
+        XCTAssertEqual(HarnessSurface.state("answering", calls: calls), .answering)
+        XCTAssertEqual(seen.values, ["answering"])
+    }
+
+    /// A state this build has no words for is not painted as working, and a
+    /// tone table that answered `.clear` for it would be the fail-open the
+    /// whole surface exists to prevent.
+    func testOnlyAnsweringReadsAsWorking() {
+        XCTAssertTrue(HarnessSurface.tone(.answering).readsAsWorking)
+        for state in [
+            HarnessState.notConnected, .connectedNoCalls, .activityShared, .unknown,
+        ] {
+            XCTAssertFalse(
+                HarnessSurface.tone(state).readsAsWorking,
+                "\(state) must not be painted as working")
+        }
+    }
+
+    /// "One of these two answered" is not "this one is answering", so the
+    /// shared-activity state borrows neither the answering sentence nor the
+    /// nothing-seen one -- it says nothing, which is all it can honestly say.
+    func testTheUnattributableStatesClaimNothing() {
+        XCTAssertEqual(HarnessSurface.stateSentence(.notConnected, copy: copy()), "H-NOT-CONNECTED")
+        XCTAssertEqual(
+            HarnessSurface.stateSentence(.connectedNoCalls, copy: copy()), "H-NOTHING-SEEN")
+        XCTAssertEqual(HarnessSurface.stateSentence(.answering, copy: copy()), "H-ANSWERING")
+        XCTAssertNil(HarnessSurface.stateSentence(.activityShared, copy: copy()))
+        XCTAssertNil(HarnessSurface.stateSentence(.unknown, copy: copy()))
+    }
+
+    /// The running copy of a tool read its settings when it started. The
+    /// sentence about that stays up while the file says one thing and no
+    /// call has been attributed, and goes the moment one is.
+    func testTheRestartSentenceStaysUpUntilACallIsAttributed() {
+        let connected = Self.oneRow.replacingOccurrences(
+            of: "\"connected\":false", with: "\"connected\":true")
+        let row = HarnessSurface.list(fromJSON: connected).harnesses[0]
+        XCTAssertEqual(
+            HarnessSurface.restartSentence(row, state: .connectedNoCalls, copy: copy()), "H-RESTART")
+        XCTAssertEqual(
+            HarnessSurface.restartSentence(row, state: .activityShared, copy: copy()), "H-RESTART")
+        XCTAssertNil(HarnessSurface.restartSentence(row, state: .answering, copy: copy()))
+
+        let notConnected = HarnessSurface.list(fromJSON: Self.oneRow).harnesses[0]
+        XCTAssertNil(
+            HarnessSurface.restartSentence(notConnected, state: .notConnected, copy: copy()))
+    }
+
+    /// An unfamiliar code is `unknown`, never the value next to it.
+    func testAnUnfamiliarStateCodeIsUnknown() {
+        for code: Int32 in [0, 22, 29, 35, 99, -1] {
+            XCTAssertEqual(HarnessState.fromABI(code), .unknown)
+        }
+    }
+
+    // MARK: - The actions offered on a row
+
+    /// Whether a button appears is the shared table's decision, and a shell
+    /// that answered it from `installed` alone would hide the control that
+    /// removes what we put in an uninstalled tool's file.
+    func testTheActionsOfferedComeFromTheSharedTable() {
+        let seen = SpyBox()
+        let calls = HarnessCalls(
+            stateCode: { _ in 31 },
+            planOutcomeCode: { _ in 40 },
+            actionAvailable: { action, _, _ in
+                seen.record(action)
+                return action == "disconnect"
+            })
+        let row = HarnessSurface.list(fromJSON: Self.oneRow).harnesses[0]
+        XCTAssertFalse(HarnessSurface.canConnect(row, calls: calls))
+        XCTAssertTrue(HarnessSurface.canDisconnect(row, calls: calls))
+        XCTAssertEqual(seen.values, ["connect", "disconnect"])
+    }
+
+    // MARK: - The plan
+
+    /// Only `changes` is committable, and a plan id is what makes the commit
+    /// possible at all -- the shell cannot construct a write of its own.
+    func testOnlyAChangesPlanWithAnIdIsCommittable() {
+        let calls = HarnessCalls(
+            stateCode: { _ in 31 },
+            planOutcomeCode: { outcome in outcome == "changes" ? 41 : 42 },
+            actionAvailable: { _, _, _ in true })
+        let changes = HarnessSurface.plan(
+            fromJSON: #"""
+                {"id":"claude","action":"connect","outcome":"changes","plan_id":"c0ffee",
+                 "path":"/p","changes":["set a thing"],"occupied":[]}
+                """#)
+        XCTAssertEqual(changes?.changes, ["set a thing"])
+        XCTAssertEqual(changes.map { HarnessSurface.canCommit($0, calls: calls) }, true)
+
+        let noop = HarnessSurface.plan(
+            fromJSON: #"""
+                {"id":"claude","action":"connect","outcome":"noop","plan_id":null,
+                 "path":"/p","changes":[],"occupied":[]}
+                """#)
+        XCTAssertEqual(noop.map { HarnessSurface.outcome($0, calls: calls) }, .noop)
+        XCTAssertEqual(noop.map { HarnessSurface.canCommit($0, calls: calls) }, false)
+    }
+
+    /// A committable outcome with no plan id is still not committable. The
+    /// daemon mints the id; a shell that fell back to sending the tool id
+    /// would have constructed a write.
+    func testAChangesPlanWithoutAnIdIsNotCommittable() {
+        let calls = HarnessCalls(
+            stateCode: { _ in 31 }, planOutcomeCode: { _ in 41 },
+            actionAvailable: { _, _, _ in true })
+        let plan = HarnessSurface.plan(
+            fromJSON: #"""
+                {"id":"claude","action":"connect","outcome":"changes","plan_id":null,
+                 "path":"/p","changes":["set a thing"],"occupied":[]}
+                """#)
+        XCTAssertEqual(plan.map { HarnessSurface.canCommit($0, calls: calls) }, false)
+    }
+
+    /// A file we refused to rewrite is not a file with nothing to change,
+    /// and collapsing the two tells a contributor with a broken config that
+    /// everything is fine.
+    func testARefusedFileIsNotAFileWithNothingToChange() {
+        let calls = HarnessCalls(
+            stateCode: { _ in 31 },
+            planOutcomeCode: { outcome in outcome == "unparseable" ? 43 : 42 },
+            actionAvailable: { _, _, _ in true })
+        let refused = HarnessSurface.plan(
+            fromJSON: #"""
+                {"id":"claude","action":"connect","outcome":"unparseable","plan_id":null,
+                 "path":"/p","changes":[],"occupied":[]}
+                """#)
+        XCTAssertEqual(
+            refused.map { HarnessSurface.outcomeSentence($0, copy: copy(), calls: calls) },
+            "H-UNREADABLE")
+        let noop = HarnessSurface.plan(
+            fromJSON: #"""
+                {"id":"claude","action":"connect","outcome":"noop","plan_id":null,
+                 "path":"/p","changes":[],"occupied":[]}
+                """#)
+        XCTAssertEqual(
+            noop.map { HarnessSurface.outcomeSentence($0, copy: copy(), calls: calls) }, .some(nil))
+    }
+
+    /// An occupied slot survives to the screen, never swallowed. This is the
+    /// rule most likely to be lost to a well-meaning simplification.
+    func testAnOccupiedSlotSurvivesToTheScreen() {
+        let plan = HarnessSurface.plan(
+            fromJSON: #"""
+                {"id":"claude","action":"connect","outcome":"noop","plan_id":null,"path":"/p",
+                 "changes":[],
+                 "occupied":[{"slot":"env.ANTHROPIC_BASE_URL","current":"https://theirs.example"}]}
+                """#)
+        XCTAssertEqual(plan?.occupied.first?.slot, "env.ANTHROPIC_BASE_URL")
+        XCTAssertEqual(plan?.occupied.first?.current, "https://theirs.example")
+    }
+
+    /// Occupied is not an outcome. It rides alongside a committable plan,
+    /// because IronWire fills the empty slots and reports the full one in the
+    /// same pass.
+    func testAnOccupiedSlotRidesAlongsideAPlanThatStillHasChanges() {
+        let calls = HarnessCalls(
+            stateCode: { _ in 31 }, planOutcomeCode: { _ in 41 },
+            actionAvailable: { _, _, _ in true })
+        let plan = HarnessSurface.plan(
+            fromJSON: #"""
+                {"id":"claude","action":"connect","outcome":"changes","plan_id":"c0ffee","path":"/p",
+                 "changes":["set a thing"],
+                 "occupied":[{"slot":"env.ANTHROPIC_BASE_URL","current":"https://theirs.example"}]}
+                """#)
+        XCTAssertEqual(plan.map { HarnessSurface.canCommit($0, calls: calls) }, true)
+        XCTAssertEqual(plan?.occupied.count, 1)
+        XCTAssertEqual(
+            plan.map { HarnessSurface.outcomeSentence($0, copy: copy(), calls: calls) }, .some(nil))
+    }
+
+    /// The words for an occupied slot say it was left alone. They are the
+    /// payload's, and the surface has none of its own.
+    func testTheOccupiedSentenceIsThePayloadsAndSaysItWasLeftAlone() {
+        XCTAssertEqual(HarnessSurface.occupiedSentence(copy: copy()), "H-TAKEN")
+    }
+
+    // MARK: - The commit, and a plan that is no longer held
+
+    /// `harness_commit` takes a plan id and nothing else.
+    func testTheCommitCarriesTheMintedPlanIdAndNothingElse() {
+        let params = HarnessSurface.commitParams(planID: "c0ffee")
+        XCTAssertEqual(params.keys.sorted(), ["plan_id"])
+        XCTAssertEqual(params["plan_id"] as? String, "c0ffee")
+    }
+
+    /// The plan params name a tool and an action, and never a file or a
+    /// value to write.
+    func testThePlanParamsNameOnlyAToolAndAnAction() {
+        let params = HarnessSurface.planParams(id: "claude", action: .connect)
+        XCTAssertEqual(params.keys.sorted(), ["action", "id"])
+        XCTAssertEqual(params["action"] as? String, "connect")
+        XCTAssertEqual(
+            HarnessSurface.planParams(id: "claude", action: .disconnect)["action"] as? String,
+            "disconnect")
+    }
+
+    /// Expired, already committed, never minted, the file moved, the write
+    /// failed: the daemon takes the plan out of its store before it checks
+    /// any of those, so every one of them leaves nothing to commit again.
+    /// None is a retry, and the contributor is told the change did not
+    /// happen in the payload's own words.
+    func testEveryFailedCommitSpendsThePlanAndIsNotRetried() {
+        for code in [
+            "harness-plan-unknown", "harness-config-changed", "harness-commit-failed",
+            "unavailable",
+        ] {
+            XCTAssertTrue(
+                HarnessSurface.planIsSpent(afterCommitFailure: code),
+                "\(code) must not leave a plan id a shell could send again")
+        }
+        XCTAssertEqual(HarnessSurface.commitFailureSentence(copy: copy()), "UNCONFIRMED")
+    }
+
+    /// A connect with nothing answering here is a refusal the daemon makes,
+    /// and the shell's answer to it is the exposure question -- not a retry.
+    func testAConnectWithNoDestinationIsTheExposureQuestion() {
+        XCTAssertTrue(HarnessSurface.isNoDestination("harness-no-destination"))
+        XCTAssertFalse(HarnessSurface.isNoDestination("harness-unknown"))
+    }
+
+    // MARK: - The exposure gate
+
+    /// The listener is open to everything on this machine, which does not
+    /// follow from connecting one tool. Every connect made while it is off
+    /// asks first, and that set is a superset of the first-run offer's.
+    func testEveryConnectWhileNothingAnswersHereAsksTheExposureQuestion() {
+        XCTAssertTrue(HarnessSurface.connectNeedsExposure(listenerOn: false))
+        XCTAssertFalse(HarnessSurface.connectNeedsExposure(listenerOn: true))
+    }
+
+    /// The gate never lets a first connect past the first-run offer: wherever
+    /// the shared table says to ask, the gate asks too.
+    func testTheGateIsAtLeastAsCautiousAsTheSharedOfferTable() {
+        let offer: @Sendable (Bool, Bool) -> Bool = { !$0 && !$1 }
+        for answered in [false, true] {
+            for on in [false, true] where offer(answered, on) {
+                XCTAssertTrue(HarnessSurface.connectNeedsExposure(listenerOn: on))
+            }
+        }
+    }
+
+    /// Accepting turns the destination on and records the answer in one
+    /// write; declining records the answer alone and connects nothing.
+    func testAcceptingTurnsItOnAndDecliningWritesTheMarkerAlone() {
+        let accept = HarnessSurface.exposureParams(accepted: true)
+        XCTAssertEqual(accept["private_inference"] as? Bool, true)
+        XCTAssertEqual(accept["private_inference_offer_seen"] as? Bool, true)
+        let decline = HarnessSurface.exposureParams(accepted: false)
+        XCTAssertNil(decline["private_inference"])
+        XCTAssertEqual(decline["private_inference_offer_seen"] as? Bool, true)
+    }
+}
+
+/// A tiny recorder, so a stub can also be a spy.
+private final class SpyBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seen: [String] = []
+    func record(_ value: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        seen.append(value)
+    }
+    var values: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return seen
+    }
+}

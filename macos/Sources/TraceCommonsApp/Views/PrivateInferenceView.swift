@@ -81,6 +81,13 @@ struct PrivateInferenceContent: View {
         let tone = PrivateInferenceIndicator.palette(
             PrivateInferenceSurface.tone(state, calls: model.privateInferenceCalls))
         VStack(alignment: .leading, spacing: TC.Space.sm) {
+            // The list leads. Connecting a tool is the thing a contributor
+            // can decide about; answering model calls at all is what happens
+            // because they connected one, not a question to settle first.
+            HarnessListSection(copy: copy)
+            Divider().padding(.vertical, TC.Space.s)
+            // The switch, below the list and unchanged: a kill switch, which
+            // is what it always was.
             TCSectionHeader(title: copy.settingsTitle)
             Text(copy.offerWhat)
                 .font(TC.Font_.body)
