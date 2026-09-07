@@ -413,6 +413,71 @@ struct MainWindowView: View {
     }
 }
 
+// MARK: - Keyboard
+
+/// The View menu's navigation commands, and the one shortcut that acts
+/// rather than navigates.
+///
+/// In-app only, by construction: these are menu items, so they fire when
+/// this app is frontmost and never while another app owns the keyboard. A
+/// global, system-wide hotkey would need a registration this app does not
+/// make and is deliberately out of scope.
+///
+/// It authors no wording. Every title is `MainWindowView.title` -- the raw
+/// value for the three destinations this shell still names, and the Rust's
+/// own words for the two it does not.
+struct MainWindowCommands: Commands {
+    @ObservedObject var model: AppModel
+    var compute: ComputeModel
+    var navigation: MainWindowNavigation
+
+    /// Cmd-N for the Nth destination.
+    static let destinationModifiers: EventModifiers = [.command]
+    /// Cmd-Shift-M for the switch. Shifted so it cannot be reached by the
+    /// same reflex that reaches a destination: this one changes what the
+    /// machine is doing, the other five only change what is on screen.
+    static let toggleModifiers: EventModifiers = [.command, .shift]
+    static let toggleKey: Character = "m"
+
+    var body: some Commands {
+        CommandGroup(after: .sidebar) {
+            ForEach(MainWindowView.Section.allCases) { item in
+                destination(item)
+            }
+            Divider()
+            toggle
+        }
+    }
+
+    @ViewBuilder
+    private func destination(_ item: MainWindowView.Section) -> some View {
+        let label = MainWindowView.title(
+            item, compute: compute.copy, privateInference: model.privateInferenceCopy)
+        // A destination whose words never arrived gets no menu item rather
+        // than a blank one.
+        if !label.isEmpty {
+            Button(label) {
+                navigation.section = item
+                OpenMainWindow.request()
+            }
+            .keyboardShortcut(
+                item.shortcut.map { KeyEquivalent($0) } ?? "0",
+                modifiers: Self.destinationModifiers)
+        }
+    }
+
+    @ViewBuilder
+    private var toggle: some View {
+        if let copy = model.privateInferenceCopy {
+            Button(copy.settingsToggle) {
+                model.applyPrivateInference(!(model.daemonSettings?.privateInferenceOn ?? false))
+            }
+            .keyboardShortcut(KeyEquivalent(Self.toggleKey), modifiers: Self.toggleModifiers)
+            .disabled(model.privateInferenceBusy || model.daemonSettings?.privateInference == nil)
+        }
+    }
+}
+
 // MARK: - Glyphs
 
 /// One of the design's glyphs, stated on its own 16-unit grid and stroked at
