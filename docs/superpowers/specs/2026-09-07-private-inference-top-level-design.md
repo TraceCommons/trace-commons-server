@@ -78,6 +78,18 @@ fail-open would be introduced by accident. Therefore:
 **Cut 1 (this spec):** the tab, the tray/menu-bar section, and in-app keyboard
 shortcuts, on macOS, Windows and GTK together.
 
+**Amended after implementation: the shortcuts landed on macOS and Windows
+only.** GTK has no keyboard accelerators anywhere in the crate -- no
+`set_accels_for_action`, no `ShortcutController`, and the one `accel` mention is
+a comment in `preview.rs` saying there deliberately is not one. Adding the first
+accelerator to that shell is its own piece of work with its own conventions to
+establish, and it was not done here.
+
+This is recorded because the plan quietly narrowed the scope to two shells and
+nothing said so. A scope cut that has to be inferred from a coverage line is a
+scope cut nobody agreed to. The destination, the tray section and the copy DID
+land on all three.
+
 **Cut 2 (deferred, not specified here):** a global system-wide hotkey. It is the
 only piece requiring per-platform permission work — macOS Accessibility / Input
 Monitoring with a user-facing prompt, `RegisterHotKey` on Windows, and

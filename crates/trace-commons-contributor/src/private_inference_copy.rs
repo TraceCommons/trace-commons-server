@@ -1019,16 +1019,39 @@ mod tests {
             .split_once("PRIVATE-INFERENCE-SURFACE-END")
             .expect("end marker present")
             .0;
-        let mut strings: Vec<String> = region
+        // Comment lines are stripped BEFORE splitting on quotes.
+        //
+        // The extraction below takes every odd-indexed `"`-delimited segment,
+        // which is only the literals while the quote count ahead of each one
+        // is even. A doc comment carrying an odd number of `"` shifts that
+        // parity, and from there every real literal lands in a skipped
+        // position -- the sweep still passes, having examined nothing. It is
+        // the failure mode this test exists to prevent, in this test.
+        let code_only: String = region
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut strings: Vec<String> = code_only
             .split('"')
             .skip(1)
             .step_by(2)
             .map(str::to_string)
             .collect();
+
+        // The floor is the number of constants actually declared between the
+        // markers, not a number typed once and left behind. A hardcoded floor
+        // silently stops meaning anything the moment the module grows past it,
+        // which is how a parity shift would have gone unnoticed.
+        let declared = code_only.matches("pub const ").count();
         assert!(
-            strings.len() >= 18,
-            "the sweep found only {} literals -- did the constants move out \
-             from between the markers?",
+            declared >= 18,
+            "only {declared} constants between the markers -- did they move out?"
+        );
+        assert!(
+            strings.len() >= declared,
+            "the sweep found {} literals for {declared} declared constants -- \
+             a literal is being skipped, most likely a quote-parity shift",
             strings.len()
         );
         strings.push(serving_line(Some(8463)));
