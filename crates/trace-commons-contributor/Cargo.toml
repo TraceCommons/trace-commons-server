@@ -64,6 +64,21 @@ hex = "0.4"
 # update that measures names/features/licenses, tests embedding and privacy
 # behavior, and updates both locks plus Flatpak sources together.
 ironwire_proxy = { git = "https://github.com/nearai/ironwire", rev = "90c9ff946ee424977f7a7d8a97440264559fddd4" }
+# The same IronWire revision, two more of its crates, promoted from
+# transitive to direct. `ironwire_agents` is the crate whose entire purpose is
+# "which coding tools does this machine have, are they pointed at us, and how
+# would we point one at us without taking its config file over"; and
+# `ironwire_catalog` carries the `Catalog` type its API takes.
+#
+# BOTH ARE ALREADY IN THIS CRATE'S GRAPH -- `ironwire_proxy` depends on each
+# of them at this same pinned revision -- so naming them here adds no package,
+# no lock entry and no license to audit. Measured: `cargo tree -p
+# trace-commons-contributor -e normal` is unchanged. What it buys is that this
+# crate does not reimplement, in a second place, the three config-editing
+# rules (never rewrite a file we cannot parse; fill an empty slot but report a
+# full one; remove only what we put there) that crate exists to hold.
+ironwire_agents = { git = "https://github.com/nearai/ironwire", rev = "90c9ff946ee424977f7a7d8a97440264559fddd4" }
+ironwire_catalog = { git = "https://github.com/nearai/ironwire", rev = "90c9ff946ee424977f7a7d8a97440264559fddd4" }
 notify = "8.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 ring = "0.17"

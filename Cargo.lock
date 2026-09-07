@@ -8310,6 +8310,8 @@ dependencies = [
  "clap",
  "dirs",
  "hex",
+ "ironwire_agents",
+ "ironwire_catalog",
  "ironwire_proxy",
  "k256",
  "notify",

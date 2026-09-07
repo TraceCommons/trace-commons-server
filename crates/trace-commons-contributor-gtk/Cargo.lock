@@ -4623,6 +4623,8 @@ dependencies = [
  "clap",
  "dirs",
  "hex",
+ "ironwire_agents",
+ "ironwire_catalog",
  "ironwire_proxy",
  "notify",
  "reqwest 0.12.28",

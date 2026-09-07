@@ -655,6 +655,112 @@ int32_t     tc_private_inference_should_offer(int32_t answered, int32_t on);
  * An absent request is a marker-only decline. Invalid values return 0. */
 int32_t     tc_private_inference_write_confirmed(int32_t requested_on, int32_t echoed_seen, int32_t echoed_on);
 
+/* ---------------------------------------------------------------------------
+ * The harness list: which coding tools this machine has, and whether they send
+ * their model calls here.
+ *
+ * The data comes over the daemon socket (harness_list / harness_plan /
+ * harness_commit). What is exported here is the branch tables over it, because
+ * a branch written three times in three languages agrees today and drifts in
+ * silence tomorrow. No sentence is here; the words are in
+ * tc_private_inference_copy.
+ * -------------------------------------------------------------------------*/
+
+/* The per-tool states of the harness list.
+ *
+ * DELIBERATELY DISJOINT from TC_ROUTING_TONE_* (0..3), TC_WITNESS_TONE_*
+ * (10..14) and TC_PRIVATE_INFERENCE_TONE_* (20..24), for the reason those
+ * ranges give: a shell that cross-wired two mappers with overlapping ranges
+ * would render one surface's value as another's meaning.
+ *
+ * A VALUE THIS HEADER DOES NOT DEFINE MUST BE RENDERED AS
+ * TC_HARNESS_STATE_UNKNOWN. The unsafe direction here is the working light:
+ * ANSWERING is a claim that a call actually arrived and was served, and a
+ * state a shell has no words for must never be painted as that.
+ *
+ * ACTIVITY_SHARED is its own value, not a flavour of ANSWERING: a call arrived
+ * in this tool's protocol family and more than one connected tool speaks that
+ * family, so it cannot be attributed to either. The ledger records a facade,
+ * not a tool id. Say a call arrived; do not name the tool.
+ */
+#define TC_HARNESS_STATE_UNKNOWN            30
+#define TC_HARNESS_STATE_NOT_CONNECTED      31
+#define TC_HARNESS_STATE_CONNECTED_NO_CALLS 32
+#define TC_HARNESS_STATE_ANSWERING          33
+#define TC_HARNESS_STATE_ACTIVITY_SHARED    34
+
+/* What planning an edit turned out to be.
+ *
+ * UNKNOWN is the answer for an outcome this build has never heard of, and it
+ * is not committable -- the safe direction. Only CHANGES is committable, and
+ * only CHANGES comes back with a plan_id.
+ */
+#define TC_HARNESS_PLAN_UNKNOWN        40
+#define TC_HARNESS_PLAN_CHANGES        41
+#define TC_HARNESS_PLAN_NOOP           42
+#define TC_HARNESS_PLAN_UNPARSEABLE    43
+#define TC_HARNESS_PLAN_NOT_INSTALLED  44
+#define TC_HARNESS_PLAN_ENTRY_UNUSABLE 45
+#define TC_HARNESS_PLAN_NO_CONFIG_PATH 46
+
+/* One harness_list row's state field, as a TC_HARNESS_STATE_* code.
+ *
+ * state is "not_connected", "connected_no_calls", "answering",
+ * "activity_shared" or "unknown".
+ *
+ * Exported for the reason tc_private_inference_state_tone is: the mapping from
+ * a label onto what a surface draws is one decision. The dangerous direction
+ * is specific here -- "answering" is the only value meaning a call was
+ * actually served, and it is the one a shell is most tempted to infer from
+ * "connected". DO NOT INFER IT. A config file naming this computer is not
+ * evidence that anything was ever sent.
+ *
+ * Answers TC_HARNESS_STATE_UNKNOWN for a label this build has never heard of,
+ * for a NULL or non-UTF-8 state, and on a caught panic.
+ */
+int32_t     tc_harness_state_code(const char* state);
+
+/* One harness_plan result's outcome field, as a TC_HARNESS_PLAN_* code.
+ *
+ * outcome is "changes", "noop", "unparseable", "not_installed",
+ * "entry_unusable" or "no_config_path".
+ *
+ * The branch that matters is unparseable against noop: one is "nothing to
+ * change", the other is "we refused to rewrite a file we could not read, and
+ * it needs a human". A shell that collapses them tells a contributor with a
+ * broken config file that everything is fine.
+ *
+ * OCCUPIED IS NOT AN OUTCOME. A plan can carry changes and occupied slots at
+ * once, so the occupied list rides alongside on the response and must be
+ * rendered whatever this returns. An occupied slot is a value the contributor
+ * put there themselves; it is reported, never taken over.
+ *
+ * Answers TC_HARNESS_PLAN_UNKNOWN for a label this build has never heard of,
+ * for a NULL or non-UTF-8 outcome, and on a caught panic.
+ */
+int32_t     tc_harness_plan_outcome_code(const char* outcome);
+
+/* Whether one action may be offered for a tool in this state.
+ *
+ * action is "connect" or "disconnect"; installed and connected are the
+ * booleans of the same names on a harness_list row (0/nonzero).
+ *
+ * THE BRANCH TABLE CROSSES, NOT ONLY THE WORDS, and the second rule is the one
+ * worth crossing: a tool that is not installed cannot be connected, but a tool
+ * that IS connected can always be disconnected, installed or not. Uninstalling
+ * a coding tool does not remove the line we put in its config file, and
+ * "remove only what we put there" is worth nothing if a shell hides the
+ * control that does the removing.
+ *
+ * The daemon answers the same thing per row, as can_connect / can_disconnect,
+ * from this same function. A shell may read either.
+ *
+ * Answers 0 -- do not offer -- for an action this build does not know, for a
+ * NULL or non-UTF-8 action, and on a caught panic.
+ */
+int32_t     tc_harness_action_available(const char* action, int32_t installed, int32_t connected);
+
+
 /* The settings screen's session-source row for one tool, assembled.
  *
  * tool is "claude", "codex", "gemini" or "cline". source_mode is get_settings's
