@@ -42,6 +42,20 @@ public sealed record PrivateInferenceCopy
     [JsonPropertyName("offer_asked_once")]
     public string OfferAskedOnce { get; init; } = string.Empty;
 
+    /// <summary>
+    /// The rail label for the top-level destination this surface owns.
+    ///
+    /// Read rather than typed. A shell that spelled the label itself would
+    /// keep spelling the old one after a rename in the Rust, and this is the
+    /// one word in the whole surface a contributor navigates by.
+    /// </summary>
+    [JsonPropertyName("destination")]
+    public string Destination { get; init; } = string.Empty;
+
+    /// <summary>The one line under the destination's title saying what it is for.</summary>
+    [JsonPropertyName("subtitle")]
+    public string Subtitle { get; init; } = string.Empty;
+
     [JsonPropertyName("settings_title")]
     public string SettingsTitle { get; init; } = string.Empty;
 
@@ -104,6 +118,8 @@ public sealed record PrivateInferenceCopy
             OfferAccept,
             OfferDecline,
             OfferAskedOnce,
+            Destination,
+            Subtitle,
             SettingsTitle,
             SettingsToggle,
             SettingsAppliesAtOnce,
