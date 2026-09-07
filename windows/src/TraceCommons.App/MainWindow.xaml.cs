@@ -914,7 +914,16 @@ public sealed partial class MainWindow : Window
 
     private void ShowSettingsPane()
     {
-        SettingsPane.Content ??= new SettingsView(_host);
+        if (SettingsPane.Content is null)
+        {
+            var settings = new SettingsView(_host);
+            // Settings no longer holds the model-calls switch; it holds a
+            // pointer at the destination that does, and this is what turns
+            // that pointer into navigation.
+            settings.OpenPrivateInferenceRequested += (_, _) => ShowPrivateInferencePane();
+            SettingsPane.Content = settings;
+        }
+
         ViewModel.ShowSettings();
     }
 

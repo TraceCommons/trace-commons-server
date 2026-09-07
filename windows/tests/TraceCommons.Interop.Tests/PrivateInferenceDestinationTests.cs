@@ -397,6 +397,42 @@ public class PrivateInferenceDestinationTests
     }
 
     /// <summary>
+    /// Settings points at the destination; it does not hold the switch any
+    /// more.
+    ///
+    /// <para>
+    /// The entry stays. Somebody who learned where the switch was should find
+    /// a pointer there rather than a hole, and the sentence saying so is the
+    /// Rust's like every other word on this surface. Two switches for one
+    /// thing would be two places for them to disagree, and the one that stays
+    /// is the one that also reports what actually happened.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TheSettingsEntryPointsAtTheDestinationRatherThanHoldingTheSwitch()
+    {
+        string markup = ShellSource("TraceCommons.App/Controls/SettingsView.xaml");
+        Assert.Contains("Settings.PrivateInferenceMoved", markup, StringComparison.Ordinal);
+        Assert.Contains("Settings.PrivateInferenceDestination", markup, StringComparison.Ordinal);
+        Assert.Contains("OnOpenPrivateInference", markup, StringComparison.Ordinal);
+        Assert.DoesNotContain("OnPrivateInferenceToggled", markup, StringComparison.Ordinal);
+        Assert.DoesNotContain("Settings.PrivateInferenceToggle,", markup, StringComparison.Ordinal);
+
+        string viewModel = ShellSource(
+            "TraceCommons.App/ViewModels/ContributorSettingsViewModel.cs");
+        Assert.Contains("PrivateInferenceMoved", viewModel, StringComparison.Ordinal);
+        Assert.DoesNotContain("SetPrivateInferenceAsync", viewModel, StringComparison.Ordinal);
+
+        // The pointer is an event the window turns into navigation, so the
+        // control stays ignorant of the rail it sits in.
+        string codeBehind = ShellSource("TraceCommons.App/Controls/SettingsView.xaml.cs");
+        Assert.Contains("OpenPrivateInferenceRequested", codeBehind, StringComparison.Ordinal);
+        string window = ShellSource("TraceCommons.App/MainWindow.xaml.cs");
+        Assert.Contains(
+            "OpenPrivateInferenceRequested +=", window, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The body of one property, from its signature to the line that closes
     /// it. Crude on purpose, matching <c>PrivateInferenceTests.MethodBody</c>:
     /// this suite cannot compile the C# it is reading, and a parser here would
