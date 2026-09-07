@@ -12,6 +12,18 @@
 
 ## Global Constraints
 
+- **The user-facing label is "Model calls", never "Private inference".** A sweep
+  (`the_offer_surface_says_nothing_it_should_not`) reads this module's own source
+  between the `PRIVATE-INFERENCE-SURFACE-BEGIN`/`-END` markers and fails on the
+  words `private`, `secure`, `proxy`, `backend`, `route`, `localhost` and vendor
+  names. The module header explains why: turning this on does **not** make calls
+  private -- it moves where they are answered and keeps the record here, and each
+  call still goes on to whoever was configured to answer it. The setting's
+  internal name says `private`; the surface must not repeat it as a promise. The
+  sweep also asserts the constants have not been moved out from between its
+  markers, so relocating them to dodge it is itself a failure. Read `destination`
+  from `private_inference_copy::DESTINATION`; never retype the label in a shell.
+
 - **Only `Clear` may be painted as working.** `PrivateInferenceTone` is `Neutral | Held | Clear | Attention | Refused`. `Held`, `Attention`, `Refused` and any unknown ABI value must be visually distinct from `Clear` and must never read as "on".
 - **Indicators derive from the tone, never from the settings boolean.** The switch reports what was asked for; the indicator reports what is true.
 - **No shell authors user-facing private-inference strings.** Every sentence comes from `private_inference_copy.rs`. If a string is needed that does not exist, add it there first.
@@ -76,7 +88,7 @@ In the `PrivateInferenceCopy` struct (around line 329), beside `settings_title`:
 Add the constants near the other copy constants:
 
 ```rust
-const DESTINATION: &str = "Private inference";
+pub const DESTINATION: &str = "Model calls";
 const SUBTITLE: &str = "Answer model calls on this computer, and who may use it.";
 ```
 
@@ -355,7 +367,7 @@ GTK has three screens today (`queue`, `history`, `settings`) — there is no Com
 const SCREENS: [(&str, &str, &str); 4] = [
     ("queue", "Queue", "view-list-symbolic"),
     ("history", "History", "document-open-recent-symbolic"),
-    ("private-inference", "Private inference", "network-transmit-receive-symbolic"),
+    ("private-inference", private_inference_copy::DESTINATION, "network-transmit-receive-symbolic"),
     ("settings", "Settings", "emblem-system-symbolic"),
 ];
 ```
@@ -489,7 +501,7 @@ The Settings entry is not removed — muscle memory and existing instructions de
 - [ ] **Step 1: Add the pointer sentence to the copy module**
 
 ```rust
-const SETTINGS_MOVED: &str = "Private inference now has its own place in the sidebar.";
+const SETTINGS_MOVED: &str = "Model calls now has its own place in the sidebar.";
 ```
 
 Add `pub settings_moved: &'static str` to the struct and constructor, and the matching Swift field and `CodingKeys` case — both sides move together or the field-set test fails.
@@ -530,3 +542,27 @@ git commit -m "Point the settings entry at the private inference destination"
 **Type consistency.** `destination`/`subtitle` (Task 1) are used in Tasks 3, 5, 7. `readsAsWorking` (Swift) and `reads_as_working()` (Rust) are named per language convention and used consistently. `settingsParams(on:)`, `offerParams(accepted:)`, `PrivateInferenceState(label:port:)` match the existing signatures in `PrivateInferenceSurface.swift`.
 
 **Known ordering constraint.** Task 1 must land before 3, 5 and 7; Task 2 before every shell task. Tasks 3-4 (macOS), 5-6 (GTK) and 7 (Windows) are independent of each other.
+
+---
+
+## Traps found while implementing Tasks 1-2
+
+Any task that adds a copy field must do all four of these, or something fails
+loudly (or worse, silently):
+
+1. `every_sentence_arrives_finished` pins the field count -- it moved 22 -> 24.
+   Adding a field means updating that assertion.
+2. `PrivateInferenceCopy` decoding is **all-or-nothing**, so the sentinel payload
+   in `macos/Tests/TCShellCoreTests/PrivateInferenceSurfaceTests.swift` must gain
+   every new key or roughly 11 tests fail at once.
+3. `docs/contributor-daemon-ipc-v1_1.md:1672` enumerates the payload fields and
+   states the count. It is **not** test-enforced, so it goes stale silently.
+4. Windows tolerates unknown keys today --
+   `windows/src/TraceCommons.Interop/PrivateInferenceCopy.cs` is a `sealed record`
+   with no `JsonUnmappedMemberHandling.Disallow` and no field-count assertion --
+   so new keys are ignored rather than rejected. The Windows shell still has to
+   add the properties to *consume* them.
+
+GTK needs nothing extra for the tone predicate:
+`crates/trace-commons-contributor-gtk/src/copy.rs:2094` re-exports from
+`private_inference_copy` directly, so `reads_as_working()` is already reachable.
