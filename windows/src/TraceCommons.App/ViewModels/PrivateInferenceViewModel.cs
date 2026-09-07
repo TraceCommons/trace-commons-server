@@ -325,16 +325,17 @@ public sealed class PrivateInferenceViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// Whether the exposure question has to be answered before this connect.
+    /// Whether a connect has to put the exposure question first.
     /// </summary>
     /// <remarks>
-    /// The first connect is what makes the exposure real, so a contributor who
-    /// has never been asked is asked here -- with the shared paragraph and the
-    /// same two answers as the first-run offer, and never a second version of
-    /// the question written on this side.
+    /// Wider than the first-run offer, and asked off the LISTENER rather than
+    /// off the marker: a connect that would reopen a listener the contributor
+    /// turned off is the exposure decision again, whatever they answered the
+    /// first time. The branch itself lives in
+    /// <see cref="HarnessSurface.ConnectNeedsExposure"/>, in the same shape
+    /// macOS and GTK use.
     /// </remarks>
-    public bool ConnectNeedsExposure =>
-        HarnessSurface.ConnectNeedsExposure(_loaded, _offerSeen, _on);
+    public bool ConnectNeedsExposure => HarnessSurface.ConnectNeedsExposure(_on);
 
     /// <summary>What turning it on exposes, and the two answers to it.</summary>
     public string OfferTitle => _copy?.OfferTitle ?? string.Empty;
@@ -494,21 +495,16 @@ public sealed class PrivateInferenceViewModel : INotifyPropertyChanged
 
     /// <summary>
     /// Makes an edit that was already shown, by handing back the plan id the
-    /// daemon minted. Returns null when the plan is gone, which is a re-ask
-    /// and not a failure.
+    /// daemon minted. Null on any refusal, and nothing was written.
     /// </summary>
     /// <remarks>
-    /// A plan is single-use and expires, and the file is checked again before
-    /// the write. Either way what the contributor was shown is no longer what
-    /// would happen, so this never retries: the caller re-plans and shows the
-    /// preview again.
+    /// There is no retry and no automatic re-plan. The plan is taken out of
+    /// the daemon's store before the file is re-checked and before the write,
+    /// so nothing survives a refusal to commit again -- and re-planning on the
+    /// contributor's behalf would be deciding a write they were not shown. The
+    /// caller closes the preview, shows the unconfirmed-write sentence, and
+    /// reads the list again; pressing the button once more is theirs to do.
     /// </remarks>
-    /// <summary>
-    /// Whether the last commit was refused because the plan was gone rather
-    /// than because the write failed. Nothing was written either way.
-    /// </summary>
-    public bool LastPlanWentStale { get; private set; }
-
     public async Task<HarnessCommit?> CommitAsync(string planId)
     {
         if (_copy is null)
@@ -516,7 +512,6 @@ public sealed class PrivateInferenceViewModel : INotifyPropertyChanged
             return null;
         }
 
-        LastPlanWentStale = false;
         try
         {
             DaemonResponse response = await _host
@@ -526,8 +521,12 @@ public sealed class PrivateInferenceViewModel : INotifyPropertyChanged
                 .ConfigureAwait(true);
             if (response.IsError || response.Result is null)
             {
-                LastPlanWentStale = HarnessSurface.PlanIsStale(response.Error);
-                Notice = LastPlanWentStale ? string.Empty : _copy.WriteUnconfirmed;
+                // Every refusal is the same refusal. The daemon takes the plan
+                // out of its store before it re-checks the file and before it
+                // writes, so an expired plan, a spent one, a file that moved
+                // and a failed write all leave nothing to commit again -- and
+                // nothing written either. One sentence, no retry.
+                Notice = _copy.WriteUnconfirmed;
                 return null;
             }
 

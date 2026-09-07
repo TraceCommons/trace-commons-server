@@ -165,7 +165,7 @@ public sealed partial class PrivateInferenceView : UserControl
     /// is not a failed write. Nothing was written. The list is read again so
     /// the rows say where things actually stand.
     /// </remarks>
-    private async Task PlanThenConfirmAsync(string id, string action, bool replanned = false)
+    private async Task PlanThenConfirmAsync(string id, string action)
     {
         HarnessPlan? plan = await ViewModel.PlanAsync(id, action);
         if (plan is null)
@@ -233,23 +233,18 @@ public sealed partial class PrivateInferenceView : UserControl
             return;
         }
 
-        HarnessCommit? committed = await ViewModel.CommitAsync(plan.PlanId);
+        // The preview is already gone by the time this returns. On any refusal
+        // the view model has put the unconfirmed-write sentence up and nothing
+        // was written; the list is read again either way, so the rows say
+        // where things actually stand rather than where the preview said they
+        // would. NOTHING IS RETRIED AND NOTHING IS RE-PLANNED: the daemon
+        // takes the plan out of its store before it re-checks the file and
+        // before it writes, so no refusal leaves anything to commit again --
+        // and re-planning here would be deciding a write on the contributor's
+        // behalf that they were never shown. Pressing the button again is
+        // theirs to do.
+        await ViewModel.CommitAsync(plan.PlanId);
         await ViewModel.LoadHarnessesAsync();
-        if (committed is not null)
-        {
-            return;
-        }
-
-        // The plan was gone, or the file moved under it. Nothing was written,
-        // and nothing is retried: what the contributor was shown is no longer
-        // what would happen. Work it out again from the file as it is now and
-        // show the new preview -- ONCE. A second failure is a file something
-        // else is writing, and a loop that kept re-asking would be worse than
-        // saying nothing.
-        if (ViewModel.LastPlanWentStale && !replanned)
-        {
-            await PlanThenConfirmAsync(id, action, replanned: true);
-        }
     }
 
     /// <summary>Which row a button press came from.</summary>

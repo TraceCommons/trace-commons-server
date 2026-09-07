@@ -307,12 +307,6 @@ public static class HarnessSurface
     /// <summary>The <c>harness_plan</c> action that takes a tool back off.</summary>
     public const string Disconnect = "disconnect";
 
-    /// <summary>The daemon has no plan by that id: expired, spent, or never minted.</summary>
-    private const string PlanUnknown = "harness-plan-unknown";
-
-    /// <summary>The file moved under the plan between the preview and the commit.</summary>
-    private const string ConfigChanged = "harness-config-changed";
-
     /// <summary>A connect was asked for with nothing answering on this computer.</summary>
     private const string NoDestinationCode = "harness-no-destination";
 
@@ -477,15 +471,22 @@ public static class HarnessSurface
     public static bool ReadsAsWorking(HarnessState state) => state == HarnessState.Answering;
 
     /// <summary>
-    /// The sentence for one state, from the payload.
+    /// The sentence for one state, from the payload, or the empty string --
+    /// drawn as no line at all.
     /// </summary>
     /// <remarks>
-    /// <see cref="HarnessState.ActivityShared"/> takes the answering sentence
-    /// because that sentence stops at what this computer did and never names
-    /// the tool -- it is true of a shared family. What it does not get is
-    /// <see cref="ReadsAsWorking"/>. <see cref="HarnessState.Unknown"/> takes
-    /// the empty string, drawn as no line: a state this build has no words for
-    /// claims nothing rather than borrowing the nearest sentence.
+    /// Three of the five states have a sentence and two deliberately do not.
+    /// <see cref="HarnessState.ActivityShared"/> may not borrow
+    /// <see cref="PrivateInferenceCopy.HarnessAnswering"/>, which would claim
+    /// an attribution the ledger cannot make -- it records a protocol family,
+    /// and a family two connected tools both speak names neither of them. Nor
+    /// may it borrow <see cref="PrivateInferenceCopy.HarnessConnectedNothingSeen"/>,
+    /// which would be false: something did arrive.
+    /// <see cref="HarnessState.Unknown"/> is the same shape for a different
+    /// reason -- a state this build has no words for claims nothing rather
+    /// than borrowing the nearest sentence. Both render at a non-clear tone
+    /// with no line, which is the honest gap; the words for them are missing
+    /// from the payload and are tracked centrally.
     /// </remarks>
     public static string StateSentence(HarnessState state, PrivateInferenceCopy copy)
     {
@@ -495,24 +496,26 @@ public static class HarnessSurface
             HarnessState.NotConnected => copy.HarnessNotConnected,
             HarnessState.ConnectedNoCalls => copy.HarnessConnectedNothingSeen,
             HarnessState.Answering => copy.HarnessAnswering,
-            HarnessState.ActivityShared => copy.HarnessAnswering,
             _ => string.Empty,
         };
     }
 
     /// <summary>
-    /// Whether a refused commit means the plan is gone rather than the write
-    /// failed.
+    /// Whether a refused commit leaves anything to commit again. It never
+    /// does.
     /// </summary>
     /// <remarks>
-    /// A plan is single-use and expires, and the file is re-checked before the
-    /// write, so both of these mean the same thing to a contributor: what you
-    /// were shown is no longer what would happen. The shell re-fetches and
-    /// shows the preview again; it does not report a failure and it never
-    /// retries the write.
+    /// THIS IS ALWAYS FALSE, AND IT IS A FUNCTION SO THAT THE REASON HAS
+    /// SOMEWHERE TO LIVE. The daemon takes the plan out of its store BEFORE it
+    /// re-checks the file digest and before it writes, so an expired plan, a
+    /// spent one, a file that moved underneath it and a write that failed all
+    /// leave the same thing behind: no plan. Every one of them is closed the
+    /// same way -- the preview goes, the unconfirmed-write sentence is shown,
+    /// the list is read again -- and none of them is offered a retry, because
+    /// there is nothing to retry. A shell that re-planned automatically here
+    /// would be silently re-deciding a write on a contributor's behalf.
     /// </remarks>
-    public static bool PlanIsStale(DaemonError? error) =>
-        error?.Message is PlanUnknown or ConfigChanged;
+    public static bool CommitIsRetryable(DaemonError? error) => false;
 
     /// <summary>
     /// Whether a refused plan means nothing answers on this computer yet.
@@ -525,16 +528,25 @@ public static class HarnessSurface
     public static bool NoDestination(DaemonError? error) => error?.Message == NoDestinationCode;
 
     /// <summary>
-    /// Whether the first connect must put the exposure question first.
+    /// Whether a connect must put the exposure question in front of the
+    /// contributor first.
     /// </summary>
     /// <remarks>
-    /// The same branch the first-run offer uses, and deliberately not a second
-    /// one: connecting a tool is what makes the exposure real, so a
-    /// contributor who has never been asked is asked here, with the same
-    /// paragraph and the same two answers.
+    /// DELIBERATELY WIDER THAN
+    /// <see cref="PrivateInferenceSurface.ShouldOffer(bool, bool, bool)"/>, and
+    /// deliberately not built on it. The first-run offer asks once and records
+    /// that it asked; this asks whenever a connect would REOPEN the listener.
+    /// A contributor who accepted months ago and has since used the kill switch
+    /// is making the exposure decision afresh -- the switch being off is the
+    /// state they chose -- and a connect that quietly turned it back on would
+    /// be spending an answer given about a different moment.
+    ///
+    /// The shape matches macOS's <c>connectNeedsExposure(listenerOn:)</c> one
+    /// for one, on purpose: this is a branch about interrupting somebody, and
+    /// three shells each deciding it differently is three different products.
+    /// <c>ShouldOffer</c> itself is untouched.
     /// </remarks>
-    public static bool ConnectNeedsExposure(bool known, bool offerSeen, bool listenerOn) =>
-        PrivateInferenceSurface.ShouldOffer(known, offerSeen, listenerOn);
+    public static bool ConnectNeedsExposure(bool listenerOn) => !listenerOn;
 
     private static HarnessRow? ParseRow(JsonElement element)
     {
