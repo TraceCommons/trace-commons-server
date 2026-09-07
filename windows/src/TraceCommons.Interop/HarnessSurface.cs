@@ -480,12 +480,20 @@ public static class HarnessSurface
     /// The sentence for one state, from the payload.
     /// </summary>
     /// <remarks>
-    /// <see cref="HarnessState.ActivityShared"/> takes the answering sentence
-    /// because that sentence stops at what this computer did and never names
-    /// the tool -- it is true of a shared family. What it does not get is
-    /// <see cref="ReadsAsWorking"/>. <see cref="HarnessState.Unknown"/> takes
-    /// the empty string, drawn as no line: a state this build has no words for
-    /// claims nothing rather than borrowing the nearest sentence.
+    /// <see cref="HarnessState.ActivityShared"/> and
+    /// <see cref="HarnessState.Unknown"/> both take the empty string, drawn as
+    /// no line at all.
+    ///
+    /// ActivityShared must NOT borrow the answering sentence. That sentence is
+    /// "Answering. A call from <em>it</em> reached this computer and was
+    /// answered here" -- the pronoun names this row's tool, and this state
+    /// exists precisely because the call cannot be attributed to one tool of a
+    /// shared family. Borrowing it would claim the one thing the state says we
+    /// do not know. A state this build has no words for claims nothing rather
+    /// than reaching for the nearest sentence.
+    ///
+    /// This matches the macOS surface, which returns nil for both, so the two
+    /// shells cannot disagree about what an unattributable call is called.
     /// </remarks>
     public static string StateSentence(HarnessState state, PrivateInferenceCopy copy)
     {
@@ -495,7 +503,6 @@ public static class HarnessSurface
             HarnessState.NotConnected => copy.HarnessNotConnected,
             HarnessState.ConnectedNoCalls => copy.HarnessConnectedNothingSeen,
             HarnessState.Answering => copy.HarnessAnswering,
-            HarnessState.ActivityShared => copy.HarnessAnswering,
             _ => string.Empty,
         };
     }

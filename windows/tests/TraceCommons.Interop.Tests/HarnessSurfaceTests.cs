@@ -283,7 +283,7 @@ public class HarnessSurfaceTests
             [HarnessState.NotConnected] = copy!.HarnessNotConnected,
             [HarnessState.ConnectedNoCalls] = copy.HarnessConnectedNothingSeen,
             [HarnessState.Answering] = copy.HarnessAnswering,
-            [HarnessState.ActivityShared] = copy.HarnessAnswering,
+            [HarnessState.ActivityShared] = string.Empty,
             [HarnessState.Unknown] = string.Empty,
         };
 
@@ -291,5 +291,35 @@ public class HarnessSurfaceTests
         {
             Assert.Equal(pair.Value, HarnessSurface.StateSentence(pair.Key, copy));
         }
+    }
+
+    /// <summary>
+    /// An unattributable call must never be described with the answering
+    /// sentence.
+    /// </summary>
+    /// <remarks>
+    /// The sentence reads "Answering. A call from <em>it</em> reached this
+    /// computer and was answered here." The pronoun names the row's own tool.
+    /// <see cref="HarnessState.ActivityShared"/> exists precisely because the
+    /// call cannot be attributed to one tool of a shared family, so borrowing
+    /// that sentence would assert the one thing the state says is unknown.
+    ///
+    /// Asserted against the sentence itself rather than against an empty
+    /// string, so that adding a real ActivityShared sentence later satisfies
+    /// this test while still failing if it reaches for the answering one.
+    ///
+    /// This mirrors the macOS surface, which returns nil for the same state.
+    /// The two shells must not disagree about what an unattributable call is
+    /// called.
+    /// </remarks>
+    [Fact]
+    public void AnUnattributableCallNeverBorrowsTheAnsweringSentence()
+    {
+        PrivateInferenceCopy? copy = PrivateInferenceSurface.Copy();
+        Assert.NotNull(copy);
+
+        string shared = HarnessSurface.StateSentence(HarnessState.ActivityShared, copy!);
+        Assert.NotEqual(copy!.HarnessAnswering, shared);
+        Assert.False(HarnessSurface.ReadsAsWorking(HarnessState.ActivityShared));
     }
 }
