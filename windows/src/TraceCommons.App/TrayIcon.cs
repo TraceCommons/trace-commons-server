@@ -57,16 +57,27 @@ public sealed class TrayIcon : IDisposable
     public event Action? PrivateInferenceRequested;
 
     /// <summary>
-    /// Raised when the contributor flips the model-calls switch from the menu.
+    /// Raised when the contributor stops answering model calls from the menu.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// One direction only. There is no event on this class that turns model
+    /// calls ON: while it is off the row raises
+    /// <see cref="PrivateInferenceRequested"/> instead and the window comes up
+    /// at the destination, where the sentence about what enabling it exposes
+    /// is on screen beside the switch. Turning it off only ever reduces what
+    /// this computer will answer, which is why that direction is safe from a
+    /// menu and the other is not.
+    /// </para>
+    /// <para>
     /// A request, like <see cref="QuitRequested"/>, rather than a write. The
     /// only place the daemon's answer to this is rendered is the destination
     /// page, and a menu that changed what this machine answers without
     /// showing that answer would be a change nobody could see the result of.
     /// This class must not shortcut it.
+    /// </para>
     /// </remarks>
-    public event Action? PrivateInferenceToggleRequested;
+    public event Action? PrivateInferenceStopRequested;
 
     public event Action<PauseDuration>? PauseRequested;
 
@@ -95,7 +106,7 @@ public sealed class TrayIcon : IDisposable
     private const int MenuIdPauseUntilResumed = 12;
     private const int MenuIdResume = 13;
     private const int MenuIdPrivateInference = 14;
-    private const int MenuIdPrivateInferenceToggle = 15;
+    private const int MenuIdPrivateInferenceAction = 15;
 
     private readonly WndProc _wndProc;
     private readonly string _className;
@@ -490,11 +501,21 @@ public sealed class TrayIcon : IDisposable
                     (_privateInference.ReadsAsWorking ? "\u2713 " : "   ")
                         + _privateInference.StateText);
                 AppendMenu(menu, MF_STRING, MenuIdPrivateInference, _privateInference.Label);
+
+                // An action row, not a checked switch. A check mark invites a
+                // press to clear it, and on this surface the press that
+                // enables answering is the one that must not exist here: it
+                // changes what everything else on this machine may send
+                // through, charged to the contributor's accounts, and the
+                // sentence saying so is on the destination screen. So the row
+                // says one of two things and does one of two things -- turn
+                // off, or open the screen -- and which is decided in
+                // PrivateInferenceTrayEntry where it can be tested.
                 AppendMenu(
                     menu,
-                    MF_STRING | (_privateInference.On ? MF_CHECKED : MF_UNCHECKED),
-                    MenuIdPrivateInferenceToggle,
-                    _privateInference.ToggleText);
+                    MF_STRING,
+                    MenuIdPrivateInferenceAction,
+                    _privateInference.ActionText);
                 AppendMenu(menu, MF_SEPARATOR, IntPtr.Zero, null);
             }
 
@@ -536,8 +557,18 @@ public sealed class TrayIcon : IDisposable
                     PrivateInferenceRequested?.Invoke();
                     break;
 
-                case MenuIdPrivateInferenceToggle:
-                    PrivateInferenceToggleRequested?.Invoke();
+                case MenuIdPrivateInferenceAction:
+                    // Off writes nothing: it is the same request the
+                    // destination row above makes.
+                    if (_privateInference.ActionWrites)
+                    {
+                        PrivateInferenceStopRequested?.Invoke();
+                    }
+                    else
+                    {
+                        PrivateInferenceRequested?.Invoke();
+                    }
+
                     break;
 
                 case MenuIdPauseHour:
@@ -749,8 +780,6 @@ public sealed class TrayIcon : IDisposable
     private const uint MF_POPUP = 0x00000010;
     private const uint MF_DISABLED = 0x00000002;
     private const uint MF_GRAYED = 0x00000001;
-    private const uint MF_CHECKED = 0x00000008;
-    private const uint MF_UNCHECKED = 0x00000000;
 
     private const uint TPM_RIGHTBUTTON = 0x0002;
     private const uint TPM_RETURNCMD = 0x0100;

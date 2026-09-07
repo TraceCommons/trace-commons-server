@@ -46,8 +46,21 @@ public sealed partial class PrivateInferenceView : UserControl
     /// </summary>
     public void Fill(DaemonSettingsSnapshot? settings) => ViewModel.Fill(settings);
 
-    /// <summary>Flips the switch from outside the page, for the accelerator and the tray.</summary>
+    /// <summary>Flips the switch from outside the page, for the accelerator.</summary>
+    /// <remarks>
+    /// The accelerator only: it is pressed with this window in front of the
+    /// contributor, so both directions are answered on screen. The tray has
+    /// no such guarantee and gets <see cref="TurnOffAsync"/> instead.
+    /// </remarks>
     public Task ToggleAsync() => ViewModel.SetAsync(!ViewModel.Enabled);
+
+    /// <summary>Stops answering model calls, for the tray's one write.</summary>
+    /// <remarks>
+    /// Sets the value rather than inverting it. The tray may reduce what this
+    /// computer answers and may not enlarge it, and a flip would do the
+    /// second whenever the menu it was pressed from was stale.
+    /// </remarks>
+    public Task TurnOffAsync() => ViewModel.SetAsync(false);
 
     /// <summary>
     /// The switch itself.

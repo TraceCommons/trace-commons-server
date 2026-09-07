@@ -136,9 +136,115 @@ public class PrivateInferenceDestinationTests
             PrivateInferenceTrayEntry.For(copy, State("running", 8463), on: true);
 
         Assert.Equal(copy.Destination, entry.Label);
-        Assert.Equal(copy.SettingsToggle, entry.ToggleText);
+        Assert.Equal(copy.TrayTurnOff, entry.ActionText);
         Assert.Equal(
             PrivateInferenceSurface.StateLine(State("running", 8463), copy), entry.StateText);
+    }
+
+    /// <summary>
+    /// The tray may turn it OFF and may not turn it ON.
+    /// </summary>
+    /// <remarks>
+    /// Turning it off only ever reduces what this computer will answer, so it
+    /// is safe from a menu with nothing on screen. Turning it on changes what
+    /// anything else running here may send through, charged to the
+    /// contributor's accounts, and the sentence saying so
+    /// (<c>offer_exposure</c>) is the reason this became a destination rather
+    /// than a switch. A menu press that enabled it would route around that
+    /// sentence, so while it is off the entry navigates and writes nothing.
+    /// Asserted over every state the daemon can report, including the ones
+    /// where the switch and the listener disagree.
+    /// </remarks>
+    [Fact]
+    public void TheTrayTurnsItOffAndOpensTheScreenToTurnItOn()
+    {
+        PrivateInferenceCopy copy = Copy();
+        foreach (string label in new[]
+        {
+            "", "off", "running", "stopping", "running_no_backends", "running_elsewhere",
+            "port_in_use", "start_failed", "crashed", "a_state_from_a_later_daemon",
+        })
+        {
+            PrivateInferenceTrayEntry off =
+                PrivateInferenceTrayEntry.For(copy, State(label), on: false);
+            Assert.Equal(PrivateInferenceTrayAction.OpenDestination, off.Action);
+            Assert.False(
+                off.ActionWrites,
+                $"the tray offered to turn model calls on from the menu at {label}");
+            Assert.Equal(copy.TrayOpenToTurnOn, off.ActionText);
+
+            PrivateInferenceTrayEntry on =
+                PrivateInferenceTrayEntry.For(copy, State(label), on: true);
+            Assert.Equal(PrivateInferenceTrayAction.StopAnswering, on.Action);
+            Assert.True(on.ActionWrites, $"the tray could not turn model calls off at {label}");
+            Assert.Equal(copy.TrayTurnOff, on.ActionText);
+        }
+    }
+
+    /// <summary>
+    /// The action is a function of the switch alone, never of the tone: a
+    /// listener that refused to start still leaves something to turn off.
+    /// </summary>
+    [Fact]
+    public void TheTrayActionDoesNotFollowTheIndicator()
+    {
+        PrivateInferenceCopy copy = Copy();
+        PrivateInferenceTrayEntry refused =
+            PrivateInferenceTrayEntry.For(copy, State("port_in_use"), on: true);
+        Assert.False(refused.ReadsAsWorking);
+        Assert.True(refused.ActionWrites);
+        Assert.Equal(PrivateInferenceTrayAction.StopAnswering, refused.Action);
+    }
+
+    /// <summary>
+    /// No row in this menu carries a check mark any more. The model-calls row
+    /// is an action, not a switch: a checked row invites a press to uncheck
+    /// it, which on this surface is the press that must not exist.
+    /// </summary>
+    [Fact]
+    public void TheModelCallsRowIsAnActionAndNotACheckedSwitch()
+    {
+        string tray = ShellSource("TraceCommons.App/TrayIcon.cs");
+        Assert.DoesNotContain("MF_CHECKED", tray, StringComparison.Ordinal);
+        Assert.DoesNotContain("MF_UNCHECKED", tray, StringComparison.Ordinal);
+        Assert.Contains("ActionText", tray, StringComparison.Ordinal);
+        Assert.Contains("ActionWrites", tray, StringComparison.Ordinal);
+        Assert.Contains("PrivateInferenceStopRequested", tray, StringComparison.Ordinal);
+        Assert.DoesNotContain("PrivateInferenceToggleRequested", tray, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The window's handler for the tray's one write turns it off. It does
+    /// not flip whatever it finds, because the tray is not allowed to be the
+    /// thing that turned it on.
+    /// </summary>
+    [Fact]
+    public void TheWindowsTrayHandlerTurnsItOffRatherThanFlippingIt()
+    {
+        string window = ShellSource("TraceCommons.App/MainWindow.xaml.cs");
+        Assert.Contains("_tray.PrivateInferenceStopRequested +=", window, StringComparison.Ordinal);
+        Assert.Contains("TurnOffAsync()", window, StringComparison.Ordinal);
+
+        string body = MethodBody(window, "private void OnTrayPrivateInferenceStopRequested()");
+        Assert.Contains("TurnOffAsync", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("ToggleAsync", body, StringComparison.Ordinal);
+
+        string page = ShellSource("TraceCommons.App/Controls/PrivateInferenceView.xaml.cs");
+        Assert.Contains("TurnOffAsync() => ViewModel.SetAsync(false)", page, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A method body, from its signature to the first line that closes a
+    /// brace at the method's own indent. Crude on purpose; see
+    /// <see cref="Property"/>.
+    /// </summary>
+    private static string MethodBody(string source, string signature)
+    {
+        int start = source.IndexOf(signature, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"{signature} is gone");
+        int end = source.IndexOf("\n    }\n", start, StringComparison.Ordinal);
+        Assert.True(end > start, $"{signature} does not close");
+        return source[start..end];
     }
 
     /// <summary>
@@ -155,7 +261,8 @@ public class PrivateInferenceDestinationTests
         Assert.False(entry.ReadsAsWorking);
         Assert.Equal(string.Empty, entry.Label);
         Assert.Equal(string.Empty, entry.StateText);
-        Assert.Equal(string.Empty, entry.ToggleText);
+        Assert.Equal(string.Empty, entry.ActionText);
+        Assert.False(entry.ActionWrites);
     }
 
     /// <summary>
@@ -387,12 +494,12 @@ public class PrivateInferenceDestinationTests
         string tray = ShellSource("TraceCommons.App/TrayIcon.cs");
         Assert.Contains("PrivateInferenceTrayEntry", tray, StringComparison.Ordinal);
         Assert.Contains("ReadsAsWorking", tray, StringComparison.Ordinal);
-        Assert.Contains("PrivateInferenceToggleRequested", tray, StringComparison.Ordinal);
+        Assert.Contains("PrivateInferenceStopRequested", tray, StringComparison.Ordinal);
         Assert.Contains("PrivateInferenceRequested", tray, StringComparison.Ordinal);
 
         string window = ShellSource("TraceCommons.App/MainWindow.xaml.cs");
         Assert.Contains(
-            "_tray.PrivateInferenceToggleRequested +=", window, StringComparison.Ordinal);
+            "_tray.PrivateInferenceStopRequested +=", window, StringComparison.Ordinal);
         Assert.Contains("_tray.PrivateInferenceRequested +=", window, StringComparison.Ordinal);
     }
 
