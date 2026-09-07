@@ -50,7 +50,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use ironwire_agents::tools;
-use ironwire_catalog::schema::Catalog;
+use ironwire_catalog::schema::{AgentEntry, Catalog, ConfigLocation};
 use uuid::Uuid;
 
 use crate::harness_state::{
@@ -503,16 +503,104 @@ impl ConnectedHint for tools::Tool {
 
 use super::ipc::{DaemonShared, ERR_BAD_PARAMS, ERR_UNAVAILABLE, Request, Response};
 
-/// The signed catalog this daemon has loaded.
+/// The tools we compile in ourselves, beyond the two IronWire ships knowing
+/// about.
 ///
-/// There is no catalog source here yet, so this is always the empty one and
-/// the list is the two tools IronWire ships knowing about. It is a function
-/// rather than an inlined `Catalog::default()` at each call site so that the
-/// day a catalog is loaded, one place changes -- and so that
-/// `catalog_present` on the wire is derived from the same value the list is,
-/// rather than being a second, separately-maintained claim.
+/// **This is deliberately ours, and deliberately not the fetched catalog.**
+/// IronWire can also take this list from a signed document it downloads, and
+/// that channel is inert: the URL it names does not resolve, and the key it
+/// verifies against is thirty-two zero bytes, documented upstream as a
+/// placeholder that cannot verify anything. So adopting it would buy nothing
+/// today -- and the day it worked, it would mean a third party's release
+/// signing key decided which files on a contributor's machine we offer to
+/// edit. The bound on the damage is real (a location must be a `.json` or
+/// `.toml` file one or two segments under `$HOME`, the first a dotdir, and
+/// the value written is always one of our own loopback URLs) but it is not
+/// nothing, and it is not a trust we need to take on. A table compiled into
+/// our own release asks for the trust we already ask for.
+///
+/// Nothing about the signature guards this path: `tools::all`,
+/// `plan_connect` and `plan_disconnect` take a `&Catalog` as a plain
+/// argument with public fields. Verification guards the network refresh, not
+/// the value.
+///
+/// **The list is short on purpose.** A tool goes in only when all three hold,
+/// each with evidence:
+///
+/// 1. its config file is representable under the location rules above;
+/// 2. it has a key that takes a base URL *only* and genuinely redirects that
+///    tool's model calls -- not an API key, not a model name, not a
+///    per-provider block that needs more than a URL;
+/// 3. it speaks the Anthropic or OpenAI wire shape, because the value written
+///    is always `Facade::url(port)` and exactly those two facades exist.
+///
+/// Rule 3 is narrower than it looks. `Facade::url` yields
+/// `http://127.0.0.1:{port}/anthropic` or `.../openai` -- an origin-style
+/// base with no `/v1`. That matches the `ANTHROPIC_BASE_URL` convention
+/// Claude Code follows, and it matches nothing else so far examined: the SDK
+/// convention is a base URL that already ends in `/v1`, and Codex is wired by
+/// hand precisely so its base can be spelled `.../openai/v1`. A catalog entry
+/// cannot spell that, so a tool that wants it cannot be an entry.
+///
+/// A wrong entry writes our URL into a real contributor's config file and
+/// breaks their tool. An empty table is the honest answer until an entry can
+/// be shown to be right.
+fn owned_agents() -> Vec<AgentEntry> {
+    Vec::new()
+}
+
+/// Whether a config location is one we are willing to edit.
+///
+/// A restatement, in our own code, of the rules `ConfigLocation` enforces
+/// upstream. Duplicated on purpose: these rules are the whole security
+/// argument for a table that names files on someone else's machine, and
+/// neither the test over our own entries nor the filter in [`catalog`] must
+/// be able to stop meaning anything because the pinned IronWire revision
+/// moved.
+fn config_location_is_allowed(location: &ConfigLocation) -> bool {
+    fn segment_is_plain(segment: &str) -> bool {
+        !segment.is_empty()
+            && segment != "."
+            && segment != ".."
+            && !segment.starts_with('-')
+            && segment
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+    }
+
+    if location.dir.is_empty() || location.dir.len() > 2 {
+        return false;
+    }
+    if !location.dir.iter().all(|s| segment_is_plain(s)) {
+        return false;
+    }
+    if !location.dir[0].starts_with('.') {
+        return false;
+    }
+    if !segment_is_plain(&location.file) || location.file.starts_with('.') {
+        return false;
+    }
+    location.file.ends_with(".json") || location.file.ends_with(".toml")
+}
+
+/// The catalog this daemon lists tools from.
+///
+/// The provider constants stay IronWire's compiled-in defaults; the tool
+/// table is [`owned_agents`], passed through
+/// [`config_location_is_allowed`] so that an entry naming a file outside the
+/// allowed shape is dropped here and not merely caught by a test. It is a
+/// function rather than an inlined value at each call site so that adding a
+/// tool is one table edit -- and so that `catalog_present` on the wire is
+/// derived from the same value the list is, rather than being a second,
+/// separately-maintained claim.
 fn catalog() -> Catalog {
-    Catalog::default()
+    Catalog {
+        agents: owned_agents()
+            .into_iter()
+            .filter(|entry| config_location_is_allowed(&entry.config))
+            .collect(),
+        ..Catalog::default()
+    }
 }
 
 /// What the ledger can say about calls that arrived, rolled up by family.
@@ -987,6 +1075,11 @@ mod tests {
     /// these happens to be installed.
     #[test]
     fn a_connect_with_no_destination_is_refused_by_name() {
+        // Pin the config directory, and take the lock with it. Without this
+        // the test reads whatever `CLAUDE_CONFIG_DIR` a concurrent test has
+        // set: point it at an already-wired file and the connect is
+        // unavailable, so the refusal never gets as far as the port.
+        let (_dir, _guard, _path) = claude_config("{}");
         let store = PlanStore::default();
         let catalog = Catalog::default();
         let tools = tools::all(&catalog);
@@ -1018,5 +1111,119 @@ mod tests {
             commit(&store, Uuid::new_v4()).expect_err("nothing was minted"),
             ERR_PLAN_UNKNOWN
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // The catalog we own
+    // -----------------------------------------------------------------------
+
+    /// Every entry we compile in has to survive IronWire's own validation,
+    /// because an entry that does not is silently dropped from
+    /// `Catalog::agents` -- a tool that never appears, rather than an error.
+    #[test]
+    fn every_owned_entry_survives_validation() {
+        for entry in owned_agents() {
+            assert_eq!(entry.problem(), None, "{}", entry.id);
+        }
+    }
+
+    /// The safety property. Checked here, over our own table, rather than
+    /// only through `AgentEntry::problem`: the rules that bound which file we
+    /// will edit are the reason a compiled-in table is acceptable at all, and
+    /// they must not be able to widen underneath us when the pinned IronWire
+    /// revision moves.
+    #[test]
+    fn no_owned_entry_names_a_config_path_outside_the_allowed_shape() {
+        for entry in owned_agents() {
+            assert!(
+                config_location_is_allowed(&entry.config),
+                "{} names a config path we will not edit",
+                entry.id
+            );
+        }
+    }
+
+    /// The check itself has teeth. Written against the shapes that must stay
+    /// refused, so the test above is a guard rather than a tautology while
+    /// the table is short.
+    #[test]
+    fn the_config_shape_check_refuses_what_it_must() {
+        let allowed = |dir: &[&str], file: &str| {
+            config_location_is_allowed(&ConfigLocation {
+                dir: dir.iter().map(|s| (*s).to_string()).collect(),
+                file: file.to_string(),
+            })
+        };
+        assert!(allowed(&[".claude"], "settings.json"));
+        assert!(allowed(&[".config", "atool"], "atool.toml"));
+
+        // No directory at all: a write straight into the home directory.
+        assert!(!allowed(&[], "settings.json"));
+        // Three segments: deep enough to reach somewhere unexpected.
+        assert!(!allowed(&[".config", "a", "b"], "settings.json"));
+        // Not a hidden directory: a source tree, or Documents.
+        assert!(!allowed(&["config"], "settings.json"));
+        // Traversal, in a segment of its own or smuggled inside one.
+        assert!(!allowed(&[".config", ".."], "settings.json"));
+        assert!(!allowed(&[".."], "settings.json"));
+        assert!(!allowed(&[".config/../.ssh"], "settings.json"));
+        // Extensionless secrets in a dotdir -- the case the extension rule
+        // exists for.
+        assert!(!allowed(&[".ssh"], "config"));
+        assert!(!allowed(&[".aws"], "credentials"));
+        // A format nothing here can write.
+        assert!(!allowed(&[".continue"], "config.yaml"));
+    }
+
+    /// Every setting we compile in names a key we are willing to write.
+    /// `Facade` has exactly two variants and the value is never ours, so
+    /// this is a statement about the key alone.
+    #[test]
+    fn every_owned_setting_names_a_writable_key() {
+        for entry in owned_agents() {
+            assert!(!entry.settings.is_empty(), "{}", entry.id);
+            for setting in &entry.settings {
+                let usable = !setting.key.is_empty()
+                    && setting.key.split('.').all(|segment| {
+                        !segment.is_empty()
+                            && segment
+                                .chars()
+                                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                    });
+                assert!(usable, "{} sets `{}`", entry.id, setting.key);
+            }
+        }
+    }
+
+    /// The list the daemon serves is built from our catalog, so every entry
+    /// we add shows up beside the two built-in tools.
+    #[test]
+    fn every_owned_entry_appears_in_the_list() {
+        let catalog = catalog();
+        let ids: Vec<String> = tools::all(&catalog).into_iter().map(|t| t.id).collect();
+        assert_eq!(ids[..2], ["claude".to_string(), "codex".to_string()]);
+        assert_eq!(ids.len(), 2 + owned_agents().len());
+        for entry in owned_agents() {
+            assert!(ids.contains(&entry.id), "{} is missing", entry.id);
+        }
+    }
+
+    /// `catalog_present` is a fact about our table, not a constant. Derived
+    /// from `Catalog::default()` -- which ships no agents and, by its own
+    /// test upstream, never will -- the claim could only ever be false.
+    #[test]
+    fn catalog_present_follows_our_own_table() {
+        let catalog = catalog();
+        assert_eq!(
+            !catalog.agents().is_empty(),
+            !owned_agents().is_empty(),
+            "the wire field and the table must not be able to disagree"
+        );
+    }
+
+    /// Nothing we compile in is dropped for a reason we never see.
+    #[test]
+    fn our_catalog_rejects_none_of_its_own_entries() {
+        assert!(catalog().rejected_agents().is_empty());
     }
 }
