@@ -143,6 +143,7 @@ struct MenuBarContent: View {
         Group {
             waitingSection
             Divider()
+            privateInferenceSection
             healthSection
             armedSection
             weekSection
@@ -206,6 +207,53 @@ struct MenuBarContent: View {
                 }
             }
         }
+    }
+
+    // MARK: - Answering model calls on this computer
+
+    /// The state line and a direct switch, in the shape `waitingSection`
+    /// uses: what is true first, then the one thing to do about it.
+    ///
+    /// Renders nothing at all when the words did not arrive, for the reason
+    /// `AppModel.privateInferenceCopy` gives.
+    @ViewBuilder
+    private var privateInferenceSection: some View {
+        if let copy = model.privateInferenceCopy {
+            let state = model.privateInferenceState
+            // The glyph comes from the reported state, never from the
+            // switch below it. They differ exactly when it matters -- a
+            // listener that refused to start leaves the switch on -- and a
+            // menu bar is read at a glance, which is where a green mark
+            // over a dead listener does the most damage.
+            Label(
+                PrivateInferenceSurface.stateLine(
+                    state, copy: copy, calls: model.privateInferenceCalls),
+                systemImage: Self.privateInferenceSymbol(
+                    state, calls: model.privateInferenceCalls)
+            )
+            Toggle(
+                copy.settingsToggle,
+                isOn: Binding(
+                    get: { model.daemonSettings?.privateInferenceOn ?? false },
+                    set: { model.applyPrivateInference($0) }
+                )
+            )
+            .disabled(model.privateInferenceBusy || model.daemonSettings?.privateInference == nil)
+            Divider()
+        }
+    }
+
+    /// The glyph beside the state line, as a pure function of the reported
+    /// state so a test can ask for it without a menu.
+    ///
+    /// Takes no switch, deliberately: a function that cannot see what was
+    /// asked for cannot paint it as what is true.
+    static func privateInferenceSymbol(
+        _ state: PrivateInferenceState, calls: PrivateInferenceCalls
+    ) -> String {
+        PrivateInferenceIndicator.palette(
+            PrivateInferenceSurface.tone(state, calls: calls)
+        ).symbol
     }
 
     @ViewBuilder
