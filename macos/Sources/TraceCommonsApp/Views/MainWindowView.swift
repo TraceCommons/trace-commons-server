@@ -466,14 +466,35 @@ struct MainWindowCommands: Commands {
         }
     }
 
+    /// The switch, under the same asymmetry the menu bar row follows.
+    ///
+    /// This is a menu, and a menu press must not enable answering: the on
+    /// direction raises the window at the destination, where
+    /// `offer_exposure` is, and writes nothing. It shares
+    /// `MenuBarContent.performPrivateInferenceTray` with the menu-bar row
+    /// rather than restating the rule, because two statements of one rule is
+    /// how this shortcut came to disagree with that row in the first place.
+    ///
+    /// The off direction *sets* false; it does not invert. An inverted press
+    /// against a stale switch position is an enable.
     @ViewBuilder
     private var toggle: some View {
         if let copy = model.privateInferenceCopy {
-            Button(copy.settingsToggle) {
-                model.applyPrivateInference(!(model.daemonSettings?.privateInferenceOn ?? false))
+            let on = model.daemonSettings?.privateInferenceOn ?? false
+            Button(MenuBarContent.privateInferenceTrayLabel(on: on, copy: copy)) {
+                MenuBarContent.performPrivateInferenceTray(
+                    on: on,
+                    turnOff: { model.applyPrivateInference(false) },
+                    open: {
+                        navigation.section = .privateInference
+                        OpenMainWindow.request()
+                    })
             }
             .keyboardShortcut(KeyEquivalent(Self.toggleKey), modifiers: Self.toggleModifiers)
-            .disabled(model.privateInferenceBusy || model.daemonSettings?.privateInference == nil)
+            // Only the writing direction can be unavailable. Navigation stays
+            // reachable whatever the daemon is doing.
+            .disabled(
+                on && (model.privateInferenceBusy || model.daemonSettings?.privateInference == nil))
         }
     }
 }

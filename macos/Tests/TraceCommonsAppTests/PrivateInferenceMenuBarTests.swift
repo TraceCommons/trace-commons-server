@@ -100,3 +100,43 @@ final class PrivateInferenceMenuBarTests: XCTestCase {
             "the toggle shares a key with a destination")
     }
 }
+
+/// The app-menu shortcut, under the same rule as the menu-bar row.
+///
+/// `.commands` is installed in the app-wide menu bar, so this fires whenever
+/// the app is frontmost -- including with the main window closed, which this
+/// app supports. A press that enabled answering would do it with
+/// `offer_exposure` off-screen, which is the whole reason the menu-bar row is
+/// asymmetric.
+final class PrivateInferenceCommandTests: XCTestCase {
+    /// While it is off, the shortcut must not write. It opens the destination.
+    func testTheShortcutCannotEnableAnswering() {
+        var wrote = false
+        var opened = false
+        MenuBarContent.performPrivateInferenceTray(
+            on: false, turnOff: { wrote = true }, open: { opened = true })
+        XCTAssertFalse(wrote, "the shortcut must never enable answering")
+        XCTAssertTrue(opened, "the off direction opens the destination instead")
+    }
+
+    /// While it is on, the shortcut turns it off -- the one write it may make.
+    func testTheShortcutStopsAnsweringWhileItIsOn() {
+        var wrote = false
+        var opened = false
+        MenuBarContent.performPrivateInferenceTray(
+            on: true, turnOff: { wrote = true }, open: { opened = true })
+        XCTAssertTrue(wrote, "the on direction stops answering")
+        XCTAssertFalse(opened, "stopping does not need the window")
+    }
+
+    /// The label follows the same table, so the menu cannot offer to turn it
+    /// on while the action opens a screen, or the reverse.
+    func testTheShortcutLabelMatchesItsAction() {
+        for on in [true, false] {
+            let action = MenuBarContent.privateInferenceTrayAction(on: on)
+            XCTAssertEqual(
+                action == .stopAnswering, on,
+                "the action and the switch position must agree")
+        }
+    }
+}
