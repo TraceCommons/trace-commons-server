@@ -35,6 +35,59 @@ final class PrivateInferenceMenuBarTests: XCTestCase {
             PrivateInferenceIndicator.palette(.clear).symbol)
     }
 
+    /// The menu may turn it OFF and may not turn it ON.
+    ///
+    /// Turning it off only ever reduces what this computer will answer, so
+    /// it is safe from a menu with nothing else on screen. Turning it on
+    /// changes what anything else running here may send through, charged to
+    /// the contributor's own accounts, and the sentence that says so is the
+    /// reason this became a destination rather than a switch. A menu press
+    /// that enabled it would route around that sentence.
+    ///
+    /// The no-write half is the safety claim, so it is asserted directly
+    /// rather than inferred from the wording: pressing the row while it is
+    /// off calls nothing that writes.
+    func testTheMenuTurnsItOffAndOpensTheScreenToTurnItOn() {
+        XCTAssertEqual(MenuBarContent.privateInferenceTrayAction(on: false), .openDestination)
+        XCTAssertEqual(MenuBarContent.privateInferenceTrayAction(on: true), .stopAnswering)
+
+        var wrote = false
+        var opened = false
+        MenuBarContent.performPrivateInferenceTray(
+            on: false, turnOff: { wrote = true }, open: { opened = true })
+        XCTAssertFalse(wrote, "the menu wrote a setting to turn model calls on")
+        XCTAssertTrue(opened, "the menu did not open the screen that explains what it exposes")
+
+        wrote = false
+        opened = false
+        MenuBarContent.performPrivateInferenceTray(
+            on: true, turnOff: { wrote = true }, open: { opened = true })
+        XCTAssertTrue(wrote, "the menu could not stop this computer answering model calls")
+        XCTAssertFalse(opened)
+    }
+
+    /// Both rows read the Rust's words, and the two directions are two
+    /// different sentences. Neither is spelled here.
+    @MainActor
+    func testTheMenuRowTakesItsWordsFromTheCopyPayload() throws {
+        let copy = try XCTUnwrap(AppModel().privateInferenceCopy)
+        XCTAssertEqual(MenuBarContent.privateInferenceTrayLabel(on: true, copy: copy), copy.trayTurnOff)
+        XCTAssertEqual(
+            MenuBarContent.privateInferenceTrayLabel(on: false, copy: copy), copy.trayOpenToTurnOn)
+        XCTAssertNotEqual(copy.trayTurnOff, copy.trayOpenToTurnOn)
+    }
+
+    /// The action follows the switch, never the tone. A listener that
+    /// refused to start still leaves something to turn off, and the row that
+    /// turns it off must not disappear because nothing is running.
+    func testTheActionDoesNotFollowTheIndicator() {
+        for label in ["port_in_use", "start_failed", "crashed"] {
+            let state = PrivateInferenceState(label: label, port: nil)
+            XCTAssertFalse(PrivateInferenceSurface.tone(state, calls: .testing).readsAsWorking)
+            XCTAssertEqual(MenuBarContent.privateInferenceTrayAction(on: true), .stopAnswering)
+        }
+    }
+
     /// The toggle's shortcut is in-app only and collides with none of the
     /// five destination shortcuts.
     @MainActor

@@ -33,7 +33,7 @@ struct TraceCommonsShell: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarContent()
+            MenuBarContent(navigation: navigation)
                 .environmentObject(model)
                 .tint(TC.green)
         } label: {
