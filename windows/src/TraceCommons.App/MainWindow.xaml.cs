@@ -36,6 +36,14 @@ public sealed partial class MainWindow : Window
     private readonly TrayIcon _tray = new();
 
     /// <summary>
+    /// The model-calls wording, read once. The tray entry is rebuilt on every
+    /// settings change and the payload does not change under a running
+    /// process, so re-reading it across the ABI each time would be a call per
+    /// daemon event for a constant.
+    /// </summary>
+    private readonly PrivateInferenceCopy? _privateInferenceCopy = PrivateInferenceSurface.Copy();
+
+    /// <summary>
     /// The interruption budget. See <see cref="DigestCadence"/> for why the
     /// shell gates this a second time when the daemon already does.
     /// </summary>
@@ -139,6 +147,8 @@ public sealed partial class MainWindow : Window
         _tray.OpenRequested += OnTrayOpenRequested;
         _tray.ReviewRequested += OnTrayReviewRequested;
         _tray.SettingsRequested += OnTraySettingsRequested;
+        _tray.PrivateInferenceRequested += OnTrayPrivateInferenceRequested;
+        _tray.PrivateInferenceToggleRequested += OnTrayPrivateInferenceToggleRequested;
         _tray.PauseRequested += OnTrayPauseRequested;
         _tray.ResumeRequested += OnTrayResumeRequested;
         _tray.QuitRequested += OnTrayQuitRequested;
@@ -146,6 +156,12 @@ public sealed partial class MainWindow : Window
         AppWindow.Closing += OnAppWindowClosing;
         Closed += OnClosed;
         Activated += OnFirstActivated;
+
+        // One read, three surfaces. The window forwards whatever the daemon
+        // last said about the listener to the destination page and to the
+        // tray, so the rail badge, the page and the tray glyph cannot come to
+        // disagree about the same fact.
+        ViewModel.PrivateInferenceSettingsChanged += OnPrivateInferenceSettingsChanged;
 
         _visibilityDebounceTimer = _host.Dispatcher.CreateTimer();
         _visibilityDebounceTimer.Interval = TimeSpan.FromMilliseconds(200);
@@ -900,6 +916,135 @@ public sealed partial class MainWindow : Window
     {
         SettingsPane.Content ??= new SettingsView(_host);
         ViewModel.ShowSettings();
+    }
+
+    /// <summary>
+    /// Switches to the model-calls destination, creating the page the first
+    /// time and keeping it thereafter.
+    /// </summary>
+    /// <remarks>
+    /// Kept rather than rebuilt for the reason History and Settings are: it
+    /// holds the daemon's last report about the listener, and a rebuilt page
+    /// would replace the sentence naming a refusal with a blank until the
+    /// next read landed -- which is the shape that reads as "nothing is
+    /// wrong".
+    ///
+    /// Created lazily because it makes an IPC call as soon as it loads.
+    /// </remarks>
+    private void OnShowPrivateInference(object sender, RoutedEventArgs e)
+    {
+        ShowPrivateInferencePane();
+    }
+
+    private void ShowPrivateInferencePane()
+    {
+        PrivateInferencePane.Content ??= new PrivateInferenceView(_host);
+        ViewModel.ShowPrivateInference();
+    }
+
+    // The rail's four destinations on Ctrl-1 through Ctrl-4, in rail order.
+    // In-app only: these fire while this window has focus and take nothing
+    // away from any other application. See the accelerators in the markup.
+
+    private void OnQueueAccelerator(
+        KeyboardAccelerator sender,
+        KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        ViewModel.ShowQueue();
+    }
+
+    private void OnHistoryAccelerator(
+        KeyboardAccelerator sender,
+        KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        HistoryPane.Content ??= new HistoryView(_host);
+        ViewModel.ShowHistory();
+    }
+
+    private void OnPrivateInferenceAccelerator(
+        KeyboardAccelerator sender,
+        KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        ShowPrivateInferencePane();
+    }
+
+    private void OnSettingsAccelerator(
+        KeyboardAccelerator sender,
+        KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        ShowSettingsPane();
+    }
+
+    /// <summary>
+    /// Flips the switch from the keyboard, and shows the page while doing it.
+    /// </summary>
+    /// <remarks>
+    /// The page comes up rather than the switch flipping silently, because
+    /// the answer to "did that work" is a sentence the daemon has not sent
+    /// yet: a chord that toggled without showing the state line would be a
+    /// change nobody could see the result of.
+    /// </remarks>
+    private async void OnTogglePrivateInferenceAccelerator(
+        KeyboardAccelerator sender,
+        KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        ShowPrivateInferencePane();
+        if (PrivateInferencePane.Content is PrivateInferenceView page)
+        {
+            await page.ToggleAsync();
+        }
+    }
+
+    private void OnTrayPrivateInferenceRequested()
+    {
+        _host.Dispatcher.TryEnqueue(() =>
+        {
+            ShowPrivateInferencePane();
+            BringForward();
+        });
+    }
+
+    /// <summary>
+    /// The tray's switch.
+    /// </summary>
+    /// <remarks>
+    /// The page is created and shown, not merely written to. Everything else
+    /// the tray can do either opens a window or is reversible without a
+    /// sentence; this one changes what this machine answers, and the only
+    /// place the daemon's answer to it is rendered is the page.
+    /// </remarks>
+    private void OnTrayPrivateInferenceToggleRequested()
+    {
+        _host.Dispatcher.TryEnqueue(async () =>
+        {
+            ShowPrivateInferencePane();
+            BringForward();
+            if (PrivateInferencePane.Content is PrivateInferenceView page)
+            {
+                await page.ToggleAsync();
+            }
+        });
+    }
+
+    /// <summary>
+    /// Hands one settings read to the page and to the tray.
+    /// </summary>
+    private void OnPrivateInferenceSettingsChanged(DaemonSettingsSnapshot? settings)
+    {
+        if (PrivateInferencePane.Content is PrivateInferenceView page)
+        {
+            page.Fill(settings);
+        }
+
+        _tray.UpdatePrivateInference(PrivateInferenceTrayEntry.For(
+            _privateInferenceCopy,
+            PrivateInferenceState.From(settings?.PrivateInferenceReport),
+            settings?.PrivateInferenceOn ?? false));
     }
 
     /// <summary>

@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The model calls destination.
+
+    Not one string on this screen is typed here, the title and the screen's
+    own name included. Every word arrives from
+    crates/trace-commons-contributor/src/private_inference_copy.rs across the
+    C ABI, and the whole screen collapses when they did not arrive rather
+    than drawing a switch with nothing beside it. That shape is what says
+    "on" over a listener that refused to start.
+
+    The switch and the status line are two different claims and are drawn as
+    two different things. The switch is where the contributor put it; the
+    status line is what the daemon reported, coloured from the tone and never
+    from the switch's own value. A contributor who turned this on over a port
+    that was already taken must see the refusal, not a green light.
+
+    XML comments cannot contain a double hyphen, so the prose here uses
+    commas and parentheses where the C# files use dashes.
+-->
+<UserControl
+    x:Class="TraceCommons.App.Controls.PrivateInferenceView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:TraceCommons.App.ViewModels"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Grid RowDefinitions="Auto,*">
+
+        <StackPanel Grid.Row="0"
+                    Spacing="2"
+                    Padding="20,9"
+                    BorderBrush="{ThemeResource TcHairlineDividerBrush}"
+                    BorderThickness="0,0,0,1">
+            <TextBlock Text="{x:Bind ViewModel.Title, Mode=OneWay}"
+                       Style="{StaticResource TcTitleScreenTextStyle}" />
+            <TextBlock Text="{x:Bind ViewModel.Subtitle, Mode=OneWay}"
+                       Style="{StaticResource TcCaptionTextStyle}"
+                       TextWrapping="Wrap" />
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" Padding="22,16,22,16">
+            <StackPanel Spacing="12" MaxWidth="640" HorizontalAlignment="Left">
+
+                <Border Background="{ThemeResource TcSurfaceCardBrush}"
+                        BorderBrush="{ThemeResource TcHairlineBrush}"
+                        BorderThickness="1"
+                        CornerRadius="{StaticResource TcCardCornerRadius}"
+                        Padding="14,12"
+                        Visibility="{x:Bind ViewModel.Available, Mode=OneWay}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="{x:Bind ViewModel.What, Mode=OneWay}"
+                                   Style="{StaticResource TcCaptionTextStyle}"
+                                   TextWrapping="Wrap" />
+                        <!--
+                            What turning it on exposes. Here as well as in the
+                            first run offer: a contributor who declined and
+                            came back later is making the same decision and is
+                            owed the same sentence.
+                        -->
+                        <TextBlock Text="{x:Bind ViewModel.Exposure, Mode=OneWay}"
+                                   Style="{StaticResource TcCaptionTextStyle}"
+                                   TextWrapping="Wrap" />
+                        <ToggleSwitch Header="{x:Bind ViewModel.ToggleText, Mode=OneWay}"
+                                      IsOn="{x:Bind ViewModel.Enabled, Mode=OneWay}"
+                                      IsEnabled="{x:Bind ViewModel.ControlsEnabled, Mode=OneWay}"
+                                      Toggled="OnToggled" />
+                        <!--
+                            One line per tone, chosen from the tone and never
+                            from the text: three of the sentences begin with
+                            the same two words, so a colour picked by reading
+                            the sentence would be picked by matching a prefix.
+                            Only the clear one is green.
+                        -->
+                        <TextBlock Text="{x:Bind ViewModel.StateText, Mode=OneWay}"
+                                   Visibility="{x:Bind ViewModel.StateIsNeutral, Mode=OneWay}"
+                                   Style="{StaticResource TcCaptionTextStyle}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="{x:Bind ViewModel.StateText, Mode=OneWay}"
+                                   Visibility="{x:Bind ViewModel.StateIsHeld, Mode=OneWay}"
+                                   Style="{StaticResource TcCaptionTextStyle}"
+                                   Foreground="{ThemeResource TcBlueBrandBrush}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="{x:Bind ViewModel.StateText, Mode=OneWay}"
+                                   Visibility="{x:Bind ViewModel.StateIsClear, Mode=OneWay}"
+                                   Style="{StaticResource TcCaptionTextStyle}"
+                                   Foreground="{ThemeResource TcGreenTextBrush}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="{x:Bind ViewModel.StateText, Mode=OneWay}"
+                                   Visibility="{x:Bind ViewModel.StateIsAttention, Mode=OneWay}"
+                                   Style="{StaticResource TcCaptionTextStyle}"
+                                   Foreground="{ThemeResource TcGoldTextBrush}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="{x:Bind ViewModel.StateText, Mode=OneWay}"
+                                   Visibility="{x:Bind ViewModel.StateIsRefused, Mode=OneWay}"
+                                   Style="{StaticResource TcCaptionTextStyle}"
+                                   Foreground="{ThemeResource TcCoralTextBrush}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="{x:Bind ViewModel.ServingText, Mode=OneWay}"
+                                   Visibility="{x:Bind ViewModel.HasServingText, Mode=OneWay}"
+                                   Style="{StaticResource TcCaptionTextStyle}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="{x:Bind ViewModel.AppliesAtOnce, Mode=OneWay}"
+                                   Style="{StaticResource TcCaptionTextStyle}"
+                                   TextWrapping="Wrap" />
+                        <!--
+                            A write the daemon did not confirm. The payload's
+                            sentence, and absent when there is nothing to say.
+                        -->
+                        <TextBlock Text="{x:Bind ViewModel.Notice, Mode=OneWay}"
+                                   Visibility="{x:Bind ViewModel.HasNotice, Mode=OneWay}"
+                                   Style="{StaticResource TcCaptionTextStyle}"
+                                   Foreground="{ThemeResource TcCoralTextBrush}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

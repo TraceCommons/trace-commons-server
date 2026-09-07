@@ -53,6 +53,21 @@ public sealed class TrayIcon : IDisposable
 
     public event Action? SettingsRequested;
 
+    /// <summary>Raised when the contributor asks for the model-calls destination.</summary>
+    public event Action? PrivateInferenceRequested;
+
+    /// <summary>
+    /// Raised when the contributor flips the model-calls switch from the menu.
+    /// </summary>
+    /// <remarks>
+    /// A request, like <see cref="QuitRequested"/>, rather than a write. The
+    /// only place the daemon's answer to this is rendered is the destination
+    /// page, and a menu that changed what this machine answers without
+    /// showing that answer would be a change nobody could see the result of.
+    /// This class must not shortcut it.
+    /// </remarks>
+    public event Action? PrivateInferenceToggleRequested;
+
     public event Action<PauseDuration>? PauseRequested;
 
     public event Action? ResumeRequested;
@@ -79,6 +94,8 @@ public sealed class TrayIcon : IDisposable
     private const int MenuIdPauseTomorrow = 11;
     private const int MenuIdPauseUntilResumed = 12;
     private const int MenuIdResume = 13;
+    private const int MenuIdPrivateInference = 14;
+    private const int MenuIdPrivateInferenceToggle = 15;
 
     private readonly WndProc _wndProc;
     private readonly string _className;
@@ -92,6 +109,7 @@ public sealed class TrayIcon : IDisposable
         Array.Empty<QueueEntry>(),
         new HistoryRollup(),
         Array.Empty<ProjectSetting>());
+    private PrivateInferenceTrayEntry _privateInference;
     private bool _disposed;
 
     /// <summary>
@@ -178,6 +196,21 @@ public sealed class TrayIcon : IDisposable
         {
             DestroyIcon(previous);
         }
+    }
+
+    /// <summary>
+    /// Takes the model-calls entry as the window computed it from one
+    /// settings read.
+    /// </summary>
+    /// <remarks>
+    /// Whether anything here may be drawn as working is decided in
+    /// <see cref="PrivateInferenceTrayEntry"/>, off the daemon's reported
+    /// state and never off the switch. This class does not get to decide it,
+    /// and it is not a decision that can be tested on Windows only.
+    /// </remarks>
+    public void UpdatePrivateInference(PrivateInferenceTrayEntry entry)
+    {
+        _privateInference = entry;
     }
 
     /// <summary>
@@ -441,6 +474,30 @@ public sealed class TrayIcon : IDisposable
                 }
             }
 
+            // Model calls: the state sentence, then the destination, then the
+            // switch. Every word is the payload's; the check mark is the
+            // switch's own position, and the state sentence beside it is what
+            // actually happened. Nothing here is drawn from ReadsAsWorking
+            // except the tick on the state line, which is the one thing that
+            // may claim the listener is answering.
+            if (_privateInference.Available)
+            {
+                AppendMenu(menu, MF_SEPARATOR, IntPtr.Zero, null);
+                AppendMenu(
+                    menu,
+                    MF_STRING | MF_DISABLED | MF_GRAYED,
+                    IntPtr.Zero,
+                    (_privateInference.ReadsAsWorking ? "\u2713 " : "   ")
+                        + _privateInference.StateText);
+                AppendMenu(menu, MF_STRING, MenuIdPrivateInference, _privateInference.Label);
+                AppendMenu(
+                    menu,
+                    MF_STRING | (_privateInference.On ? MF_CHECKED : MF_UNCHECKED),
+                    MenuIdPrivateInferenceToggle,
+                    _privateInference.ToggleText);
+                AppendMenu(menu, MF_SEPARATOR, IntPtr.Zero, null);
+            }
+
             AppendMenu(menu, MF_STRING, MenuIdOpen, "Open Trace Commons");
             AppendMenu(menu, MF_STRING, MenuIdSettings, "Settings");
 
@@ -473,6 +530,14 @@ public sealed class TrayIcon : IDisposable
 
                 case MenuIdSettings:
                     SettingsRequested?.Invoke();
+                    break;
+
+                case MenuIdPrivateInference:
+                    PrivateInferenceRequested?.Invoke();
+                    break;
+
+                case MenuIdPrivateInferenceToggle:
+                    PrivateInferenceToggleRequested?.Invoke();
                     break;
 
                 case MenuIdPauseHour:
@@ -684,6 +749,8 @@ public sealed class TrayIcon : IDisposable
     private const uint MF_POPUP = 0x00000010;
     private const uint MF_DISABLED = 0x00000002;
     private const uint MF_GRAYED = 0x00000001;
+    private const uint MF_CHECKED = 0x00000008;
+    private const uint MF_UNCHECKED = 0x00000000;
 
     private const uint TPM_RIGHTBUTTON = 0x0002;
     private const uint TPM_RETURNCMD = 0x0100;
