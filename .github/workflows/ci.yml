@@ -272,6 +272,125 @@ jobs:
       # this job excludes, so the source-attribute count is always one high.
       - run: cargo test -p trace-commons-attestation --features collateral-client
 
+  msrv-floor:
+    name: builds at the declared MSRV floor
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # Every other job in this file uses dtolnay/rust-toolchain@stable, which
+    # means none of them can see an MSRV regression: stable is always at or
+    # above the floor, so a dependency that raises the floor compiles fine
+    # everywhere here. The only pinned toolchains in this repository live in
+    # release-contributor.yml and release-apps.yml, and those workflows run
+    # ONLY on a tag push. That is not a gap in one job, it is structural: the
+    # declared floor was documentation, and the first thing that could ever
+    # check it was a release.
+    #
+    # It cost a release. On 2026-09-06 the contributor-v0.10.0 tag failed all
+    # four of its build jobs in 95 seconds with "rustc 1.92.0 is not supported
+    # by the following packages: ironclaw_common@0.4.2 requires rustc 1.96"
+    # and thirteen siblings -- an unconditional git dependency on
+    # ironwire_proxy had raised the floor days earlier, with main green the
+    # whole time. This job makes that a failing pull request instead.
+    #
+    # The floor is never written down here. It is read from `cargo metadata`
+    # by scripts/ci/msrv-floor.sh, because a literal "1.96" in this file would
+    # be one more copy of the floor to forget -- the exact shape of the
+    # original bug, which was three pins moving out of step.
+    env:
+      # The workflow-level -D warnings is deliberately dropped for this job.
+      # The question here is "does this compile at the floor", and an older
+      # rustc's lint set is not that question: a lint that fires only on the
+      # floor toolchain would fail this job for a reason that has nothing to
+      # do with MSRV, while the stable jobs above already own the warnings
+      # gate. The release workflows do not set -D warnings either, so this
+      # matches what a tag push actually builds.
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v6
+      # A stable toolchain purely to run `cargo metadata`. The checks below
+      # run under the derived floor toolchain, installed once it is known.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+            crates/trace-commons-contributor-gtk/target
+          key: ${{ runner.os }}-cargo-msrv-floor-${{ hashFiles('Cargo.lock', 'crates/trace-commons-contributor-gtk/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-msrv-floor-
+      - name: Derive the declared floor
+        id: floor
+        run: |
+          set -euo pipefail
+          GTK_MANIFEST=crates/trace-commons-contributor-gtk/Cargo.toml
+          ROOT_FLOOR="$(scripts/ci/msrv-floor.sh print Cargo.toml)"
+          GTK_FLOOR="$(scripts/ci/msrv-floor.sh print "$GTK_MANIFEST")"
+          echo "root workspace floor: $ROOT_FLOOR"
+          echo "gtk workspace floor:  $GTK_FLOOR"
+          echo "root=$ROOT_FLOOR" >> "$GITHUB_OUTPUT"
+          echo "gtk=$GTK_FLOOR" >> "$GITHUB_OUTPUT"
+      # Cheap first, because it produces the better message. This names the
+      # offending crates from metadata alone -- no toolchain, no compilation --
+      # so the log says "a dependency raised the MSRV floor" and lists them,
+      # rather than leaving someone to decode a rustc error at the bottom of a
+      # build. The compile steps below are what catch the other half: a
+      # dependency that declares no rust-version at all and simply uses newer
+      # syntax.
+      - name: Audit the root workspace's resolved graph
+        run: scripts/ci/msrv-floor.sh audit Cargo.toml
+      # crates/trace-commons-contributor-gtk is a SEPARATE cargo workspace with
+      # its own lockfile, so the audit above does not cover a line of it, and
+      # neither would a root `--workspace` check. It also tracks its floor by
+      # hand (it cannot inherit workspace.package), so this catches the two
+      # floors drifting apart as well as a dependency raising either one.
+      - name: Audit the GTK workspace's resolved graph
+        run: scripts/ci/msrv-floor.sh audit crates/trace-commons-contributor-gtk/Cargo.toml
+      # The flatpak build is network-sandboxed and bundles a pinned rust
+      # tarball, so it cannot rustup its way out of a stale pin.
+      # release-apps.yml checks this too -- on a tag push, which is the whole
+      # problem. Its copy is deliberately left in place: that job installs no
+      # rust toolchain, so pointing it at this script would make a release
+      # depend on the runner image shipping cargo. Two implementations of one
+      # rule, but this one runs first and the release one is the backstop.
+      - name: Check the flatpak manifest's pinned toolchain against the floor
+        run: |
+          scripts/ci/msrv-floor.sh flatpak \
+            crates/trace-commons-contributor-gtk/Cargo.toml \
+            crates/trace-commons-contributor-gtk/flatpak/ai.tracecommons.Contributor.yml
+      - name: Install the floor toolchain(s)
+        run: |
+          set -euo pipefail
+          for v in "${{ steps.floor.outputs.root }}" "${{ steps.floor.outputs.gtk }}"; do
+            rustup toolchain install "$v" --profile minimal --no-self-update
+          done
+          rustup toolchain list
+      - name: Install GTK dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libgtk-4-dev \
+            libadwaita-1-dev \
+            libnotify-dev
+      # `check`, not `build`. The failure this job exists to catch is raised by
+      # cargo's resolver and by rustc's front end, both of which run under
+      # `check`; codegen adds minutes and no signal. The scope is exactly what
+      # the release workflows pin a toolchain for -- the contributor CLI, the C
+      # ABI dylib the macOS and Windows shells link, and the GTK shell -- not
+      # the whole workspace, because the server is not something an outsider
+      # builds from source and is not what the floor promises.
+      - name: Check the contributor CLI at the floor
+        run: cargo "+${{ steps.floor.outputs.root }}" check --locked -p trace-commons-contributor --bins
+      - name: Check the contributor FFI at the floor
+        run: cargo "+${{ steps.floor.outputs.root }}" check --locked -p trace-commons-contributor-ffi --lib
+      - name: Check the GTK shell at the floor
+        run: |
+          cargo "+${{ steps.floor.outputs.gtk }}" check --locked \
+            --manifest-path crates/trace-commons-contributor-gtk/Cargo.toml --bins
+
   cargo-test-default:
     name: cargo test (default features)
     runs-on: ubuntu-latest
