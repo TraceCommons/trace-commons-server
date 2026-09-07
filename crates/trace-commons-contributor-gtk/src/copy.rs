@@ -2091,6 +2091,14 @@ pub use trace_commons_contributor::routing_copy::{
 // as one: a shell that recovered the tone by reading the sentence would be
 // matching on text, and two refusal sentences begin with the same two
 // words.
+// The tools on this computer are part of the same surface and read from the
+// same module. Nothing about a tool is spelled here -- not its name, which
+// is IronWire's and arrives at runtime, and not its state, whose sentence
+// and tone the view reads as a pair for the reason stated above.
+//
+// `harness_last_call_line` is assembled on the shared side rather than
+// exported as a template with a hole in it, the same rule `serving_line`
+// follows: a shell handed a pattern is a fourth place the wording drifts.
 pub use trace_commons_contributor::private_inference_copy::{
     DESTINATION as PRIVATE_INFERENCE_DESTINATION, OFFER_ACCEPT as PRIVATE_INFERENCE_OFFER_ACCEPT,
     OFFER_ASKED_ONCE as PRIVATE_INFERENCE_OFFER_ASKED_ONCE,
@@ -2108,6 +2116,12 @@ pub use trace_commons_contributor::private_inference_copy::{
     serving_line as private_inference_serving_line, should_offer as private_inference_should_offer,
     state_line as private_inference_state_line, state_tone as private_inference_state_tone,
     write_confirmed as private_inference_write_confirmed,
+};
+pub use trace_commons_contributor::private_inference_copy::{
+    HARNESS_ANSWERING, HARNESS_CONNECT, HARNESS_CONNECTED_NOTHING_SEEN, HARNESS_DISCONNECT,
+    HARNESS_NEEDS_RESTART, HARNESS_NOT_CONNECTED, HARNESS_PREVIEW_CANCEL, HARNESS_PREVIEW_CONFIRM,
+    HARNESS_PREVIEW_TITLE, HARNESS_SLOT_TAKEN, HARNESS_UNREADABLE_CONFIG, HARNESSES_NONE_FOUND,
+    HARNESSES_TITLE, HARNESSES_WHAT, harness_last_call_line,
 };
 
 // --- The redaction witness ---------------------------------------------
