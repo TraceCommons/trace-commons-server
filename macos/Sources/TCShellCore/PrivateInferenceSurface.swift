@@ -7,6 +7,10 @@ import Foundation
 /// than rendered with a blank where a sentence should be, and on this surface
 /// the blank could be the sentence about what turning the switch on exposes.
 public struct PrivateInferenceCopy: Decodable, Equatable, Sendable {
+    /// The switcher label for the top-level destination, from the Rust.
+    public let destination: String
+    /// The line under the destination's title, from the Rust.
+    public let subtitle: String
     public let offerTitle: String
     public let offerWhat: String
     public let offerExposure: String
@@ -35,6 +39,8 @@ public struct PrivateInferenceCopy: Decodable, Equatable, Sendable {
     /// Rust grows and this struct drops would sail past a test that only
     /// checked the fields it already knows about.
     public enum CodingKeys: String, CodingKey, CaseIterable {
+        case destination
+        case subtitle
         case offerTitle = "offer_title"
         case offerWhat = "offer_what"
         case offerExposure = "offer_exposure"

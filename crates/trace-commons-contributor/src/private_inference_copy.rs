@@ -37,6 +37,16 @@
 // rather than a hand-kept list of names. A string literal added anywhere in
 // this region is checked automatically; one added outside it is not.
 
+/// The switcher label for the top-level destination this surface owns.
+///
+/// "Model calls" and not the setting's internal name: `private` is on the
+/// list of words this surface may not say, because the feature makes no
+/// privacy claim, and a nav label is the most-read string of the lot.
+pub const DESTINATION: &str = "Model calls";
+
+/// The one line under the destination's title saying what it is for.
+pub const SUBTITLE: &str = "Answer model calls on this computer, and who may use it.";
+
 /// The offer's heading. Names the machine, because "on this computer" is the
 /// whole of what changes and the only part a contributor can check.
 pub const OFFER_TITLE: &str = "Answer model calls on this computer";
@@ -327,6 +337,8 @@ pub fn quit_needs_notice(requested_on: bool, label: &str) -> bool {
 /// against.
 #[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
 pub struct PrivateInferenceCopy {
+    pub destination: &'static str,
+    pub subtitle: &'static str,
     pub offer_title: &'static str,
     pub offer_what: &'static str,
     pub offer_exposure: &'static str,
@@ -355,6 +367,8 @@ pub struct PrivateInferenceCopy {
 #[must_use]
 pub fn private_inference_copy() -> PrivateInferenceCopy {
     PrivateInferenceCopy {
+        destination: DESTINATION,
+        subtitle: SUBTITLE,
         offer_title: OFFER_TITLE,
         offer_what: OFFER_WHAT,
         offer_exposure: OFFER_EXPOSURE,
@@ -396,6 +410,24 @@ pub use crate::daemon::private_inference::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The nav wording exists, because a top-level destination needs a label
+    /// in the switcher and a line under its title.
+    #[test]
+    fn the_copy_carries_nav_wording_for_a_top_level_destination() {
+        let copy = private_inference_copy();
+        assert!(!copy.destination.is_empty(), "the nav item needs a label");
+        assert!(
+            !copy.subtitle.is_empty(),
+            "the destination needs a subtitle"
+        );
+        // The label sits in a sidebar beside Waiting/History/Computer/Settings.
+        assert!(
+            copy.destination.chars().count() <= 24,
+            "nav label too long for the sidebar: {}",
+            copy.destination
+        );
+    }
 
     /// The offer has to say what turning the switch on exposes. This is the
     /// one sentence the design will not ship without: the listener's
@@ -604,7 +636,7 @@ mod tests {
         let fields = payload.as_object().expect("a JSON object");
         assert_eq!(
             fields.len(),
-            22,
+            24,
             "the payload's field count changed -- update the shells' decoders \
              and the tests that pin the set"
         );

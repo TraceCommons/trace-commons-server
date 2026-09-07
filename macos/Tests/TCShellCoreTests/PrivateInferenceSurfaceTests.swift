@@ -10,7 +10,8 @@ import XCTest
 /// the shell had stopped asking the shared table at all.
 final class PrivateInferenceSurfaceTests: XCTestCase {
     private let payload = """
-        {"offer_title":"T","offer_what":"WHAT","offer_exposure":"EXPOSURE",
+        {"destination":"DESTINATION","subtitle":"SUBTITLE",
+         "offer_title":"T","offer_what":"WHAT","offer_exposure":"EXPOSURE",
          "offer_no_repoint":"NO-REPOINT","offer_accept":"ACCEPT",
          "offer_decline":"DECLINE","offer_asked_once":"ONCE",
          "settings_title":"S-TITLE","settings_toggle":"S-TOGGLE",

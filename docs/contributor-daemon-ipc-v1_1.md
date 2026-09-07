@@ -1669,8 +1669,9 @@ retained-shutdown producer confirms cleanup; a port alone is metadata, not
 proof that calls can be answered.
 
 The companion C ABI copy payload (`tc_private_inference_copy`, not a daemon
-settings key) supplies these 22 fixed string fields:
+settings key) supplies these 24 fixed string fields:
 
+- `destination`, `subtitle`;
 - `offer_title`, `offer_what`, `offer_exposure`, `offer_no_repoint`,
   `offer_accept`, `offer_decline`, `offer_asked_once`;
 - `settings_title`, `settings_toggle`, `settings_applies_at_once`;
