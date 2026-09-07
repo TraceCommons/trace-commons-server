@@ -378,6 +378,35 @@ pub fn plan(
         });
     }
 
+    // A file we cannot read is refused HERE, before upstream is asked.
+    //
+    // "Never rewrite a file we cannot parse" is the first of the three rules
+    // that make editing somebody else's config acceptable, and upstream cannot
+    // enforce it on its own: `ironwire_agents::tools::read` is
+    // `read_to_string(path).ok().unwrap_or_default()`, so a file that is not
+    // valid UTF-8 reads as the empty string -- the same answer it gives for a
+    // file that is not there.
+    //
+    // Everything downstream then agrees the file is absent. An empty string
+    // parses as an empty settings map rather than an error, so the plan says
+    // "(added)" instead of refusing; and `tools::commit` skips writing a
+    // backup exactly when `existing` is empty. The result is a contributor's
+    // settings replaced wholesale with no backup and no warning.
+    //
+    // It is not a contrived shape: UTF-16LE is what Windows PowerShell 5.1's
+    // `Set-Content` and `>` write by default, so a hand-edited
+    // `settings.json` on Windows can easily be one.
+    //
+    // Reading it ourselves is the whole fix: `fs::read_to_string` fails where
+    // upstream's `.ok()` discards the error, and a path that exists but will
+    // not decode is refused with the outcome the copy already describes.
+    if let Some(path) = row.config_path.as_ref()
+        && path.exists()
+        && std::fs::read_to_string(path).is_err()
+    {
+        return Ok(refuse(PlanOutcome::Unparseable));
+    }
+
     let planned = match action {
         HarnessAction::Connect => {
             let Some(port) = port else {
@@ -833,6 +862,59 @@ mod tests {
 
     fn plan_claude(store: &PlanStore, action: HarnessAction) -> PlanView {
         plan(store, &Catalog::default(), "claude", action, Some(8463)).expect("claude is known")
+    }
+
+    /// A settings file that is not valid UTF-8 is refused, not replaced.
+    ///
+    /// Upstream cannot catch this: `tools::read` is
+    /// `read_to_string(path).ok().unwrap_or_default()`, so an undecodable file
+    /// reads as the empty string, which is also what an absent file reads as.
+    /// The plan then reports "(added)" rather than refusing, and
+    /// `tools::commit` skips the backup precisely because `existing` is empty
+    /// -- so the contributor's file would be replaced wholesale with nothing
+    /// kept.
+    ///
+    /// The bytes below are real UTF-16LE with a BOM, which is what Windows
+    /// PowerShell 5.1 writes by default, so a hand-edited settings file can
+    /// genuinely be this.
+    #[test]
+    fn a_settings_file_that_is_not_utf8_is_refused_rather_than_replaced() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+
+        let source = r#"{"env":{"MY_KEY":"keep me"}}"#;
+        let mut bytes = vec![0xFF, 0xFE]; // UTF-16LE BOM
+        for unit in source.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        std::fs::write(&path, &bytes).expect("write");
+        let _guard = ClaudeConfigAt::at(dir.path());
+
+        assert!(
+            std::fs::read_to_string(&path).is_err(),
+            "the fixture must actually be undecodable, or this test proves nothing"
+        );
+
+        let store = PlanStore::default();
+        let view = plan_claude(&store, HarnessAction::Connect);
+
+        assert_eq!(
+            view.outcome,
+            PlanOutcome::Unparseable,
+            "a file we cannot read must be refused, never rewritten"
+        );
+        assert!(
+            view.plan_id.is_none(),
+            "a refusal mints no permission to write"
+        );
+        assert!(view.changes.is_empty());
+
+        // The contributor's bytes are untouched, which is the point.
+        assert_eq!(
+            std::fs::read(&path).expect("read back"),
+            bytes,
+            "the file must be exactly as it was"
+        );
     }
 
     /// The rule most likely to be broken by a well-meaning simplification: a
