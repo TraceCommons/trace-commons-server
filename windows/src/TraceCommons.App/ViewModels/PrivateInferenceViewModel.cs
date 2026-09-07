@@ -1,4 +1,5 @@
 using System;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Threading.Tasks;
 using TraceCommons.Interop;
@@ -43,6 +44,13 @@ public sealed class PrivateInferenceViewModel : INotifyPropertyChanged
     private bool _on;
     private bool _busy;
     private bool _loaded;
+
+    /// <summary>
+    /// Whether the exposure question has been put at all. Read from the same
+    /// settings snapshot as the switch, so the first connect and the first-run
+    /// offer cannot come to disagree about whether it was asked.
+    /// </summary>
+    private bool _offerSeen;
 
     public PrivateInferenceViewModel(DaemonHost host)
     {
@@ -158,6 +166,12 @@ public sealed class PrivateInferenceViewModel : INotifyPropertyChanged
             _busy = false;
             Raise(nameof(ControlsEnabled));
         }
+
+        // After the switch, not before it: the tool rows are read against a
+        // page that already knows whether anything answers here, so a connect
+        // pressed the moment the list appears is planned with the exposure
+        // question already settled either way.
+        await LoadHarnessesAsync().ConfigureAwait(true);
     }
 
     /// <summary>
@@ -173,7 +187,16 @@ public sealed class PrivateInferenceViewModel : INotifyPropertyChanged
         }
 
         _on = settings.PrivateInferenceOn;
+        _offerSeen = settings.PrivateInferenceAnswered;
         _state = PrivateInferenceState.From(settings.PrivateInferenceReport);
+
+        // A snapshot the window pushed is a settings read that landed, and
+        // this page can write from it. Setting the flag only in LoadAsync left
+        // SetAsync silently dropping every write on a page that was filled
+        // from outside before its own round trip finished -- no write, and no
+        // notice either, which is the shape a contributor reads as the switch
+        // being broken.
+        _loaded = true;
         RaiseEverythingDerived();
     }
 
@@ -231,6 +254,301 @@ public sealed class PrivateInferenceViewModel : INotifyPropertyChanged
         {
             _busy = false;
             Raise(nameof(ControlsEnabled));
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // The tools on this computer.
+    //
+    // The list leads and the switch is below it: connecting one tool is the
+    // thing a contributor came here to do, and the switch is the kill switch
+    // over all of them. Every action is one tool at a time -- nothing here
+    // writes two config files, and there is no "connect all".
+    // ---------------------------------------------------------------------
+
+    /// <summary>The tools found on this computer, in the order the daemon listed them.</summary>
+    public ObservableCollection<HarnessRowViewModel> Harnesses { get; } = new();
+
+    public string HarnessesTitle => _copy?.HarnessesTitle ?? string.Empty;
+
+    public string HarnessesWhat => _copy?.HarnessesWhat ?? string.Empty;
+
+    /// <summary>
+    /// Said in terms of what was looked for, never in terms of which tools
+    /// exist. The catalog channel is inert in this build, so this list is what
+    /// this app knows how to look for and not a claim about the machine.
+    /// </summary>
+    public string HarnessesNoneFound => _copy?.HarnessesNoneFound ?? string.Empty;
+
+    public bool HasHarnesses => Harnesses.Count > 0;
+
+    public bool HasNoHarnesses => _harnessesRead && Harnesses.Count == 0;
+
+    private bool _harnessesRead;
+
+    /// <summary>
+    /// Reads the tool list. Called after every action, because an action
+    /// changed a file and the row that described it is now stale.
+    /// </summary>
+    public async Task LoadHarnessesAsync()
+    {
+        if (_copy is null)
+        {
+            return;
+        }
+
+        try
+        {
+            DaemonResponse response = await _host
+                .CallAsync(DaemonProtocol.Methods.HarnessList)
+                .ConfigureAwait(true);
+            if (response.IsError || response.Result is null)
+            {
+                return;
+            }
+
+            HarnessListing listing = HarnessSurface.ParseListing(response.Result.Value.GetRawText());
+            Harnesses.Clear();
+            foreach (HarnessRow row in listing.Harnesses)
+            {
+                Harnesses.Add(new HarnessRowViewModel(row, _copy));
+            }
+
+            _harnessesRead = true;
+            Raise(nameof(HasHarnesses));
+            Raise(nameof(HasNoHarnesses));
+        }
+        catch
+        {
+            System.Diagnostics.Trace.TraceWarning(nameof(LoadHarnessesAsync));
+        }
+    }
+
+    /// <summary>
+    /// Whether the exposure question has to be answered before this connect.
+    /// </summary>
+    /// <remarks>
+    /// The first connect is what makes the exposure real, so a contributor who
+    /// has never been asked is asked here -- with the shared paragraph and the
+    /// same two answers as the first-run offer, and never a second version of
+    /// the question written on this side.
+    /// </remarks>
+    public bool ConnectNeedsExposure =>
+        HarnessSurface.ConnectNeedsExposure(_loaded, _offerSeen, _on);
+
+    /// <summary>What turning it on exposes, and the two answers to it.</summary>
+    public string OfferTitle => _copy?.OfferTitle ?? string.Empty;
+
+    public string OfferNoRepoint => _copy?.OfferNoRepoint ?? string.Empty;
+
+    public string OfferAccept => _copy?.OfferAccept ?? string.Empty;
+
+    public string OfferDecline => _copy?.OfferDecline ?? string.Empty;
+
+    public string PreviewTitle => _copy?.HarnessPreviewTitle ?? string.Empty;
+
+    public string PreviewConfirm => _copy?.HarnessPreviewConfirm ?? string.Empty;
+
+    public string PreviewCancel => _copy?.HarnessPreviewCancel ?? string.Empty;
+
+    /// <summary>
+    /// A slot the contributor already had a value in, which was left exactly
+    /// as it was. Reported, never offered.
+    /// </summary>
+    public string SlotTaken => _copy?.HarnessSlotTaken ?? string.Empty;
+
+    /// <summary>
+    /// The sentence about a tool holding an old setting in a process that is
+    /// still running, or the empty string. Set only after a write actually
+    /// happened, and shown as a plain line rather than in
+    /// <see cref="Notice"/>: nothing went wrong.
+    /// </summary>
+    public string Restart
+    {
+        get => _restart;
+        private set
+        {
+            if (_restart == value)
+            {
+                return;
+            }
+
+            _restart = value;
+            Raise(nameof(Restart));
+            Raise(nameof(HasRestart));
+        }
+    }
+
+    private string _restart = string.Empty;
+
+    public bool HasRestart => _restart.Length > 0;
+
+    /// <summary>A settings file that could not be read, and was therefore refused.</summary>
+    public string UnreadableConfig => _copy?.HarnessUnreadableConfig ?? string.Empty;
+
+    /// <summary>
+    /// Answers the exposure question with a yes and turns the destination on,
+    /// in the one write that records both. Returns whether the daemon
+    /// confirmed it.
+    /// </summary>
+    /// <remarks>
+    /// The same body <see cref="PrivateInferenceSurface.SerializeOfferAnswer"/>
+    /// builds for the first-run offer, and read back the same way: the echo
+    /// carries the only thing that knows whether the listener actually
+    /// started, and a connect planned against a listener that refused to start
+    /// would be planned against nothing.
+    /// </remarks>
+    public async Task<bool> AcceptExposureAsync()
+    {
+        if (_copy is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            DaemonResponse response = await _host
+                .CallAsync(
+                    DaemonProtocol.Methods.SetSettings,
+                    PrivateInferenceSurface.SerializeOfferAnswer(accepted: true))
+                .ConfigureAwait(true);
+            if (response.ResultAs<DaemonSettingsSnapshot>() is { } settings &&
+                PrivateInferenceSurface.WriteConfirmed(true, settings))
+            {
+                Notice = string.Empty;
+                Fill(settings);
+                return true;
+            }
+        }
+        catch
+        {
+            System.Diagnostics.Trace.TraceWarning(nameof(AcceptExposureAsync));
+        }
+
+        Notice = _copy.WriteUnconfirmed;
+        return false;
+    }
+
+    /// <summary>
+    /// Records that the exposure question was put and declined. The marker
+    /// alone: the switch is already off, and writing it would make a refusal
+    /// indistinguishable from a change.
+    /// </summary>
+    public async Task DeclineExposureAsync()
+    {
+        try
+        {
+            DaemonResponse response = await _host
+                .CallAsync(
+                    DaemonProtocol.Methods.SetSettings,
+                    PrivateInferenceSurface.SerializeOfferAnswer(accepted: false))
+                .ConfigureAwait(true);
+            Fill(response.ResultAs<DaemonSettingsSnapshot>());
+        }
+        catch
+        {
+            System.Diagnostics.Trace.TraceWarning(nameof(DeclineExposureAsync));
+        }
+    }
+
+    /// <summary>
+    /// Works out one tool's edit and writes nothing. Null when the daemon
+    /// refused outright, in which case <see cref="Notice"/> already says so
+    /// where there are words for it.
+    /// </summary>
+    public async Task<HarnessPlan?> PlanAsync(string id, string action)
+    {
+        if (_copy is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            DaemonResponse response = await _host
+                .CallAsync(
+                    DaemonProtocol.Methods.HarnessPlan,
+                    HarnessSurface.SerializePlan(id, action))
+                .ConfigureAwait(true);
+            if (response.IsError || response.Result is null)
+            {
+                // A connect with nothing answering here is a fact about this
+                // computer, and the way out is the switch above -- not a
+                // retry, and not a sentence written here about a file.
+                Notice = HarnessSurface.NoDestination(response.Error)
+                    ? string.Empty
+                    : _copy.WriteUnconfirmed;
+                return null;
+            }
+
+            Notice = string.Empty;
+            return HarnessSurface.ParsePlan(response.Result.Value.GetRawText());
+        }
+        catch
+        {
+            System.Diagnostics.Trace.TraceWarning(nameof(PlanAsync));
+            Notice = _copy.WriteUnconfirmed;
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Makes an edit that was already shown, by handing back the plan id the
+    /// daemon minted. Returns null when the plan is gone, which is a re-ask
+    /// and not a failure.
+    /// </summary>
+    /// <remarks>
+    /// A plan is single-use and expires, and the file is checked again before
+    /// the write. Either way what the contributor was shown is no longer what
+    /// would happen, so this never retries: the caller re-plans and shows the
+    /// preview again.
+    /// </remarks>
+    /// <summary>
+    /// Whether the last commit was refused because the plan was gone rather
+    /// than because the write failed. Nothing was written either way.
+    /// </summary>
+    public bool LastPlanWentStale { get; private set; }
+
+    public async Task<HarnessCommit?> CommitAsync(string planId)
+    {
+        if (_copy is null)
+        {
+            return null;
+        }
+
+        LastPlanWentStale = false;
+        try
+        {
+            DaemonResponse response = await _host
+                .CallAsync(
+                    DaemonProtocol.Methods.HarnessCommit,
+                    HarnessSurface.SerializeCommit(planId))
+                .ConfigureAwait(true);
+            if (response.IsError || response.Result is null)
+            {
+                LastPlanWentStale = HarnessSurface.PlanIsStale(response.Error);
+                Notice = LastPlanWentStale ? string.Empty : _copy.WriteUnconfirmed;
+                return null;
+            }
+
+            Notice = string.Empty;
+
+            // Whatever was already running is holding the old setting until it
+            // is started again. Shown once a write has actually happened;
+            // before that there is nothing to restart for.
+            HarnessCommit? committed = HarnessSurface.ParseCommit(response.Result.Value.GetRawText());
+            if (committed is { Committed: true })
+            {
+                Restart = _copy.HarnessNeedsRestart;
+            }
+
+            return committed;
+        }
+        catch
+        {
+            System.Diagnostics.Trace.TraceWarning(nameof(CommitAsync));
+            Notice = _copy.WriteUnconfirmed;
+            return null;
         }
     }
 
