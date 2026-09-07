@@ -329,6 +329,46 @@ internal static class NativeMethods
     internal static extern int tc_private_inference_quit_needs_notice(int requestedOn, [MarshalAs(UnmanagedType.LPUTF8Str)] string state);
 
     /// <summary>
+    /// One <c>harness_list</c> row's state, as a TC_HARNESS_STATE_* code.
+    ///
+    /// THE BRANCH TABLE CROSSES. "answering" is the only value meaning a call
+    /// was actually served, and it is the one a shell is most tempted to infer
+    /// from "connected". Do not infer it: a config file naming this computer is
+    /// not evidence that anything was ever sent. A label this build has never
+    /// heard of answers TC_HARNESS_STATE_UNKNOWN.
+    /// </summary>
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    internal static extern int tc_harness_state_code(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? state);
+
+    /// <summary>
+    /// One <c>harness_plan</c> outcome, as a TC_HARNESS_PLAN_* code.
+    ///
+    /// The branch that matters is unparseable against noop: one is "nothing to
+    /// change", the other is "we refused to rewrite a file we could not read".
+    /// An outcome this build has never heard of answers TC_HARNESS_PLAN_UNKNOWN,
+    /// which is not committable.
+    /// </summary>
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    internal static extern int tc_harness_plan_outcome_code(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? outcome);
+
+    /// <summary>
+    /// Whether one action may be offered for a tool in this state. Non-zero to
+    /// offer.
+    ///
+    /// The second rule is the one worth crossing the ABI for: a tool that is
+    /// not installed cannot be connected, but a tool that IS connected can
+    /// always be disconnected, installed or not. Answers 0 -- do not offer --
+    /// for an action this build does not know.
+    /// </summary>
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    internal static extern int tc_harness_action_available(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? action,
+        int installed,
+        int connected);
+
+    /// <summary>
     /// The routing surface's "that file could not be used" sentence, already
     /// assembled. <paramref name="tokenPath"/> may be NULL, which is the
     /// "nothing resolved at all" case and a different sentence, not an error.

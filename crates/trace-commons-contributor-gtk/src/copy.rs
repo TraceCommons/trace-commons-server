@@ -2091,20 +2091,37 @@ pub use trace_commons_contributor::routing_copy::{
 // as one: a shell that recovered the tone by reading the sentence would be
 // matching on text, and two refusal sentences begin with the same two
 // words.
+// The tools on this computer are part of the same surface and read from the
+// same module. Nothing about a tool is spelled here -- not its name, which
+// is IronWire's and arrives at runtime, and not its state, whose sentence
+// and tone the view reads as a pair for the reason stated above.
+//
+// `harness_last_call_line` is assembled on the shared side rather than
+// exported as a template with a hole in it, the same rule `serving_line`
+// follows: a shell handed a pattern is a fourth place the wording drifts.
 pub use trace_commons_contributor::private_inference_copy::{
-    OFFER_ACCEPT as PRIVATE_INFERENCE_OFFER_ACCEPT,
+    DESTINATION as PRIVATE_INFERENCE_DESTINATION, OFFER_ACCEPT as PRIVATE_INFERENCE_OFFER_ACCEPT,
     OFFER_ASKED_ONCE as PRIVATE_INFERENCE_OFFER_ASKED_ONCE,
     OFFER_DECLINE as PRIVATE_INFERENCE_OFFER_DECLINE,
     OFFER_EXPOSURE as PRIVATE_INFERENCE_OFFER_EXPOSURE,
     OFFER_NO_REPOINT as PRIVATE_INFERENCE_OFFER_NO_REPOINT,
     OFFER_TITLE as PRIVATE_INFERENCE_OFFER_TITLE, OFFER_WHAT as PRIVATE_INFERENCE_OFFER_WHAT,
     PrivateInferenceTone, SETTINGS_APPLIES_AT_ONCE as PRIVATE_INFERENCE_APPLIES_AT_ONCE,
-    SETTINGS_TITLE as PRIVATE_INFERENCE_TITLE, SETTINGS_TOGGLE as PRIVATE_INFERENCE_TOGGLE,
-    STATE_OFF as PRIVATE_INFERENCE_STATE_OFF, STATE_UNKNOWN as PRIVATE_INFERENCE_STATE_UNKNOWN,
+    SETTINGS_MOVED as PRIVATE_INFERENCE_SETTINGS_MOVED, SETTINGS_TITLE as PRIVATE_INFERENCE_TITLE,
+    SETTINGS_TOGGLE as PRIVATE_INFERENCE_TOGGLE, STATE_OFF as PRIVATE_INFERENCE_STATE_OFF,
+    STATE_UNKNOWN as PRIVATE_INFERENCE_STATE_UNKNOWN, SUBTITLE as PRIVATE_INFERENCE_SUBTITLE,
+    TRAY_OPEN_TO_TURN_ON as PRIVATE_INFERENCE_TRAY_OPEN_TO_TURN_ON,
+    TRAY_TURN_OFF as PRIVATE_INFERENCE_TRAY_TURN_OFF,
     WRITE_UNCONFIRMED as PRIVATE_INFERENCE_WRITE_UNCONFIRMED,
     serving_line as private_inference_serving_line, should_offer as private_inference_should_offer,
     state_line as private_inference_state_line, state_tone as private_inference_state_tone,
     write_confirmed as private_inference_write_confirmed,
+};
+pub use trace_commons_contributor::private_inference_copy::{
+    HARNESS_ANSWERING, HARNESS_CONNECT, HARNESS_CONNECTED_NOTHING_SEEN, HARNESS_DISCONNECT,
+    HARNESS_NEEDS_RESTART, HARNESS_NOT_CONNECTED, HARNESS_PREVIEW_CANCEL, HARNESS_PREVIEW_CONFIRM,
+    HARNESS_PREVIEW_TITLE, HARNESS_SLOT_TAKEN, HARNESS_UNREADABLE_CONFIG, HARNESSES_NONE_FOUND,
+    HARNESSES_TITLE, HARNESSES_WHAT, harness_last_call_line,
 };
 
 // --- The redaction witness ---------------------------------------------

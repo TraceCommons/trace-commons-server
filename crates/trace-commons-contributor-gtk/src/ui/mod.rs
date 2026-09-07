@@ -12,6 +12,7 @@ pub mod mark;
 pub mod onboarding;
 mod onboarding_wallet;
 pub mod preview;
+pub mod private_inference;
 pub mod queue;
 pub mod roots;
 pub mod settings;
@@ -45,7 +46,7 @@ const HEADER_HEIGHT: i32 = 46;
 const COLUMN_MAX: i32 = 840;
 const COLUMN_TIGHTEN: i32 = 680;
 
-/// The three screens, in the order the switcher shows them, with the icon
+/// The four screens, in the order the switcher shows them, with the icon
 /// each one carries. One list, so the stack pages and the switcher items
 /// cannot drift apart.
 ///
@@ -54,13 +55,28 @@ const COLUMN_TIGHTEN: i32 = 680;
 /// unselected item's icon and turn the selected one green without this code
 /// setting anything. A full-colour icon ignores `color` and renders as-is,
 /// so swapping one in would silently leave that item's icon un-recoloured
-/// while the other two kept working -- a difference that shows up in a
+/// while the others kept working -- a difference that shows up in a
 /// screenshot months later and in no diff at all.
-const SCREENS: [(&str, &str, &str); 3] = [
+///
+/// The model-calls item's label is read from the shared copy module and
+/// never retyped: the word this surface may not say is "private", and the
+/// only way three shells keep saying the same true thing is by reading one
+/// definition. The stack name below it is internal and is read by nobody.
+pub(crate) const SCREENS: [(&str, &str, &str); 4] = [
     ("queue", "Queue", "view-list-symbolic"),
     ("history", "History", "document-open-recent-symbolic"),
+    (
+        PRIVATE_INFERENCE_SCREEN,
+        copy::PRIVATE_INFERENCE_DESTINATION,
+        "network-transmit-receive-symbolic",
+    ),
     ("settings", "Settings", "emblem-system-symbolic"),
 ];
+
+/// The stack's name for the model-calls screen. Named once because the
+/// tray and every other shortcut into it has to spell it identically, and
+/// `set_visible_child_name` on a name no page carries is a silent no-op.
+pub const PRIVATE_INFERENCE_SCREEN: &str = "private-inference";
 
 /// The switcher's icon, §5.1 item 1. Set in pixels rather than by an icon
 /// size so it matches the label it sits beside at every text scale.
@@ -89,12 +105,24 @@ pub struct PendingUndo {
 
 pub struct App {
     pub worker: Worker,
+    /// Where the model-calls switch stands, as the tray reads it.
+    ///
+    /// Written on every settings read (see `private_inference::render`) and
+    /// read by nothing that paints: it is the switch's position, not a claim
+    /// that a listener is running. It decides which way the tray's one
+    /// action row points and nothing else.
+    pub tray: crate::tray::TrayState,
     pub window: adw::ApplicationWindow,
     pub toasts: adw::ToastOverlay,
     pub stack: adw::ViewStack,
 
     pub queue: queue::QueueView,
     pub history: history::HistoryView,
+    /// The model-calls screen. Its own destination rather than a card on
+    /// Settings: this is the one switch that makes this computer answer
+    /// calls for whatever else is running on it, and it was undiscoverable
+    /// five sections down a settings list.
+    pub private_inference: private_inference::PrivateInferenceView,
     pub settings: settings::SettingsView,
     /// The update banner. Above the health banner is deliberate: an update
     /// is a standing fact about this machine, while health is about the
@@ -215,13 +243,19 @@ impl App {
         let stack = adw::ViewStack::new();
         let queue = queue::QueueView::new();
         let history = history::HistoryView::new();
+        let private_inference = private_inference::PrivateInferenceView::new();
         let settings = settings::SettingsView::new();
         let update = update::UpdateView::new();
 
         // Pages and switcher items are built from the same list, in the same
         // order, so a screen cannot be renamed in one place and not the
         // other.
-        let pages: [&gtk::Box; 3] = [&queue.root, &history.root, &settings.root];
+        let pages: [&gtk::Box; 4] = [
+            &queue.root,
+            &history.root,
+            &private_inference.root,
+            &settings.root,
+        ];
         for ((name, label, icon_name), page) in SCREENS.into_iter().zip(pages) {
             stack
                 .add_titled(page, Some(name), label)
@@ -306,11 +340,13 @@ impl App {
 
         let app = Rc::new(Self {
             worker,
+            tray: crate::tray::TrayState::default(),
             window,
             toasts,
             stack,
             queue,
             history,
+            private_inference,
             settings,
             update,
             health_banner: banner_column,
@@ -343,6 +379,7 @@ impl App {
         app.wire_tray();
         queue::wire(&app);
         history::wire(&app);
+        private_inference::wire(&app);
         settings::wire(&app);
         update::wire(&app);
         app.refresh();
@@ -503,15 +540,37 @@ impl App {
     }
 
     /// The tray icon's entire vocabulary reaches the window through here:
-    /// a click of any kind raises it at the queue. See `tray.rs` for why
-    /// that is the whole of it, and why absence of a tray (most Linux
-    /// desktops, including plain GNOME) never reaches this at all.
+    /// a click of any kind raises it, a menu press raises it at the screen
+    /// that was pressed, and one row can stop this computer answering model
+    /// calls.
+    ///
+    /// That last one is the only write anything outside this window can ask
+    /// for, and it goes in one direction. There is no request that turns
+    /// model calls ON -- `tray.rs` has no word for it -- because enabling it
+    /// changes what anything else running here may send through, and the
+    /// sentence saying so is on the screen the off-state row opens instead.
+    /// Turning it off only ever reduces what this computer answers, which is
+    /// why that direction is safe from a menu and the other is not.
+    ///
+    /// The window comes up either way: the daemon's answer to a stop is a
+    /// sentence only the model-calls screen renders, and a change nobody can
+    /// see the result of is the shape this surface avoids. See `tray.rs` for
+    /// the rest, and for why absence of a tray (most Linux desktops,
+    /// including plain GNOME) never reaches this at all.
     fn wire_tray(self: &Rc<Self>) {
-        let rx = crate::tray::spawn();
+        let rx = crate::tray::spawn(self.tray.clone());
         let app = Rc::clone(self);
         glib::spawn_future_local(async move {
-            while rx.recv().await.is_ok() {
-                app.stack.set_visible_child_name("queue");
+            while let Ok(request) = rx.recv().await {
+                match request {
+                    crate::tray::TrayRequest::Open(screen) => {
+                        app.stack.set_visible_child_name(screen);
+                    }
+                    crate::tray::TrayRequest::StopAnsweringModelCalls => {
+                        app.stack.set_visible_child_name(PRIVATE_INFERENCE_SCREEN);
+                        private_inference::turn_off(&app);
+                    }
+                }
                 app.window.present();
             }
         });
@@ -646,6 +705,7 @@ impl App {
             }
         });
         history::refresh(self);
+        private_inference::refresh(self);
         settings::refresh(self);
     }
 
@@ -1537,5 +1597,55 @@ mod card_preview_tests {
             "label": "preview-failed",
         });
         assert!(parse_preview_outcome(&value).is_none());
+    }
+}
+
+#[cfg(test)]
+mod screen_tests {
+    use super::*;
+
+    /// The switcher's items and the stack's pages are built by zipping
+    /// `SCREENS` with `pages`, so a screen missing from one of the two would
+    /// simply never be reachable rather than fail to compile. Both are
+    /// fixed-size arrays of the same length for that reason; this pins the
+    /// length itself, so the next screen has to grow both.
+    #[test]
+    fn every_screen_has_a_page() {
+        assert_eq!(SCREENS.len(), 4);
+        for (name, label, icon) in SCREENS {
+            assert!(!name.is_empty(), "a screen needs a stack name");
+            assert!(!label.is_empty(), "a screen needs a switcher label");
+            assert!(
+                icon.ends_with("-symbolic"),
+                "{icon} must be symbolic to recolour"
+            );
+        }
+    }
+
+    /// The label is read from the shared copy module, never retyped here.
+    #[test]
+    fn the_model_calls_screen_takes_its_label_from_the_shared_copy() {
+        let (name, label, _) = SCREENS
+            .into_iter()
+            .find(|(name, _, _)| *name == PRIVATE_INFERENCE_SCREEN)
+            .expect("the model-calls screen is one of the switcher's items");
+        assert_eq!(name, "private-inference");
+        assert_eq!(label, copy::PRIVATE_INFERENCE_DESTINATION);
+    }
+
+    /// Nothing a contributor reads in the switcher may call this private:
+    /// turning it on moves where a call is answered, it does not make the
+    /// call private. The stack's internal name is read by nobody.
+    #[test]
+    fn no_switcher_label_promises_privacy() {
+        for (_, label, _) in SCREENS {
+            let lowered = label.to_ascii_lowercase();
+            for forbidden in ["private", "secure", "proxy", "backend"] {
+                assert!(
+                    !lowered.contains(forbidden),
+                    "switcher label {label:?} must not say {forbidden:?}"
+                );
+            }
+        }
     }
 }

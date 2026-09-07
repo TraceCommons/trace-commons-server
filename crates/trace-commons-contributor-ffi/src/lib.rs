@@ -2190,6 +2190,169 @@ pub extern "C" fn tc_consent_copy() -> *mut c_char {
     })
 }
 
+/// The per-tool states of the harness list.
+///
+/// DELIBERATELY DISJOINT from `TC_ROUTING_TONE_*` (0..=3),
+/// `TC_WITNESS_TONE_*` (10..=14) and `TC_PRIVATE_INFERENCE_TONE_*`
+/// (20..=24), for the reason those ranges give: a shell that cross-wired two
+/// mappers with overlapping ranges would render one surface's value as
+/// another's meaning, and a disjoint range makes that mistake wrong for every
+/// value rather than only for the dangerous one.
+///
+/// A value this header does not define must be rendered as
+/// `TC_HARNESS_STATE_UNKNOWN`. The unsafe direction here is the working
+/// light: `TC_HARNESS_STATE_ANSWERING` is a claim that a call actually
+/// arrived, and a state a shell has no words for must never be painted as
+/// that.
+pub const TC_HARNESS_STATE_UNKNOWN: i32 = 30;
+pub const TC_HARNESS_STATE_NOT_CONNECTED: i32 = 31;
+pub const TC_HARNESS_STATE_CONNECTED_NO_CALLS: i32 = 32;
+pub const TC_HARNESS_STATE_ANSWERING: i32 = 33;
+/// A call arrived in this tool's protocol family, and more than one connected
+/// tool speaks that family, so it cannot be attributed to either. Its own
+/// value precisely so a shell cannot render it as `ANSWERING` -- the ledger
+/// records a facade, not a tool id, and this is the state where that limit
+/// shows.
+pub const TC_HARNESS_STATE_ACTIVITY_SHARED: i32 = 34;
+
+/// What planning an edit turned out to be.
+///
+/// Disjoint again, and for the same reason. `TC_HARNESS_PLAN_UNKNOWN` is the
+/// answer for an outcome this build has never heard of; it is not
+/// committable, which is the safe direction.
+pub const TC_HARNESS_PLAN_UNKNOWN: i32 = 40;
+pub const TC_HARNESS_PLAN_CHANGES: i32 = 41;
+pub const TC_HARNESS_PLAN_NOOP: i32 = 42;
+pub const TC_HARNESS_PLAN_UNPARSEABLE: i32 = 43;
+pub const TC_HARNESS_PLAN_NOT_INSTALLED: i32 = 44;
+pub const TC_HARNESS_PLAN_ENTRY_UNUSABLE: i32 = 45;
+pub const TC_HARNESS_PLAN_NO_CONFIG_PATH: i32 = 46;
+
+/// One `harness_list` row's `state`, as a code.
+///
+/// `state` is the `state` field of a `harness_list` harness row:
+/// `not_connected`, `connected_no_calls`, `answering`, `activity_shared` or
+/// `unknown`.
+///
+/// Exported for the reason `tc_private_inference_state_tone` is: the mapping
+/// from a label onto what a surface draws is one decision, and three native
+/// copies of it agree today and drift in silence tomorrow. The dangerous
+/// direction is specific here -- `answering` is the only value that means a
+/// call was actually served, and it is the one a shell is most tempted to
+/// infer from `connected`.
+///
+/// Answers `TC_HARNESS_STATE_UNKNOWN` for a label this build has never heard
+/// of, for a NULL or non-UTF-8 `state`, and on a caught panic.
+///
+/// # Safety
+/// `state`, if non-null, must point to a valid, NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tc_harness_state_code(state: *const c_char) -> i32 {
+    use trace_commons_contributor::harness_state::HarnessState;
+    guard(|| {
+        let state = if state.is_null() {
+            ""
+        } else {
+            unsafe { borrow_str(state) }.unwrap_or("")
+        };
+        Ok(match HarnessState::from_label(state) {
+            Some(HarnessState::NotConnected) => TC_HARNESS_STATE_NOT_CONNECTED,
+            Some(HarnessState::ConnectedNoCalls) => TC_HARNESS_STATE_CONNECTED_NO_CALLS,
+            Some(HarnessState::Answering) => TC_HARNESS_STATE_ANSWERING,
+            Some(HarnessState::ActivityShared) => TC_HARNESS_STATE_ACTIVITY_SHARED,
+            Some(HarnessState::Unknown) | None => TC_HARNESS_STATE_UNKNOWN,
+        })
+    })
+    .unwrap_or(TC_HARNESS_STATE_UNKNOWN)
+}
+
+/// One `harness_plan` result's `outcome`, as a code.
+///
+/// `outcome` is `changes`, `noop`, `unparseable`, `not_installed`,
+/// `entry_unusable` or `no_config_path`.
+///
+/// The branch that matters is `unparseable` against `noop`: one is "nothing
+/// to change" and the other is "we refused to rewrite a file we could not
+/// read, and it needs a human". A shell that collapses them tells a
+/// contributor with a broken config file that everything is fine.
+///
+/// `occupied` is NOT an outcome. A plan can carry changes and occupied slots
+/// at once, so the occupied list rides alongside on the response and must be
+/// rendered whatever this returns.
+///
+/// Answers `TC_HARNESS_PLAN_UNKNOWN` for a label this build has never heard
+/// of, for a NULL or non-UTF-8 `outcome`, and on a caught panic.
+///
+/// # Safety
+/// `outcome`, if non-null, must point to a valid, NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tc_harness_plan_outcome_code(outcome: *const c_char) -> i32 {
+    use trace_commons_contributor::harness_state::PlanOutcome;
+    guard(|| {
+        let outcome = if outcome.is_null() {
+            ""
+        } else {
+            unsafe { borrow_str(outcome) }.unwrap_or("")
+        };
+        Ok(match PlanOutcome::from_label(outcome) {
+            Some(PlanOutcome::Changes) => TC_HARNESS_PLAN_CHANGES,
+            Some(PlanOutcome::Noop) => TC_HARNESS_PLAN_NOOP,
+            Some(PlanOutcome::Unparseable) => TC_HARNESS_PLAN_UNPARSEABLE,
+            Some(PlanOutcome::NotInstalled) => TC_HARNESS_PLAN_NOT_INSTALLED,
+            Some(PlanOutcome::EntryUnusable) => TC_HARNESS_PLAN_ENTRY_UNUSABLE,
+            Some(PlanOutcome::NoConfigPath) => TC_HARNESS_PLAN_NO_CONFIG_PATH,
+            None => TC_HARNESS_PLAN_UNKNOWN,
+        })
+    })
+    .unwrap_or(TC_HARNESS_PLAN_UNKNOWN)
+}
+
+/// Whether one action may be offered for a tool in this state.
+///
+/// `action` is `connect` or `disconnect`; `installed` and `connected` are the
+/// booleans of the same names on a `harness_list` row, as `0` or non-zero.
+///
+/// THE BRANCH TABLE CROSSES, NOT ONLY THE WORDS, and the second rule is the
+/// one worth crossing: a tool that is not installed cannot be connected, but
+/// a tool that IS connected can always be disconnected, installed or not.
+/// Uninstalling a coding tool does not remove the line we put in its config
+/// file, and "remove only what we put there" is worth nothing if a shell
+/// hides the control that does the removing.
+///
+/// The daemon also answers this per row, as `can_connect` / `can_disconnect`.
+/// The two come from the same function, so a shell may read either.
+///
+/// Answers `0` -- do not offer -- for an action this build does not know, for
+/// a NULL or non-UTF-8 `action`, and on a caught panic. Not offering an
+/// action is the safe direction; offering one that then refuses is not.
+///
+/// # Safety
+/// `action`, if non-null, must point to a valid, NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tc_harness_action_available(
+    action: *const c_char,
+    installed: i32,
+    connected: i32,
+) -> i32 {
+    use trace_commons_contributor::harness_state::{HarnessAction, action_available};
+    guard(|| {
+        let action = if action.is_null() {
+            ""
+        } else {
+            unsafe { borrow_str(action) }.unwrap_or("")
+        };
+        let Some(action) = HarnessAction::from_label(action) else {
+            return Ok(0);
+        };
+        Ok(i32::from(action_available(
+            action,
+            installed != 0,
+            connected != 0,
+        )))
+    })
+    .unwrap_or(0)
+}
+
 /// The tones the private-inference surface is painted in.
 ///
 /// DELIBERATELY DISJOINT FROM BOTH `TC_ROUTING_TONE_*` (0..=3) AND
