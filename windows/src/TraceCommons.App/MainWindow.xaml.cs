@@ -148,7 +148,7 @@ public sealed partial class MainWindow : Window
         _tray.ReviewRequested += OnTrayReviewRequested;
         _tray.SettingsRequested += OnTraySettingsRequested;
         _tray.PrivateInferenceRequested += OnTrayPrivateInferenceRequested;
-        _tray.PrivateInferenceToggleRequested += OnTrayPrivateInferenceToggleRequested;
+        _tray.PrivateInferenceStopRequested += OnTrayPrivateInferenceStopRequested;
         _tray.PauseRequested += OnTrayPauseRequested;
         _tray.ResumeRequested += OnTrayResumeRequested;
         _tray.QuitRequested += OnTrayQuitRequested;
@@ -1010,15 +1010,24 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// The tray's switch.
+    /// The tray's one write: stop answering model calls.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// Off and not a flip. The tray cannot ask for the other direction -- see
+    /// <see cref="TrayIcon.PrivateInferenceStopRequested"/> -- and this
+    /// handler must not be the place that quietly restores it, so it writes
+    /// the value rather than inverting whatever it finds. A flip here would
+    /// turn a stale menu into an enable nobody asked for.
+    /// </para>
+    /// <para>
     /// The page is created and shown, not merely written to. Everything else
     /// the tray can do either opens a window or is reversible without a
     /// sentence; this one changes what this machine answers, and the only
     /// place the daemon's answer to it is rendered is the page.
+    /// </para>
     /// </remarks>
-    private void OnTrayPrivateInferenceToggleRequested()
+    private void OnTrayPrivateInferenceStopRequested()
     {
         _host.Dispatcher.TryEnqueue(async () =>
         {
@@ -1026,7 +1035,7 @@ public sealed partial class MainWindow : Window
             BringForward();
             if (PrivateInferencePane.Content is PrivateInferenceView page)
             {
-                await page.ToggleAsync();
+                await page.TurnOffAsync();
             }
         });
     }

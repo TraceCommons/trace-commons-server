@@ -2102,6 +2102,8 @@ pub use trace_commons_contributor::private_inference_copy::{
     SETTINGS_TITLE as PRIVATE_INFERENCE_TITLE, SETTINGS_TOGGLE as PRIVATE_INFERENCE_TOGGLE,
     STATE_OFF as PRIVATE_INFERENCE_STATE_OFF, STATE_UNKNOWN as PRIVATE_INFERENCE_STATE_UNKNOWN,
     SUBTITLE as PRIVATE_INFERENCE_SUBTITLE,
+    TRAY_OPEN_TO_TURN_ON as PRIVATE_INFERENCE_TRAY_OPEN_TO_TURN_ON,
+    TRAY_TURN_OFF as PRIVATE_INFERENCE_TRAY_TURN_OFF,
     WRITE_UNCONFIRMED as PRIVATE_INFERENCE_WRITE_UNCONFIRMED,
     serving_line as private_inference_serving_line, should_offer as private_inference_should_offer,
     state_line as private_inference_state_line, state_tone as private_inference_state_tone,

@@ -216,6 +216,11 @@ pub fn refresh(app: &Rc<App>) {
 pub fn render(app: &Rc<App>, settings: &crate::model::Settings) {
     let view = &app.private_inference;
     view.confirmed.set(Some(settings.private_inference));
+    // The tray's action row points off the confirmed switch, so it is
+    // written here, where the daemon's own answer arrives, rather than
+    // optimistically at the press. It is the switch's position and nothing
+    // that paints reads it -- see `App::tray`.
+    app.tray.set_answering(settings.private_inference);
     view.switch.set_sensitive(!view.write_pending.get());
     view.filling.set(true);
     view.switch.set_active(settings.private_inference);
@@ -242,6 +247,21 @@ pub fn render(app: &Rc<App>, settings: &crate::model::Settings) {
     if !serving.is_empty() {
         style::append_meta(status, serving);
     }
+}
+
+/// Stop answering model calls, for the tray's one write.
+///
+/// `false` and not a flip. The tray may reduce what this computer answers
+/// and may not enlarge it -- `tray::TrayRequest` has no word for the other
+/// direction -- and a flip here would supply one whenever the menu that was
+/// pressed had gone stale.
+///
+/// It goes through [`send`] rather than around it so the one write path
+/// keeps its guards: the confirmed-value check, the in-flight check, and the
+/// rule that the screen is drawn from the daemon's echo and never from what
+/// was asked for.
+pub(crate) fn turn_off(app: &Rc<App>) {
+    send(app, false);
 }
 
 /// Write the switch, and render from the daemon's echo.
@@ -382,6 +402,49 @@ mod tests {
         assert!(
             !after_switch.contains("settings.private_inference,"),
             "the status row must not branch on the requested setting"
+        );
+    }
+
+    /// The one write anything outside this module can ask for turns model
+    /// calls OFF, and there is no way to ask for the other direction.
+    ///
+    /// `send` is private, so `turn_off` is the whole of this screen's write
+    /// surface for the rest of the application -- the tray included. That is
+    /// the structural half; this is the other half, that `turn_off` writes a
+    /// fixed `false` rather than flipping whatever it finds. A flip would
+    /// turn a stale tray menu into an enable nobody asked for, and enabling
+    /// is the direction that must happen with the sentence about what it
+    /// exposes on screen.
+    #[test]
+    fn the_only_write_reachable_from_outside_stops_answering() {
+        let body = SOURCE
+            .split("pub(crate) fn turn_off(app: &Rc<App>) {")
+            .nth(1)
+            .expect("turn_off is in this file")
+            .split("\n}")
+            .next()
+            .expect("turn_off closes");
+        assert!(
+            body.contains("send(app, false)"),
+            "turn_off stopped writing false"
+        );
+        assert!(
+            !body.contains("true"),
+            "turn_off can reach the on direction"
+        );
+        // The module's own code, without the tests that quote it.
+        let code = SOURCE
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("the module has a body before its tests");
+        assert_eq!(
+            code.matches("pub(crate) fn ").count(),
+            1,
+            "a second write escaped this module"
+        );
+        assert!(
+            !code.contains("pub fn send("),
+            "the write path is reachable without going through turn_off"
         );
     }
 
