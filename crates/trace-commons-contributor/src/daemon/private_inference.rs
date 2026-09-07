@@ -313,6 +313,81 @@ pub(crate) fn effective_metadata_declaration(
         })
 }
 
+/// The file IronWire reads its own configuration out of, inside a home.
+const CONFIG_FILE: &str = "config.toml";
+
+/// The staging name the config write lands on before it is renamed into place.
+const CONFIG_STAGING_FILE: &str = ".config.toml.trace-commons";
+
+/// What this daemon writes into a home nobody has configured yet.
+///
+/// `updates.check` defaults to on, and it governs two background jobs: the
+/// release check, which `embed::start` already suppresses by taking
+/// `UpdatePolicy::HostManaged`, and the provider-catalog refresh, which it
+/// does not. The refresh is the whole reason this file gets written.
+const UPDATES_OFF: &str = "\
+# Written by the Trace Commons contributor daemon, which hosts IronWire
+# in-process and does not ask it to make requests on its own behalf. Change
+# this line if you want those checks back; nothing here rewrites a file it
+# did not create.
+[updates]
+check = false
+";
+
+/// Switch off the checks IronWire would otherwise make on its own behalf,
+/// before this daemon takes ownership of `home`.
+///
+/// Left alone, a hosted proxy fetches a signed provider catalog sixty seconds
+/// after start and every six hours after that, for as long as the contributor
+/// leaves the switch on. Today that request cannot succeed and could not be
+/// used if it did: the host it names does not resolve, and the key the
+/// document would be checked against is an all-zero placeholder, so every
+/// document fails verification and the compiled-in defaults stay in force.
+/// What is left is a periodic outbound lookup from a contributor's machine
+/// that the contributor did not ask for and that buys them nothing, which is
+/// not a thing this client leaves switched on by default.
+///
+/// There is no API for this. `UpdatePolicy` governs the release check only --
+/// upstream says so in as many words -- so the configuration file is the only
+/// supported switch, and this is the narrowest use of it that works:
+///
+/// - A home that already holds a `config.toml` is somebody else's: the
+///   contributor's, or an `ironwire` CLI sharing this home. That slot is
+///   full, so it is left exactly as it is -- not parsed, not merged, not
+///   rewritten. A contributor who wants the catalog back deletes these lines,
+///   and nothing puts them back while the file exists.
+/// - A missing file is an empty slot, and this fills it with the one setting
+///   this daemon has an opinion about. Every other setting keeps its default.
+///
+/// The write is atomic, because a half-written `config.toml` does not parse
+/// and IronWire rightly refuses to start on a config it cannot read; a fix
+/// for a pointless network call must not become a reason the proxy will not
+/// come up. Every failure here is silent and harmless -- the worst case is
+/// the behaviour we have today.
+///
+/// Called from the start path, after the pointer probe, so the common case of
+/// an IronWire already running in this home never reaches it.
+fn suppress_self_initiated_requests(home: &Path) {
+    let config = home.join(CONFIG_FILE);
+    if config.exists() {
+        return;
+    }
+    if std::fs::create_dir_all(home).is_err() {
+        return;
+    }
+    let staged = home.join(CONFIG_STAGING_FILE);
+    if std::fs::write(&staged, UPDATES_OFF).is_err() {
+        let _ = std::fs::remove_file(&staged);
+        return;
+    }
+    // Re-check what the rename would otherwise overwrite: this is the only
+    // window in which a file could have appeared since the check above, and
+    // replacing one is the single thing this function must never do.
+    if config.exists() || std::fs::rename(&staged, &config).is_err() {
+        let _ = std::fs::remove_file(&staged);
+    }
+}
+
 /// One daemon's private-inference instance: at most one proxy, and the state
 /// the daemon reports for it.
 pub struct PrivateInference {
@@ -637,6 +712,7 @@ impl PrivateInference {
                 .unwrap_or_else(tokio::runtime::Handle::current);
             let home = self.home.clone();
             let port = self.port;
+            suppress_self_initiated_requests(&home);
             self.starting = Some(runtime.spawn(async move { embed::start(&home, port).await }));
         }
         // Await through the retained handle. Canceling a caller leaves the
@@ -715,6 +791,138 @@ impl PrivateInference {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Counts every event IronWire's catalog refresh emits, and nothing else.
+    ///
+    /// The refresh logs on both outcomes -- applied, unchanged, or skipped
+    /// after a failure -- so any event from that module is the network call
+    /// having been made. No event from it is the task not existing.
+    struct CatalogWatch(Arc<AtomicUsize>);
+
+    impl CatalogWatch {
+        const TARGET: &'static str = "ironwire_proxy::embed::catalog";
+    }
+
+    impl tracing::Subscriber for CatalogWatch {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            metadata.target() == Self::TARGET
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if event.metadata().target() == Self::TARGET {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    #[test]
+    fn an_unconfigured_home_is_given_the_switch_and_a_configured_one_is_left_alone() {
+        // Empty slot: the file is created, and it says the one thing it is
+        // for.
+        let fresh = tempfile::tempdir().unwrap();
+        let home = fresh.path().join("ironwire");
+        suppress_self_initiated_requests(&home);
+        let written = std::fs::read_to_string(home.join(CONFIG_FILE)).unwrap();
+        assert!(written.contains("[updates]"), "{written}");
+        assert!(written.contains("check = false"), "{written}");
+        // Nothing is left behind for IronWire to trip over.
+        assert!(!home.join(CONFIG_STAGING_FILE).exists());
+        // Running again is not a rewrite: by then the slot is full.
+        suppress_self_initiated_requests(&home);
+        assert_eq!(
+            std::fs::read_to_string(home.join(CONFIG_FILE)).unwrap(),
+            written
+        );
+
+        // Full slot, including one that asks for exactly what we would turn
+        // off, and one no parser could read. Both are somebody else's file.
+        for existing in [
+            "[updates]\ncheck = true\n",
+            "# half a file that\nis not [toml at all\n",
+            "",
+        ] {
+            let occupied = tempfile::tempdir().unwrap();
+            let config = occupied.path().join(CONFIG_FILE);
+            std::fs::write(&config, existing).unwrap();
+            suppress_self_initiated_requests(occupied.path());
+            assert_eq!(std::fs::read_to_string(&config).unwrap(), existing);
+            assert!(!occupied.path().join(CONFIG_STAGING_FILE).exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn the_written_switch_still_starts_a_proxy() {
+        // The file we write is one IronWire loads, parses and validates --
+        // writing it must not become a new way for the proxy to refuse to
+        // start.
+        let home = tempfile::tempdir().unwrap();
+        let mut host = PrivateInference::with_port(home.path().to_path_buf(), 0);
+        host.apply(true).await;
+        assert!(
+            matches!(
+                host.state(),
+                PrivateInferenceState::Running { .. }
+                    | PrivateInferenceState::RunningWithoutBackends { .. }
+            ),
+            "{:?}",
+            host.state()
+        );
+        assert!(
+            std::fs::read_to_string(home.path().join(CONFIG_FILE))
+                .unwrap()
+                .contains("check = false")
+        );
+        assert!(host.finish_stop().await);
+    }
+
+    /// Watch for the call itself, rather than reading the code that makes it.
+    ///
+    /// Ignored because it can only be answered in real time: the first fetch
+    /// is deliberately delayed sixty seconds so it never competes with a
+    /// contributor's first request. Run it with
+    /// `cargo test -p trace-commons-contributor --lib -- --ignored --exact \
+    ///  daemon::private_inference::tests::the_catalog_fetch_happens_by_default_and_stops_once_the_switch_is_written`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "waits out IronWire's sixty-second first-check delay twice"]
+    async fn the_catalog_fetch_happens_by_default_and_stops_once_the_switch_is_written() {
+        const WATCH: Duration = Duration::from_secs(90);
+        let seen = Arc::new(AtomicUsize::new(0));
+        tracing::subscriber::set_global_default(CatalogWatch(seen.clone())).unwrap();
+
+        // A home that asks for the checks keeps them: the slot is full, we do
+        // not touch it, and the fetch is made.
+        let asked = tempfile::tempdir().unwrap();
+        let config = asked.path().join(CONFIG_FILE);
+        std::fs::write(&config, "[updates]\ncheck = true\n").unwrap();
+        let mut host = PrivateInference::with_port(asked.path().to_path_buf(), 0);
+        host.apply(true).await;
+        tokio::time::sleep(WATCH).await;
+        let asked_for_it = seen.load(Ordering::SeqCst);
+        assert!(host.finish_stop().await);
+        assert_eq!(
+            std::fs::read_to_string(&config).unwrap(),
+            "[updates]\ncheck = true\n"
+        );
+        assert!(asked_for_it > 0, "the default path never made the call");
+
+        // A home nobody configured does not.
+        seen.store(0, Ordering::SeqCst);
+        let quiet = tempfile::tempdir().unwrap();
+        let mut host = PrivateInference::with_port(quiet.path().to_path_buf(), 0);
+        host.apply(true).await;
+        tokio::time::sleep(WATCH).await;
+        let unasked = seen.load(Ordering::SeqCst);
+        assert!(host.finish_stop().await);
+        assert_eq!(unasked, 0, "the call was still made {unasked} time(s)");
+    }
 
     #[test]
     fn effective_metadata_preserves_explicit_consent_and_requires_owned_opt_in() {
