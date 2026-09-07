@@ -73,13 +73,13 @@ The protocol crate is `crates/trace-commons-protocol`; the server crate is
 
 ## CI
 
-Every job in `.github/workflows/ci.yml` runs on every PR. There are twenty
-as of 2026-09-06; the list below covers the long-standing ones and is not
-a full inventory -- read the workflow for that. (It said "nine" while the
+Every job in `.github/workflows/ci.yml` runs on every PR. There are
+twenty-one as of 2026-09-07; the list below covers the long-standing ones and
+is not a full inventory -- read the workflow for that. (It said "nine" while the
 file held fifteen, and "eighteen" while it held twenty, so treat any count
 here as stale until re-checked.)
 
-Running is not the same as blocking. **Thirteen** of the twenty are required
+Running is not the same as blocking. **Thirteen** of the twenty-one are required
 status checks on `main`, and only those block a merge -- `README.md` lists
 them. `main` is also behind a merge queue (`main merge queue`), so the
 required checks are re-run against `main` at merge time; a PR that never
@@ -108,6 +108,17 @@ receives them times out of the queue instead of merging.
 - `pilot-bootstrap smoke` — `scripts/operator/pilot-bootstrap-smoke.sh`,
   exercising the JSONL loader path. Do not break it.
 - `operator-binaries smoke`.
+- `builds at the declared MSRV floor` — the only job that does NOT use
+  `dtolnay/rust-toolchain@stable`. It reads `rust-version` out of `cargo
+  metadata` (never a literal in the workflow) for both the root workspace and
+  the separate GTK workspace, audits each resolved dependency graph for a crate
+  demanding a newer rustc, and then checks the contributor CLI, the FFI dylib
+  and the GTK shell under the derived floor toolchain. Advisory, not required,
+  as of 2026-09-07. Every `@stable` job is structurally blind to an MSRV
+  regression -- stable is always at or above the floor -- which is why a
+  dependency bump left `main` green and failed all four
+  `contributor-v0.10.0` release jobs. Logic lives in
+  `scripts/ci/msrv-floor.sh`.
 - `macOS app tests` — `swift test` in `macos/`, on `macos-26`. The only
   thing that runs the Swift suite; before it existed those tests gated
   nothing. Needs `cargo build -p trace-commons-contributor-ffi` first,

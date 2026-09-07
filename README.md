@@ -454,8 +454,8 @@ Branch protection on `main` requires:
   | `windows contributor app` | `windows contributor crate tests` |
   | `linux-shell desktop integration (weston + portal)` | |
 
-  `.github/workflows/ci.yml` holds more jobs than this (twenty as of
-  2026-09-06); the other seven run on every PR but do not block the merge.
+  `.github/workflows/ci.yml` holds more jobs than this (twenty-one as of
+  2026-09-07); the other eight run on every PR but do not block the merge.
   All three desktop shells and the standalone permissive-crate build are on
   the required list, so a change that only builds in the workspace's unified
   feature set will not merge.
