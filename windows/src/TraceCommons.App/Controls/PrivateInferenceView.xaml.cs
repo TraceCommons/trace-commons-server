@@ -63,6 +63,216 @@ public sealed partial class PrivateInferenceView : UserControl
     public Task TurnOffAsync() => ViewModel.SetAsync(false);
 
     /// <summary>
+    /// "Send this tool's calls here", for one row.
+    /// </summary>
+    /// <remarks>
+    /// The first connect puts the exposure question first. Connecting a tool is
+    /// what makes the exposure real, so a contributor who has never been asked
+    /// is asked here, with the shared paragraph and the same two answers as the
+    /// first-run offer -- and an explicit accept, never an implied one.
+    /// </remarks>
+    private async void OnConnectHarness(object sender, RoutedEventArgs e)
+    {
+        if (IdOf(sender) is not { Length: > 0 } id)
+        {
+            return;
+        }
+
+        if (ViewModel.ConnectNeedsExposure && !await AskExposureAsync())
+        {
+            return;
+        }
+
+        await PlanThenConfirmAsync(id, HarnessSurface.Connect);
+    }
+
+    /// <summary>
+    /// "Stop sending this tool's calls here", for one row. No exposure
+    /// question: taking a tool back off exposes nothing.
+    /// </summary>
+    private async void OnDisconnectHarness(object sender, RoutedEventArgs e)
+    {
+        if (IdOf(sender) is not { Length: > 0 } id)
+        {
+            return;
+        }
+
+        await PlanThenConfirmAsync(id, HarnessSurface.Disconnect);
+    }
+
+    /// <summary>
+    /// The exposure question, before the first connect. True only on an
+    /// explicit accept that the daemon confirmed.
+    /// </summary>
+    /// <remarks>
+    /// <c>ContentDialogResult.None</c> is the dialog never having appeared, and
+    /// it is a no, not a yes: a contributor who was never shown the paragraph
+    /// has not agreed to anything.
+    /// </remarks>
+    private async Task<bool> AskExposureAsync()
+    {
+        var body = new StackPanel { Spacing = 8 };
+        body.Children.Add(Paragraph(ViewModel.What));
+        body.Children.Add(Paragraph(ViewModel.Exposure));
+        body.Children.Add(Paragraph(ViewModel.OfferNoRepoint));
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = ViewModel.OfferTitle,
+            Content = body,
+            PrimaryButtonText = ViewModel.OfferAccept,
+            CloseButtonText = ViewModel.OfferDecline,
+
+            // Declining is what Enter and Escape both do. Turning this on
+            // changes what anything else on this computer may send through;
+            // it does not get to be the thing a stray keypress commits.
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        // Three outcomes, not two. Primary is the accept. Close is a decline
+        // and is recorded, so the question is not put again. None is the
+        // dialog never having appeared -- nothing is recorded, because nobody
+        // was asked, and it is emphatically not a yes.
+        ContentDialogResult answer = await DialogGuard.ShowOnceAsync(dialog);
+        if (answer == ContentDialogResult.None)
+        {
+            return false;
+        }
+
+        if (answer != ContentDialogResult.Primary)
+        {
+            await ViewModel.DeclineExposureAsync();
+            return false;
+        }
+
+        return await ViewModel.AcceptExposureAsync();
+    }
+
+    /// <summary>
+    /// Works out one tool's edit, shows exactly what it would do, and writes
+    /// only on an explicit confirmation.
+    /// </summary>
+    /// <remarks>
+    /// The two steps never collapse into one. The daemon holds the worked-out
+    /// edit and hands back an id; this shows it and hands that id straight
+    /// back, adding nothing. A plan that turned out not to be committable --
+    /// nothing to change, a file that could not be read, a tool that is not
+    /// there -- is still shown, with the cancel alone: the contributor pressed
+    /// a button and is owed an answer either way.
+    ///
+    /// A plan the daemon has forgotten, or one whose file moved underneath it,
+    /// is not a failed write. Nothing was written. The list is read again so
+    /// the rows say where things actually stand.
+    /// </remarks>
+    private async Task PlanThenConfirmAsync(string id, string action, bool replanned = false)
+    {
+        HarnessPlan? plan = await ViewModel.PlanAsync(id, action);
+        if (plan is null)
+        {
+            await ViewModel.LoadHarnessesAsync();
+            return;
+        }
+
+        var body = new StackPanel { Spacing = 8 };
+        if (plan.Path is { Length: > 0 } path)
+        {
+            body.Children.Add(Monospaced(path));
+        }
+
+        // The changes verbatim, in the shared crate's own words. Nothing here
+        // summarises them, and nothing here reorders them.
+        foreach (string change in plan.Changes)
+        {
+            body.Children.Add(Monospaced(change));
+        }
+
+        // Occupied rides alongside the outcome and is never one. A slot the
+        // contributor already had a value in was left exactly as it was: this
+        // is reported, never drawn as a fault, and never paired with an action
+        // that would take the slot.
+        if (plan.HasOccupied)
+        {
+            body.Children.Add(Paragraph(ViewModel.SlotTaken));
+            foreach (HarnessOccupiedSlot slot in plan.Occupied)
+            {
+                body.Children.Add(Monospaced(slot.Slot));
+                body.Children.Add(Monospaced(slot.Current));
+            }
+        }
+
+        // A file that could not be read is a refusal that needs a human, not
+        // "nothing to change". The two must never be drawn the same way.
+        if (plan.Outcome == HarnessPlanOutcome.Unparseable)
+        {
+            body.Children.Add(Paragraph(ViewModel.UnreadableConfig));
+        }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = ViewModel.PreviewTitle,
+            Content = body,
+            CloseButtonText = ViewModel.PreviewCancel,
+
+            // Leaving the file alone is what Enter and Escape both do.
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        // The confirm button exists only where there is a minted plan to
+        // commit. Every other outcome gets the cancel alone, so a dialog can
+        // never offer to write something the daemon refused to work out.
+        if (plan.IsCommittable)
+        {
+            dialog.PrimaryButtonText = ViewModel.PreviewConfirm;
+        }
+
+        ContentDialogResult answer = await DialogGuard.ShowOnceAsync(dialog);
+        if (answer != ContentDialogResult.Primary || !plan.IsCommittable || plan.PlanId is null)
+        {
+            return;
+        }
+
+        HarnessCommit? committed = await ViewModel.CommitAsync(plan.PlanId);
+        await ViewModel.LoadHarnessesAsync();
+        if (committed is not null)
+        {
+            return;
+        }
+
+        // The plan was gone, or the file moved under it. Nothing was written,
+        // and nothing is retried: what the contributor was shown is no longer
+        // what would happen. Work it out again from the file as it is now and
+        // show the new preview -- ONCE. A second failure is a file something
+        // else is writing, and a loop that kept re-asking would be worse than
+        // saying nothing.
+        if (ViewModel.LastPlanWentStale && !replanned)
+        {
+            await PlanThenConfirmAsync(id, action, replanned: true);
+        }
+    }
+
+    /// <summary>Which row a button press came from.</summary>
+    private static string? IdOf(object sender) =>
+        sender is FrameworkElement element ? element.Tag as string : null;
+
+    private static TextBlock Paragraph(string text) =>
+        new() { Text = text, TextWrapping = TextWrapping.Wrap };
+
+    /// <summary>
+    /// A path or a change, drawn as what it is: an exact string in somebody's
+    /// file, selectable so it can be checked against the file itself.
+    /// </summary>
+    private static TextBlock Monospaced(string text) =>
+        new()
+        {
+            Text = text,
+            TextWrapping = TextWrapping.Wrap,
+            IsTextSelectionEnabled = true,
+            FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
+        };
+
+    /// <summary>
     /// The switch itself.
     ///
     /// Guarded against the programmatic fill: the toggle is bound one-way to
