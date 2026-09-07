@@ -33,6 +33,9 @@ public struct PrivateInferenceCopy: Decodable, Equatable, Sendable {
     public let stateCrashed: String
     public let quitAlsoStops: String
     public let writeUnconfirmed: String
+    public let settingsMoved: String
+    public let trayTurnOff: String
+    public let trayOpenToTurnOn: String
 
     /// `CaseIterable` so a test on the far side can compare the exported
     /// field set against the declared one in BOTH directions -- a field the
@@ -63,6 +66,9 @@ public struct PrivateInferenceCopy: Decodable, Equatable, Sendable {
         case stateCrashed = "state_crashed"
         case quitAlsoStops = "quit_also_stops"
         case writeUnconfirmed = "write_unconfirmed"
+        case settingsMoved = "settings_moved"
+        case trayTurnOff = "tray_turn_off"
+        case trayOpenToTurnOn = "tray_open_to_turn_on"
     }
 
     /// All or nothing, for the reason on the type.

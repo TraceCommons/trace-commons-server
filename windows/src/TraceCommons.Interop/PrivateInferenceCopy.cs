@@ -107,6 +107,22 @@ public sealed record PrivateInferenceCopy
     [JsonPropertyName("write_unconfirmed")]
     public string WriteUnconfirmed { get; init; } = string.Empty;
 
+    /// <summary>The sentence the settings card shows once the control has moved out of it.</summary>
+    [JsonPropertyName("settings_moved")]
+    public string SettingsMoved { get; init; } = string.Empty;
+
+    /// <summary>The tray action while it is on. Turning it off needs no sentence in front of it.</summary>
+    [JsonPropertyName("tray_turn_off")]
+    public string TrayTurnOff { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The tray action while it is off. Opens the screen rather than acting: turning it ON
+    /// changes what anything else on this computer may send through, which is not a decision
+    /// to take from a menu with the consequence off-screen.
+    /// </summary>
+    [JsonPropertyName("tray_open_to_turn_on")]
+    public string TrayOpenToTurnOn { get; init; } = string.Empty;
+
     /// <summary>Every sentence for the complete-payload check, not a rendering order.</summary>
     public string[] Sentences =>
         new[]
@@ -135,5 +151,8 @@ public sealed record PrivateInferenceCopy
             StateCrashed,
             QuitAlsoStops,
             WriteUnconfirmed,
+            SettingsMoved,
+            TrayTurnOff,
+            TrayOpenToTurnOn,
         };
 }

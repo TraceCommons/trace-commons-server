@@ -19,7 +19,7 @@ final class PrivateInferenceSurfaceTests: XCTestCase {
          "state_running":"S-RUNNING","state_running_no_backends":"S-NO-BACKENDS",
          "state_running_elsewhere":"S-ELSEWHERE","state_port_in_use":"S-PORT",
          "state_start_failed":"S-FAILED","state_crashed":"S-CRASHED",
-         "quit_also_stops":"QUIT","write_unconfirmed":"UNCONFIRMED"}
+         "quit_also_stops":"QUIT","write_unconfirmed":"UNCONFIRMED","settings_moved":"MOVED","tray_turn_off":"TRAYOFF","tray_open_to_turn_on":"TRAYON"}
         """
 
     private func copy() -> PrivateInferenceCopy {

@@ -376,7 +376,30 @@ pub struct PrivateInferenceCopy {
     pub state_crashed: &'static str,
     pub quit_also_stops: &'static str,
     pub write_unconfirmed: &'static str,
+    pub settings_moved: &'static str,
+    pub tray_turn_off: &'static str,
+    pub tray_open_to_turn_on: &'static str,
 }
+
+/// The sentence the settings card shows once the control has moved out of it.
+///
+/// The card stays: a contributor who learned where the switch was should find
+/// a pointer there, not a hole.
+pub const SETTINGS_MOVED: &str = "Model calls has its own screen now.";
+
+/// The tray action while it is on.
+///
+/// Turning it OFF from a menu is safe in a way turning it on is not: it only
+/// ever reduces what this computer will answer, so it needs no sentence in
+/// front of it.
+pub const TRAY_TURN_OFF: &str = "Stop answering model calls";
+
+/// The tray action while it is off.
+///
+/// Trailing ellipsis because it opens the screen rather than acting: turning
+/// it ON changes what anything else on this computer may send through, and
+/// that is not a decision to take from a menu with the consequence off-screen.
+pub const TRAY_OPEN_TO_TURN_ON: &str = "Answer model calls on this computer…";
 
 /// The payload, built from the constants above.
 #[must_use]
@@ -406,6 +429,9 @@ pub fn private_inference_copy() -> PrivateInferenceCopy {
         state_crashed: STATE_CRASHED,
         quit_also_stops: QUIT_ALSO_STOPS,
         write_unconfirmed: WRITE_UNCONFIRMED,
+        settings_moved: SETTINGS_MOVED,
+        tray_turn_off: TRAY_TURN_OFF,
+        tray_open_to_turn_on: TRAY_OPEN_TO_TURN_ON,
     }
 }
 
@@ -693,7 +719,7 @@ mod tests {
         let fields = payload.as_object().expect("a JSON object");
         assert_eq!(
             fields.len(),
-            24,
+            27,
             "the payload's field count changed -- update the shells' decoders \
              and the tests that pin the set"
         );

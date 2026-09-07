@@ -1669,7 +1669,7 @@ retained-shutdown producer confirms cleanup; a port alone is metadata, not
 proof that calls can be answered.
 
 The companion C ABI copy payload (`tc_private_inference_copy`, not a daemon
-settings key) supplies these 24 fixed string fields:
+settings key) supplies these 27 fixed string fields:
 
 - `destination`, `subtitle`;
 - `offer_title`, `offer_what`, `offer_exposure`, `offer_no_repoint`,
@@ -1678,7 +1678,8 @@ settings key) supplies these 24 fixed string fields:
 - `state_off`, `state_unreported`, `state_unknown`, `state_stopping`,
   `state_running`, `state_running_no_backends`, `state_running_elsewhere`,
   `state_port_in_use`, `state_start_failed`, `state_crashed`;
-- `quit_also_stops`, `write_unconfirmed`.
+- `quit_also_stops`, `write_unconfirmed`;
+- `settings_moved`, `tray_turn_off`, `tray_open_to_turn_on`.
 
 State sentences and tones are chosen by the shared Rust table rather than by
 shell-authored branching. Copy-field inventory parity is checked separately
