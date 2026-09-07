@@ -179,14 +179,6 @@ fn indicator_tone(tone: copy::PrivateInferenceTone) -> Tone {
     }
 }
 
-/// Raise this screen. The tray's whole vocabulary for it, and the only way
-/// anything outside this window may reach it -- see `tray.rs`.
-pub fn present(app: &Rc<App>) {
-    app.stack
-        .set_visible_child_name(super::PRIVATE_INFERENCE_SCREEN);
-    app.window.present();
-}
-
 pub fn wire(app: &Rc<App>) {
     // The switch writes on its own: flipping it IS the contributor acting,
     // and there is nothing else on the screen to fill in first.

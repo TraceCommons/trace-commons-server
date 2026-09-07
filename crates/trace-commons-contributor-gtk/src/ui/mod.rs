@@ -62,7 +62,7 @@ const COLUMN_TIGHTEN: i32 = 680;
 /// never retyped: the word this surface may not say is "private", and the
 /// only way three shells keep saying the same true thing is by reading one
 /// definition. The stack name below it is internal and is read by nobody.
-const SCREENS: [(&str, &str, &str); 4] = [
+pub(crate) const SCREENS: [(&str, &str, &str); 4] = [
     ("queue", "Queue", "view-list-symbolic"),
     ("history", "History", "document-open-recent-symbolic"),
     (
@@ -532,15 +532,18 @@ impl App {
     }
 
     /// The tray icon's entire vocabulary reaches the window through here:
-    /// a click of any kind raises it at the queue. See `tray.rs` for why
-    /// that is the whole of it, and why absence of a tray (most Linux
-    /// desktops, including plain GNOME) never reaches this at all.
+    /// a click of any kind raises it, and a menu press raises it at the
+    /// screen that was pressed. That is the whole of it -- nothing outside
+    /// this window writes a setting or sends anything, and every screen the
+    /// tray can name is one this window already has. See `tray.rs` for the
+    /// rest, and for why absence of a tray (most Linux desktops, including
+    /// plain GNOME) never reaches this at all.
     fn wire_tray(self: &Rc<Self>) {
         let rx = crate::tray::spawn();
         let app = Rc::clone(self);
         glib::spawn_future_local(async move {
-            while rx.recv().await.is_ok() {
-                app.stack.set_visible_child_name("queue");
+            while let Ok(screen) = rx.recv().await {
+                app.stack.set_visible_child_name(screen);
                 app.window.present();
             }
         });
