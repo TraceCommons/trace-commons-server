@@ -344,6 +344,20 @@ pub fn plan(
         return Err(ERR_UNKNOWN_HARNESS);
     };
 
+    // Ahead of the tool's own state, deliberately.
+    //
+    // "There is nowhere to send calls" is a fact about this computer, not
+    // about the tool, and it is true whatever the tool's state is. Deciding it
+    // second made the refusal unreachable for any tool that is not installed:
+    // the caller got `NotInstalled` and never learned there was no destination
+    // either. It also made the outcome depend on what happens to be installed
+    // on the machine running the code, which is not a property this function
+    // should have -- and which made its own test pass only on a machine with
+    // the tool installed.
+    if matches!(action, HarnessAction::Connect) && port.is_none() {
+        return Err(ERR_NO_DESTINATION);
+    }
+
     let refuse = |outcome: PlanOutcome| PlanView {
         plan_id: None,
         tool_id: tool_id.to_string(),
@@ -957,18 +971,37 @@ mod tests {
         assert_eq!(err, ERR_UNKNOWN_HARNESS);
     }
 
+    /// A connect with nowhere to send calls is refused by name, for EVERY
+    /// tool, whatever is installed on the machine running this test.
+    ///
+    /// The earlier version asked only about `claude` and passed only on a
+    /// machine that had Claude Code installed: `plan` consulted the tool's
+    /// state first, so a missing tool answered `NotInstalled` and the refusal
+    /// under test never happened. It passed on a developer laptop and failed
+    /// on a clean checkout -- and would have started failing on that laptop
+    /// too the moment the contributor connected Claude Code, which is the one
+    /// thing this whole feature exists to let them do.
+    ///
+    /// Asserting it across the whole catalog rather than one id is what makes
+    /// it independent of the machine: the answer must not depend on which of
+    /// these happens to be installed.
     #[test]
     fn a_connect_with_no_destination_is_refused_by_name() {
         let store = PlanStore::default();
-        let err = plan(
-            &store,
-            &Catalog::default(),
-            "claude",
-            HarnessAction::Connect,
-            None,
-        )
-        .expect_err("nothing is answering, so there is no port to name");
-        assert_eq!(err, ERR_NO_DESTINATION);
+        let catalog = Catalog::default();
+        let tools = tools::all(&catalog);
+        assert!(!tools.is_empty(), "the built-ins are always present");
+
+        for tool in &tools {
+            let err = plan(&store, &catalog, &tool.id, HarnessAction::Connect, None)
+                .expect_err("nothing is answering, so there is no port to name");
+            assert_eq!(
+                err, ERR_NO_DESTINATION,
+                "{} must be refused for having nowhere to send calls, \
+                 whatever its own state is",
+                tool.id
+            );
+        }
     }
 
     #[test]
