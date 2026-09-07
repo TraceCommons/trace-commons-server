@@ -62,11 +62,27 @@ The design was chosen as: adopt a harness once by writing its config, then
 toggle serve/pass-through **inside** IronWire, so ordinary flipping never
 touches a file.
 
-**That switch does not exist.** IronWire's control API is only
-`/_ironwire/health` and `/_ironwire/status`, and there is no per-tool
-enable, disable or pass-through anywhere in `ironwire_proxy` or
-`ironwire_core`. The only mechanism is connect/disconnect, and both are config
-writes.
+**That switch does not exist** -- but not for the reason first recorded here.
+
+An earlier draft of this section claimed the control API was only
+`/_ironwire/health` and `/_ironwire/status`. **That was wrong**, and it came
+from a grep that matched full-path string literals while the routes are
+registered as segments on a nested router. `ironwire_proxy/src/control.rs:491`
+routes eleven: `/status`, `/backends`, `/pin`, `/admission-binding`,
+`/settings`, `/privacy`, `/consent`, `/tools`, `/probe`, `/log`, `/events`,
+`/health`. This daemon already calls `/settings`.
+
+The conclusion survives, for a better reason. `POST /_ironwire/tools` is
+connect/disconnect, not serve/pass-through: its handler calls `plan_connect` or
+`plan_disconnect` and then **commits in the same request**. There is still no
+per-tool pass-through anywhere, so ordinary flipping cannot avoid a config
+write.
+
+That atomicity is also why this design calls `ironwire_agents` in process rather
+than going through the control API: `/tools` offers **no preview**. It decides
+and writes in one step, which is exactly the step this design puts a
+confirmation in front of. Working in process is what keeps plan and commit
+separable.
 
 So this spec is written against connect/disconnect. That is a smaller loss than
 it first appears, because the three rules above already remove the hazards that
