@@ -105,6 +105,13 @@ pub struct PendingUndo {
 
 pub struct App {
     pub worker: Worker,
+    /// Where the model-calls switch stands, as the tray reads it.
+    ///
+    /// Written on every settings read (see `private_inference::render`) and
+    /// read by nothing that paints: it is the switch's position, not a claim
+    /// that a listener is running. It decides which way the tray's one
+    /// action row points and nothing else.
+    pub tray: crate::tray::TrayState,
     pub window: adw::ApplicationWindow,
     pub toasts: adw::ToastOverlay,
     pub stack: adw::ViewStack,
@@ -333,6 +340,7 @@ impl App {
 
         let app = Rc::new(Self {
             worker,
+            tray: crate::tray::TrayState::default(),
             window,
             toasts,
             stack,
@@ -532,18 +540,37 @@ impl App {
     }
 
     /// The tray icon's entire vocabulary reaches the window through here:
-    /// a click of any kind raises it, and a menu press raises it at the
-    /// screen that was pressed. That is the whole of it -- nothing outside
-    /// this window writes a setting or sends anything, and every screen the
-    /// tray can name is one this window already has. See `tray.rs` for the
-    /// rest, and for why absence of a tray (most Linux desktops, including
-    /// plain GNOME) never reaches this at all.
+    /// a click of any kind raises it, a menu press raises it at the screen
+    /// that was pressed, and one row can stop this computer answering model
+    /// calls.
+    ///
+    /// That last one is the only write anything outside this window can ask
+    /// for, and it goes in one direction. There is no request that turns
+    /// model calls ON -- `tray.rs` has no word for it -- because enabling it
+    /// changes what anything else running here may send through, and the
+    /// sentence saying so is on the screen the off-state row opens instead.
+    /// Turning it off only ever reduces what this computer answers, which is
+    /// why that direction is safe from a menu and the other is not.
+    ///
+    /// The window comes up either way: the daemon's answer to a stop is a
+    /// sentence only the model-calls screen renders, and a change nobody can
+    /// see the result of is the shape this surface avoids. See `tray.rs` for
+    /// the rest, and for why absence of a tray (most Linux desktops,
+    /// including plain GNOME) never reaches this at all.
     fn wire_tray(self: &Rc<Self>) {
-        let rx = crate::tray::spawn();
+        let rx = crate::tray::spawn(self.tray.clone());
         let app = Rc::clone(self);
         glib::spawn_future_local(async move {
-            while let Ok(screen) = rx.recv().await {
-                app.stack.set_visible_child_name(screen);
+            while let Ok(request) = rx.recv().await {
+                match request {
+                    crate::tray::TrayRequest::Open(screen) => {
+                        app.stack.set_visible_child_name(screen);
+                    }
+                    crate::tray::TrayRequest::StopAnsweringModelCalls => {
+                        app.stack.set_visible_child_name(PRIVATE_INFERENCE_SCREEN);
+                        private_inference::turn_off(&app);
+                    }
+                }
                 app.window.present();
             }
         });
