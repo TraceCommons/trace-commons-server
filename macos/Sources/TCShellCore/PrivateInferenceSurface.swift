@@ -100,6 +100,14 @@ public enum PrivateInferenceTone: Equatable, Sendable {
         default: return .neutral
         }
     }
+
+    /// Whether an indicator may paint this tone as working.
+    ///
+    /// `Clear` alone. A tab badge and a tray glyph both invite a green dot,
+    /// and painting `refused` or `held` as "on" is the fail-open this
+    /// surface exists to prevent. Shells must ask this, never the settings
+    /// boolean: the switch says what was asked for, this says what is true.
+    public var readsAsWorking: Bool { self == .clear }
 }
 
 /// `private_inference_state` as the daemon reports it.

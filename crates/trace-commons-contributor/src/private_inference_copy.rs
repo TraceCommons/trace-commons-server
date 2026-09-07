@@ -216,6 +216,21 @@ pub enum PrivateInferenceTone {
     Refused,
 }
 
+impl PrivateInferenceTone {
+    /// Whether an indicator may paint this tone as working. [`Self::Clear`]
+    /// alone.
+    ///
+    /// The one predicate every shell indicator asks -- a tab badge, a tray
+    /// glyph, a menu-bar dot. Painting [`Self::Refused`] or [`Self::Held`] as
+    /// on is the fail-open this surface exists to prevent, and asking the
+    /// settings switch instead is the other way to arrive at it: the switch
+    /// says what was asked for, this says what is true.
+    #[must_use]
+    pub fn reads_as_working(self) -> bool {
+        matches!(self, PrivateInferenceTone::Clear)
+    }
+}
+
 /// The sentence for one state label, as reported by `private_inference_state`.
 ///
 /// Missing status is unreported; unfamiliar nonempty states are unavailable.
@@ -410,6 +425,48 @@ pub use crate::daemon::private_inference::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only `Clear` may be painted as working. The GTK shell reads this
+    /// predicate directly rather than through the ABI, so it is pinned here
+    /// as well as in Swift.
+    #[test]
+    fn only_clear_reads_as_working() {
+        assert!(PrivateInferenceTone::Clear.reads_as_working());
+        for tone in [
+            PrivateInferenceTone::Neutral,
+            PrivateInferenceTone::Held,
+            PrivateInferenceTone::Attention,
+            PrivateInferenceTone::Refused,
+        ] {
+            assert!(
+                !tone.reads_as_working(),
+                "{tone:?} must not read as working"
+            );
+        }
+    }
+
+    /// The states a daemon can report, filtered through the shared table:
+    /// `running` is the only one an indicator may light up.
+    #[test]
+    fn only_a_running_listener_reads_as_working() {
+        assert!(state_tone(LABEL_RUNNING).reads_as_working());
+        for label in [
+            "",
+            LABEL_OFF,
+            LABEL_STOPPING,
+            LABEL_RUNNING_NO_BACKENDS,
+            LABEL_RUNNING_ELSEWHERE,
+            LABEL_PORT_IN_USE,
+            LABEL_START_FAILED,
+            LABEL_CRASHED,
+            "a_state_from_a_later_daemon",
+        ] {
+            assert!(
+                !state_tone(label).reads_as_working(),
+                "{label} must not read as working"
+            );
+        }
+    }
 
     /// The nav wording exists, because a top-level destination needs a label
     /// in the switcher and a line under its title.
