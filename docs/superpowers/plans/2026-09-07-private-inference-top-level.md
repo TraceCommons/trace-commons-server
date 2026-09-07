@@ -566,3 +566,20 @@ loudly (or worse, silently):
 GTK needs nothing extra for the tone predicate:
 `crates/trace-commons-contributor-gtk/src/copy.rs:2094` re-exports from
 `private_inference_copy` directly, so `reads_as_working()` is already reachable.
+
+5. **`ShellWordingTests` is a hard per-file ratchet, and Task 8 will hit it.**
+   `macos/Tests/TCShellCoreTests/ShellWordingTests.swift` (mirrored by
+   `ShellWordingTests.cs` on Windows) counts sentence-shaped string literals per
+   file and holds each count as **a CEILING AND A FLOOR both**: adding a sentence
+   fails, and *removing* one fails too. "Never raise a number. A new file must
+   never be added here."
+
+   Consequences: any NEW view file must author **zero** sentence literals -- take
+   every word from the copy payload. And Task 8, which removes the inline control
+   from `SettingsView.swift`, will push that file BELOW its recorded count and
+   fail until the baseline entry is lowered deliberately, in the same commit.
+   That is the intended workflow, not a broken test: the number is meant to
+   ratchet down as copy moves behind the ABI.
+
+   The numbers are measured, not typed -- regenerate with `TC_WORDING_DUMP=1`
+   rather than guessing.
