@@ -2092,7 +2092,7 @@ pub use trace_commons_contributor::routing_copy::{
 // matching on text, and two refusal sentences begin with the same two
 // words.
 pub use trace_commons_contributor::private_inference_copy::{
-    OFFER_ACCEPT as PRIVATE_INFERENCE_OFFER_ACCEPT,
+    DESTINATION as PRIVATE_INFERENCE_DESTINATION, OFFER_ACCEPT as PRIVATE_INFERENCE_OFFER_ACCEPT,
     OFFER_ASKED_ONCE as PRIVATE_INFERENCE_OFFER_ASKED_ONCE,
     OFFER_DECLINE as PRIVATE_INFERENCE_OFFER_DECLINE,
     OFFER_EXPOSURE as PRIVATE_INFERENCE_OFFER_EXPOSURE,
@@ -2101,6 +2101,7 @@ pub use trace_commons_contributor::private_inference_copy::{
     PrivateInferenceTone, SETTINGS_APPLIES_AT_ONCE as PRIVATE_INFERENCE_APPLIES_AT_ONCE,
     SETTINGS_TITLE as PRIVATE_INFERENCE_TITLE, SETTINGS_TOGGLE as PRIVATE_INFERENCE_TOGGLE,
     STATE_OFF as PRIVATE_INFERENCE_STATE_OFF, STATE_UNKNOWN as PRIVATE_INFERENCE_STATE_UNKNOWN,
+    SUBTITLE as PRIVATE_INFERENCE_SUBTITLE,
     WRITE_UNCONFIRMED as PRIVATE_INFERENCE_WRITE_UNCONFIRMED,
     serving_line as private_inference_serving_line, should_offer as private_inference_should_offer,
     state_line as private_inference_state_line, state_tone as private_inference_state_tone,
