@@ -157,14 +157,21 @@ So each harness reports three states, not two:
 Only the third means it works, and it is the one the surface should make
 obvious.
 
-**Attribution is approximate, and must be described as such.** The ledger
-records `path`, not a tool id. Protocol family separates the two built-in tools
-today -- Claude Code speaks Anthropic, Codex speaks OpenAI -- but two tools of
-the same family are indistinguishable. The surface must not claim per-tool
-activity it cannot support: attribute where the family is unambiguous, and
-otherwise report activity without naming a tool. Making this exact needs an
-upstream change -- a per-tool path chosen at connect time, which
-`plan_connect(id, port, catalog)` does not currently expose.
+**Attribution is approximate, and must be described as such.** An earlier draft
+said the family comes from the ledger's `path` field. **That was wrong** -- two
+independent readings of the pinned revision found `path` is the path beneath the
+facade, and the protocol family is the `facade` column, literally `"anthropic"`
+or `"openai"`. Our `RoutedExchange` already carries it, so no parsing is needed.
+
+The ambiguity is also narrower than that draft claimed. A catalog tool's family
+IS knowable, from `AgentSetting.facade`. So the only unattributable case is two
+CONNECTED tools sharing one family -- never a tool of unknown family. That case
+gets its own state and is NOT painted as working, because "one of these two
+answered" is not the same claim as "this one is answering".
+
+The surface must not claim per-tool activity it cannot support: attribute where
+the family is unambiguous, and otherwise report that a call arrived without
+naming a tool.
 
 ### The states that are not the happy path
 
