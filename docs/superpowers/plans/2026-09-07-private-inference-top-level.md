@@ -557,11 +557,16 @@ loudly (or worse, silently):
    every new key or roughly 11 tests fail at once.
 3. `docs/contributor-daemon-ipc-v1_1.md:1672` enumerates the payload fields and
    states the count. It is **not** test-enforced, so it goes stale silently.
-4. Windows tolerates unknown keys today --
-   `windows/src/TraceCommons.Interop/PrivateInferenceCopy.cs` is a `sealed record`
-   with no `JsonUnmappedMemberHandling.Disallow` and no field-count assertion --
-   so new keys are ignored rather than rejected. The Windows shell still has to
-   add the properties to *consume* them.
+4. **Windows does NOT tolerate a new key -- adding one turns the Windows crate
+   tests red immediately.** An earlier version of this note said otherwise and was
+   wrong. `PrivateInferenceCopy.cs` has no `JsonUnmappedMemberHandling.Disallow`
+   and no field-count assertion, which is what that reading checked -- but
+   `windows/tests/TraceCommons.Interop.Tests/PrivateInferenceTests.cs:52`,
+   `EveryExportedFieldIsDecodedAndNoneIsInvented`, asserts set equality in BOTH
+   directions. Adding a field to the Rust export without adding the C# property
+   fails it. The Windows shell must add the properties to stay **green**, not
+   merely to consume them, and the two sides have to land together or the branch
+   is red in between.
 
 GTK needs nothing extra for the tone predicate:
 `crates/trace-commons-contributor-gtk/src/copy.rs:2094` re-exports from
