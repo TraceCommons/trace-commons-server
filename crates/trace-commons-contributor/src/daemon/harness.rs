@@ -1,0 +1,989 @@
+//! Listing the coding tools on this machine, and connecting them one at a
+//! time.
+//!
+//! Almost nothing here is invented. `ironwire_agents::tools` already answers
+//! "which tools does this machine have, and are they pointed at us", already
+//! plans an edit before making it, and already carries the three rules that
+//! make editing a file we do not own acceptable at all:
+//!
+//! - **Never rewrite a file we cannot parse.** A contributor's own syntax
+//!   error must not come back looking like ours.
+//! - **Fill an empty slot; leave a full one alone.** A value already in the
+//!   key is another destination or a deliberate choice; it is reported, never
+//!   overwritten.
+//! - **Remove only what we put there.**
+//!
+//! This module carries those rules across the socket without letting a shell
+//! route around them. In particular:
+//!
+//! # Plan and commit are two calls, and there is no third
+//!
+//! `harness_plan` works out the edit and writes nothing. `harness_commit`
+//! takes a plan id and nothing else -- no tool id, no action, no port -- so a
+//! shell cannot ask for a write it has not first been shown. There is
+//! deliberately no method that does both. `ironwire_agents::Planned` keeps the
+//! file contents it would write in private fields, so a plan cannot be
+//! reconstructed from what crossed the socket either; it is held here, in this
+//! process, between the two calls.
+//!
+//! # The file is re-read at commit
+//!
+//! A plan is worked out against the file as it was. `commit` writes the whole
+//! file, so a tool that rewrote its own config in between would have that
+//! rewrite silently reverted. The digest of the file as it was read at plan
+//! time is kept beside the plan and checked again before the write; a file
+//! that moved refuses with `harness-config-changed` and the shell plans
+//! again.
+//!
+//! # Nothing from inside the contributor's file is logged or returned
+//!
+//! `changes` and `occupied` are IronWire's own words about slots and values,
+//! and the occupied *values* are shown deliberately -- that is the whole
+//! point of reporting rather than overwriting. Parse-failure detail is not:
+//! serde and toml errors quote the offending line, so an unparseable file is
+//! reported as a label and a path, never as its own contents.
+
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use chrono::{DateTime, Utc};
+use ironwire_agents::tools;
+use ironwire_catalog::schema::Catalog;
+use uuid::Uuid;
+
+use crate::harness_state::{
+    self, HarnessAction, HarnessEvidence, HarnessState, PlanOutcome, built_in_family,
+};
+
+/// How long the window looked at for "has a call actually arrived".
+///
+/// The ledger's own refresh window is 24 hours, so nothing longer can be
+/// answered anyway. Kept as a named constant because it is a claim a shell
+/// repeats: "answering" means a call arrived inside this window, not ever.
+pub const ACTIVITY_WINDOW_HOURS: i64 = 24;
+
+/// How long a worked-out plan stays committable.
+///
+/// A preview a contributor left on screen over lunch describes a file as it
+/// was at lunchtime. Expiring it costs one extra call and removes a class of
+/// stale write entirely.
+const PLAN_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// How many plans are held at once.
+///
+/// One shell, one dialog, one plan -- but a shell that plans on every hover
+/// must not grow this without bound, and the oldest is dropped rather than
+/// the newest refused.
+const MAX_HELD_PLANS: usize = 8;
+
+/// `harness_commit` was handed a plan id this daemon does not hold.
+///
+/// Expired, already committed, or never minted. All three are the same
+/// instruction to a shell: plan again and show the contributor the result.
+pub const ERR_PLAN_UNKNOWN: &str = "harness-plan-unknown";
+
+/// The file changed between the plan and the commit.
+pub const ERR_CONFIG_CHANGED: &str = "harness-config-changed";
+
+/// The write itself failed.
+pub const ERR_COMMIT_FAILED: &str = "harness-commit-failed";
+
+/// No tool by that id.
+pub const ERR_UNKNOWN_HARNESS: &str = "harness-unknown";
+
+/// A connect was asked for while nothing on this machine is answering model
+/// calls, so there is no port to point the tool at.
+///
+/// Not a failure of the tool or the file: the destination has to be on
+/// before a config can name it. A shell that gets this asks the exposure
+/// question and turns the destination on, then plans again.
+pub const ERR_NO_DESTINATION: &str = "harness-no-destination";
+
+/// An edit that has been worked out and not made.
+struct HeldPlan {
+    id: Uuid,
+    tool_id: String,
+    action: HarnessAction,
+    planned: tools::Planned,
+    /// SHA-256 of the config file as it was when the plan was worked out, or
+    /// `None` when the file did not exist. Compared again before the write.
+    digest: Option<String>,
+    minted: Instant,
+}
+
+/// The plans this daemon is holding between a preview and its commit.
+#[derive(Default)]
+pub struct PlanStore {
+    held: Mutex<VecDeque<HeldPlan>>,
+}
+
+impl std::fmt::Debug for PlanStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // A plan holds the contents it would write, which is the
+        // contributor's own configuration file. It does not appear in a
+        // debug line.
+        f.debug_struct("PlanStore").finish_non_exhaustive()
+    }
+}
+
+impl PlanStore {
+    fn insert(&self, plan: HeldPlan) {
+        let Ok(mut held) = self.held.lock() else {
+            return;
+        };
+        held.retain(|p| p.minted.elapsed() < PLAN_TTL);
+        while held.len() >= MAX_HELD_PLANS {
+            held.pop_front();
+        }
+        held.push_back(plan);
+    }
+
+    /// Take a plan out, if it is still there and still fresh.
+    ///
+    /// Removed rather than read: a plan is a permission to write a file once.
+    /// Leaving it in place would let a shell replay one commit against a file
+    /// that has since been disconnected.
+    fn take(&self, id: Uuid) -> Option<HeldPlan> {
+        let mut held = self.held.lock().ok()?;
+        held.retain(|p| p.minted.elapsed() < PLAN_TTL);
+        let at = held.iter().position(|p| p.id == id)?;
+        held.remove(at)
+    }
+}
+
+/// SHA-256 of a file, or `None` when it is not there.
+///
+/// A file that exists and cannot be read yields `Some` of the digest of
+/// nothing -- no: it yields `None` as well, which is deliberate. A plan whose
+/// file could not be read at plan time is one `commit` will refuse anyway,
+/// and the alternative is a digest that says "absent" for a file that is
+/// present.
+fn config_digest(path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+/// One tool, as the wire describes it.
+#[derive(Debug, Clone)]
+pub struct HarnessRow {
+    pub id: String,
+    pub name: String,
+    pub installed: bool,
+    pub connected: bool,
+    pub config_path: Option<PathBuf>,
+    pub connect_command: String,
+    pub family: Option<&'static str>,
+    pub state: HarnessState,
+}
+
+/// What the ledger says arrived, by protocol family.
+///
+/// A family and a time, never a tool. The ledger records a facade, and this
+/// type is the shape of that limitation: a caller can say "a call arrived"
+/// and, only where the family belongs to exactly one connected tool, say
+/// which tool it was.
+#[derive(Debug, Clone, Default)]
+pub struct FamilyActivity {
+    /// Whether the ledger answered at all. False means no evidence about any
+    /// tool, which a surface must not render as "no calls yet".
+    pub readable: bool,
+    /// `(family, last call, count)`, oldest-agnostic, one row per family
+    /// seen in the window.
+    pub families: Vec<(String, DateTime<Utc>, usize)>,
+}
+
+impl FamilyActivity {
+    fn last_call_for(&self, family: &str) -> Option<DateTime<Utc>> {
+        self.families
+            .iter()
+            .find(|(name, _, _)| name == family)
+            .map(|(_, at, _)| *at)
+    }
+
+    /// The most recent call in any family, or `None`.
+    ///
+    /// The answer to "did a call arrive" for a surface that must not name a
+    /// tool.
+    #[must_use]
+    pub fn last_call(&self) -> Option<DateTime<Utc>> {
+        self.families.iter().map(|(_, at, _)| *at).max()
+    }
+}
+
+/// Roll a window of ledger rows up into per-family activity.
+///
+/// Rows carry a facade and a start time and nothing this needs beyond them.
+/// The facade is the family; no attempt is made to narrow it further, because
+/// nothing in a row can.
+#[must_use]
+pub fn family_activity(rows: &[crate::routing::RoutedExchange], readable: bool) -> FamilyActivity {
+    let mut families: Vec<(String, DateTime<Utc>, usize)> = Vec::new();
+    for row in rows {
+        match families.iter_mut().find(|(name, _, _)| *name == row.facade) {
+            Some((_, at, count)) => {
+                if row.started_at > *at {
+                    *at = row.started_at;
+                }
+                *count += 1;
+            }
+            None => families.push((row.facade.clone(), row.started_at, 1)),
+        }
+    }
+    families.sort_by(|a, b| a.0.cmp(&b.0));
+    FamilyActivity { readable, families }
+}
+
+/// Every tool this machine knows about, with its state.
+///
+/// `catalog` is IronWire's signed catalog when one is loaded. With none, the
+/// list is the two tools IronWire ships knowing about -- which is a fact
+/// about this build, not about the machine, and is reported as
+/// `catalog_present: false` so a surface can say so rather than implying the
+/// machine has only two.
+#[must_use]
+pub fn list(catalog: &Catalog, activity: &FamilyActivity) -> Vec<HarnessRow> {
+    let found = tools::all(catalog);
+
+    // Which families more than one *connected* tool speaks. Counted over the
+    // connected ones only: an installed-but-not-connected Codex cannot have
+    // made the call, so it must not blur the attribution of one that is.
+    let mut connected_per_family: Vec<(&str, usize)> = Vec::new();
+    for tool in &found {
+        if !tool.wired {
+            continue;
+        }
+        let Some(family) = built_in_family(&tool.id) else {
+            continue;
+        };
+        match connected_per_family
+            .iter_mut()
+            .find(|(name, _)| *name == family)
+        {
+            Some((_, count)) => *count += 1,
+            None => connected_per_family.push((family, 1)),
+        }
+    }
+
+    found
+        .into_iter()
+        .map(|tool| {
+            let family = built_in_family(&tool.id);
+            let shared = family.is_some_and(|f| {
+                connected_per_family
+                    .iter()
+                    .any(|(name, count)| *name == f && *count > 1)
+            });
+            let saw_call = family.is_some_and(|f| activity.last_call_for(f).is_some());
+            let state = harness_state::harness_state(HarnessEvidence {
+                connected: tool.wired,
+                activity_readable: activity.readable,
+                family,
+                family_saw_call: saw_call,
+                family_shared: shared,
+            });
+            HarnessRow {
+                id: tool.id,
+                name: tool.name,
+                installed: tool.installed,
+                connected: tool.wired,
+                config_path: tool.config_path,
+                connect_command: tool.connect_command,
+                family,
+                state,
+            }
+        })
+        .collect()
+}
+
+/// A worked-out plan, as the wire describes it.
+#[derive(Debug, Clone)]
+pub struct PlanView {
+    /// Present only when there is an edit to commit, and therefore only for
+    /// [`PlanOutcome::Changes`].
+    pub plan_id: Option<Uuid>,
+    pub tool_id: String,
+    pub action: HarnessAction,
+    pub outcome: PlanOutcome,
+    /// The file that would change, when one was located.
+    pub path: Option<PathBuf>,
+    /// What would change, in IronWire's words.
+    pub changes: Vec<String>,
+    /// Slots left alone because the contributor is already using them.
+    /// Carried whatever the outcome -- see [`PlanOutcome`].
+    pub occupied: Vec<(String, String)>,
+}
+
+/// Work out an edit without making it.
+///
+/// `port` is the port this machine answers model calls on, and is required
+/// for a connect and ignored for a disconnect: taking a tool back off needs
+/// no destination, which is why disconnecting keeps working after the
+/// listener has stopped.
+///
+/// # Errors
+///
+/// [`ERR_UNKNOWN_HARNESS`] for an id nothing knows, and
+/// [`ERR_NO_DESTINATION`] for a connect with no port. Every other refusal is
+/// a [`PlanOutcome`], not an error: an unparseable file and a tool that is
+/// not installed are facts about the machine a contributor needs shown, not
+/// call failures.
+pub fn plan(
+    store: &PlanStore,
+    catalog: &Catalog,
+    tool_id: &str,
+    action: HarnessAction,
+    port: Option<u16>,
+) -> Result<PlanView, &'static str> {
+    let rows = tools::all(catalog);
+    let Some(row) = rows.iter().find(|t| t.id == tool_id) else {
+        return Err(ERR_UNKNOWN_HARNESS);
+    };
+
+    let refuse = |outcome: PlanOutcome| PlanView {
+        plan_id: None,
+        tool_id: tool_id.to_string(),
+        action,
+        outcome,
+        path: row.config_path.clone(),
+        changes: Vec::new(),
+        occupied: Vec::new(),
+    };
+
+    if !harness_state::action_available(action, row.installed, row.connected_hint()) {
+        // Only one of the two rules can be reported as an outcome here: a
+        // disconnect that is unavailable is unavailable because the tool is
+        // not connected, and that is a no-op, not a refusal.
+        return Ok(match action {
+            HarnessAction::Connect if !row.installed => refuse(PlanOutcome::NotInstalled),
+            _ => refuse(PlanOutcome::Noop),
+        });
+    }
+
+    let planned = match action {
+        HarnessAction::Connect => {
+            let Some(port) = port else {
+                return Err(ERR_NO_DESTINATION);
+            };
+            tools::plan_connect(tool_id, port, catalog)
+        }
+        HarnessAction::Disconnect => tools::plan_disconnect(tool_id, catalog),
+    };
+
+    let planned = match planned {
+        Ok(planned) => planned,
+        Err(tools::Error::UnknownTool(_)) => return Err(ERR_UNKNOWN_HARNESS),
+        Err(tools::Error::NoPath(_)) => return Ok(refuse(PlanOutcome::NoConfigPath)),
+        Err(tools::Error::Edit(detail)) => {
+            // `Error::Edit` flattens two upstream cases into one string, and
+            // the string quotes the file. Neither the string nor the file
+            // crosses this line: the prefix is matched to separate a catalog
+            // entry that did not validate from a file that would not parse,
+            // and everything else is dropped. For the two built-in tools the
+            // only possible cause is a parse failure, so the fallback is the
+            // right answer there by construction.
+            return Ok(refuse(
+                if detail.starts_with("the catalog entry is not usable") {
+                    PlanOutcome::EntryUnusable
+                } else {
+                    PlanOutcome::Unparseable
+                },
+            ));
+        }
+    };
+
+    let occupied = planned.occupied.clone();
+    let path = planned.path.clone();
+    if planned.is_noop() {
+        // A distinct outcome, not an empty preview. Occupied slots still
+        // ride along: "nothing to change, and here is the slot somebody else
+        // is using" is the exact state a contributor needs to see.
+        return Ok(PlanView {
+            plan_id: None,
+            tool_id: tool_id.to_string(),
+            action,
+            outcome: PlanOutcome::Noop,
+            path: Some(path),
+            changes: Vec::new(),
+            occupied,
+        });
+    }
+
+    let id = Uuid::new_v4();
+    let view = PlanView {
+        plan_id: Some(id),
+        tool_id: tool_id.to_string(),
+        action,
+        outcome: PlanOutcome::Changes,
+        path: Some(path.clone()),
+        changes: planned.changes.clone(),
+        occupied,
+    };
+    store.insert(HeldPlan {
+        id,
+        tool_id: tool_id.to_string(),
+        action,
+        digest: config_digest(&path),
+        planned,
+        minted: Instant::now(),
+    });
+    Ok(view)
+}
+
+/// What a commit did.
+#[derive(Debug, Clone)]
+pub struct CommitView {
+    pub tool_id: String,
+    pub action: HarnessAction,
+    pub path: PathBuf,
+    /// Where the file as it was before this edit was kept, when one was
+    /// written. IronWire keeps only the first, so this is absent on a second
+    /// edit to the same file.
+    pub backup_path: Option<PathBuf>,
+}
+
+/// Make an edit that was already shown.
+///
+/// Takes a plan id and nothing else. There is no argument here that could
+/// name a different tool, a different action or a different file from the one
+/// previewed, which is what makes the preview binding rather than advisory.
+///
+/// # Errors
+///
+/// [`ERR_PLAN_UNKNOWN`] when the id is expired, already used or never minted;
+/// [`ERR_CONFIG_CHANGED`] when the file moved under the plan;
+/// [`ERR_COMMIT_FAILED`] when the write itself failed.
+pub fn commit(store: &PlanStore, plan_id: Uuid) -> Result<CommitView, &'static str> {
+    let held = store.take(plan_id).ok_or(ERR_PLAN_UNKNOWN)?;
+    if config_digest(&held.planned.path) != held.digest {
+        return Err(ERR_CONFIG_CHANGED);
+    }
+    let backup_path = tools::commit(&held.planned).map_err(|_| ERR_COMMIT_FAILED)?;
+    Ok(CommitView {
+        tool_id: held.tool_id,
+        action: held.action,
+        path: held.planned.path.clone(),
+        backup_path,
+    })
+}
+
+/// `Tool` names the field `wired`; this crate says `connected` everywhere a
+/// contributor can see. One helper so the translation happens once.
+trait ConnectedHint {
+    fn connected_hint(&self) -> bool;
+}
+
+impl ConnectedHint for tools::Tool {
+    fn connected_hint(&self) -> bool {
+        self.wired
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The socket surface
+// ---------------------------------------------------------------------------
+
+use super::ipc::{DaemonShared, ERR_BAD_PARAMS, ERR_UNAVAILABLE, Request, Response};
+
+/// The signed catalog this daemon has loaded.
+///
+/// There is no catalog source here yet, so this is always the empty one and
+/// the list is the two tools IronWire ships knowing about. It is a function
+/// rather than an inlined `Catalog::default()` at each call site so that the
+/// day a catalog is loaded, one place changes -- and so that
+/// `catalog_present` on the wire is derived from the same value the list is,
+/// rather than being a second, separately-maintained claim.
+fn catalog() -> Catalog {
+    Catalog::default()
+}
+
+/// What the ledger can say about calls that arrived, rolled up by family.
+fn activity_for(shared: &DaemonShared) -> FamilyActivity {
+    let Some(ledger) = shared.routing_ledger() else {
+        // No declared, readable proxy: no evidence about any tool. Reported
+        // as unreadable rather than as an empty window, because "nothing has
+        // answered" and "the proxy answered and this window is empty" are
+        // the two states a contributor most needs told apart.
+        return FamilyActivity::default();
+    };
+    if ledger.last_refresh_at().is_none() {
+        return FamilyActivity::default();
+    }
+    let since = Utc::now() - chrono::Duration::hours(ACTIVITY_WINDOW_HOURS);
+    let rows = crate::routing::RoutingLedger::exchanges_since(ledger.as_ref(), since);
+    family_activity(&rows, true)
+}
+
+/// A path, or absent.
+///
+/// Null rather than `""`: a surface renders nothing for absent, and an empty
+/// string would send a contributor to look at a file called "".
+fn path_value(path: Option<&Path>) -> serde_json::Value {
+    path.map_or(serde_json::Value::Null, |p| {
+        serde_json::json!(p.to_string_lossy())
+    })
+}
+
+/// `harness_list`: every tool this machine knows about, and its state.
+pub fn handle_list(shared: &DaemonShared, req: &Request) -> Response {
+    let catalog = catalog();
+    let activity = activity_for(shared);
+    let rows = list(&catalog, &activity);
+
+    let harnesses: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            serde_json::json!({
+                "id": row.id,
+                "name": row.name,
+                "installed": row.installed,
+                "connected": row.connected,
+                "config_path": path_value(row.config_path.as_deref()),
+                "connect_command": row.connect_command,
+                "family": row.family,
+                "state": row.state.label(),
+                // The time that makes "answering" mean something. Present
+                // only where the family belongs to this tool alone; a shared
+                // family's time is on the block below, where it names no
+                // tool.
+                "last_call_at": match row.state {
+                    HarnessState::Answering => row
+                        .family
+                        .and_then(|f| activity.last_call_for(f))
+                        .map(|at| at.to_rfc3339()),
+                    _ => None,
+                },
+                "can_connect": harness_state::action_available(
+                    HarnessAction::Connect, row.installed, row.connected,
+                ),
+                "can_disconnect": harness_state::action_available(
+                    HarnessAction::Disconnect, row.installed, row.connected,
+                ),
+            })
+        })
+        .collect();
+
+    Response::ok(
+        req.id,
+        serde_json::json!({
+            // A fact about this build, not about the machine. False means
+            // the list is the two built-in tools, and says nothing about
+            // every other tool that exists.
+            "catalog_present": !catalog.agents().is_empty(),
+            "harnesses": harnesses,
+            // A call arrived, with no tool named. This is the honest shape
+            // of the ledger's evidence: it records a facade, so a surface
+            // can always say a call arrived and can only sometimes say by
+            // whom.
+            "activity": {
+                "readable": activity.readable,
+                "window_hours": ACTIVITY_WINDOW_HOURS,
+                "last_call_at": activity.last_call().map(|at| at.to_rfc3339()),
+                "families": activity
+                    .families
+                    .iter()
+                    .map(|(family, at, count)| serde_json::json!({
+                        "family": family,
+                        "last_call_at": at.to_rfc3339(),
+                        "calls": count,
+                    }))
+                    .collect::<Vec<_>>(),
+            },
+            // The port a connect would write into a config file. Null when
+            // nothing on this machine is answering model calls, which is
+            // what `harness_plan` refuses a connect with.
+            "destination_port": shared.destination_port(),
+        }),
+    )
+}
+
+/// `harness_plan`: work out one tool's edit and write nothing.
+pub fn handle_plan(shared: &DaemonShared, req: &Request) -> Response {
+    let Some(id) = req.params.get("id").and_then(serde_json::Value::as_str) else {
+        return Response::err(req.id, ERR_BAD_PARAMS, "id-required");
+    };
+    let Some(action) = req
+        .params
+        .get("action")
+        .and_then(serde_json::Value::as_str)
+        .and_then(HarnessAction::from_label)
+    else {
+        return Response::err(req.id, ERR_BAD_PARAMS, "action-invalid");
+    };
+
+    match plan(
+        &shared.harness_plans,
+        &catalog(),
+        id,
+        action,
+        shared.destination_port(),
+    ) {
+        Ok(view) => Response::ok(
+            req.id,
+            serde_json::json!({
+                "id": view.tool_id,
+                "action": view.action.label(),
+                "outcome": view.outcome.label(),
+                // Minted for a committable plan and for nothing else, so
+                // "there is a plan id" and "the outcome is committable" are
+                // one question answered once.
+                "plan_id": view.plan_id.map(|id| id.to_string()),
+                "path": path_value(view.path.as_deref()),
+                "changes": view.changes,
+                // Reported, never overwritten -- the rule that makes editing
+                // a file we do not own acceptable at all. Carried alongside
+                // the outcome rather than folded into it, because a plan can
+                // have changes AND an occupied slot.
+                "occupied": view
+                    .occupied
+                    .iter()
+                    .map(|(slot, current)| serde_json::json!({
+                        "slot": slot,
+                        "current": current,
+                    }))
+                    .collect::<Vec<_>>(),
+            }),
+        ),
+        Err(label) => Response::err(req.id, ERR_BAD_PARAMS, label),
+    }
+}
+
+/// `harness_commit`: make an edit that was already shown.
+pub fn handle_commit(shared: &DaemonShared, req: &Request) -> Response {
+    let Some(plan_id) = req
+        .params
+        .get("plan_id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|id| Uuid::parse_str(id).ok())
+    else {
+        return Response::err(req.id, ERR_BAD_PARAMS, "plan-id-invalid");
+    };
+    match commit(&shared.harness_plans, plan_id) {
+        Ok(view) => Response::ok(
+            req.id,
+            serde_json::json!({
+                "id": view.tool_id,
+                "action": view.action.label(),
+                "committed": true,
+                "path": path_value(Some(&view.path)),
+                "backup_path": path_value(view.backup_path.as_deref()),
+            }),
+        ),
+        Err(label) => Response::err(req.id, ERR_UNAVAILABLE, label),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+    use std::sync::{Mutex as StdMutex, MutexGuard, PoisonError};
+
+    /// Serializes the tests that point Claude Code's config somewhere.
+    ///
+    /// `CLAUDE_CONFIG_DIR` is process-wide, and these tests both read and
+    /// write the file it names. The pattern is `ironwire_pointer`'s: one
+    /// lock, restored on drop, so a panicking test cannot leave the variable
+    /// set for whatever runs next.
+    static CLAUDE_CONFIG_LOCK: StdMutex<()> = StdMutex::new(());
+
+    struct ClaudeConfigAt {
+        _lock: MutexGuard<'static, ()>,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl ClaudeConfigAt {
+        fn at(dir: &Path) -> Self {
+            let lock = CLAUDE_CONFIG_LOCK
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let previous = std::env::var_os("CLAUDE_CONFIG_DIR");
+            unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir) };
+            Self {
+                _lock: lock,
+                previous,
+            }
+        }
+    }
+
+    impl Drop for ClaudeConfigAt {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(v) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", v) },
+                None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
+            }
+        }
+    }
+
+    /// A temp directory standing in for Claude Code's config directory,
+    /// holding `body`.
+    fn claude_config(body: &str) -> (tempfile::TempDir, ClaudeConfigAt, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, body).expect("write");
+        let guard = ClaudeConfigAt::at(dir.path());
+        (dir, guard, path)
+    }
+
+    fn plan_claude(store: &PlanStore, action: HarnessAction) -> PlanView {
+        plan(store, &Catalog::default(), "claude", action, Some(8463)).expect("claude is known")
+    }
+
+    /// The rule most likely to be broken by a well-meaning simplification: a
+    /// slot the contributor is already using is REPORTED, and the value they
+    /// put there is still in the file afterwards.
+    #[test]
+    fn an_occupied_slot_is_reported_and_never_overwritten() {
+        let (_dir, _guard, path) =
+            claude_config(r#"{"env":{"ANTHROPIC_BASE_URL":"https://their-own-choice.example"}}"#);
+        let store = PlanStore::default();
+
+        let view = plan_claude(&store, HarnessAction::Connect);
+        assert!(
+            view.occupied
+                .iter()
+                .any(|(_, current)| current == "https://their-own-choice.example"),
+            "the occupied slot was not reported: {view:?}"
+        );
+
+        if let Some(id) = view.plan_id {
+            commit(&store, id).expect("the rest of the edit still applies");
+        }
+        let after = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            after.contains("https://their-own-choice.example"),
+            "the contributor's own value was overwritten: {after}"
+        );
+    }
+
+    /// Refused deliberately, and distinguishable from "nothing to change".
+    #[test]
+    fn an_unparseable_config_is_refused_and_named() {
+        let (_dir, _guard, path) = claude_config("{ this is not settings");
+        let store = PlanStore::default();
+
+        let view = plan_claude(&store, HarnessAction::Connect);
+        assert_eq!(view.outcome, PlanOutcome::Unparseable);
+        assert_ne!(view.outcome, PlanOutcome::Noop);
+        assert_eq!(
+            view.plan_id, None,
+            "an unparseable file has nothing to commit"
+        );
+        assert_eq!(view.path.as_deref(), Some(path.as_path()), "name the file");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "{ this is not settings",
+            "a file we cannot parse was rewritten"
+        );
+    }
+
+    /// A no-op says so rather than showing an empty confirmation.
+    #[test]
+    fn a_second_connect_is_a_noop_with_no_plan_id() {
+        let (_dir, _guard, _path) = claude_config("{}");
+        let store = PlanStore::default();
+
+        let first = plan_claude(&store, HarnessAction::Connect);
+        assert_eq!(first.outcome, PlanOutcome::Changes);
+        commit(&store, first.plan_id.expect("a committable plan")).expect("commit");
+
+        let second = plan_claude(&store, HarnessAction::Connect);
+        assert_eq!(second.outcome, PlanOutcome::Noop);
+        assert_eq!(second.plan_id, None);
+        assert!(second.changes.is_empty());
+    }
+
+    /// Remove only what we put there.
+    #[test]
+    fn a_disconnect_leaves_neighbouring_keys_alone() {
+        let (_dir, _guard, path) = claude_config(r#"{"env":{"THEIR_OWN_KEY":"keep me"}}"#);
+        let store = PlanStore::default();
+
+        let connect = plan_claude(&store, HarnessAction::Connect);
+        commit(&store, connect.plan_id.expect("a committable plan")).expect("commit");
+
+        let disconnect = plan_claude(&store, HarnessAction::Disconnect);
+        assert_eq!(disconnect.outcome, PlanOutcome::Changes);
+        commit(&store, disconnect.plan_id.expect("a committable plan")).expect("commit");
+
+        let after = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            after.contains("keep me"),
+            "a neighbouring key was removed: {after}"
+        );
+    }
+
+    /// The tool rewrote its own config while the preview was on screen. The
+    /// preview no longer describes the file, so the write is refused rather
+    /// than reverting whatever the tool just wrote.
+    #[test]
+    fn a_config_that_moved_under_the_plan_refuses_the_commit() {
+        let (_dir, _guard, path) = claude_config("{}");
+        let store = PlanStore::default();
+
+        let view = plan_claude(&store, HarnessAction::Connect);
+        let id = view.plan_id.expect("a committable plan");
+        std::fs::write(&path, r#"{"env":{"SOMETHING":"the tool wrote this"}}"#).expect("write");
+
+        assert_eq!(
+            commit(&store, id).expect_err("the file moved"),
+            ERR_CONFIG_CHANGED
+        );
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("read")
+                .contains("the tool wrote this"),
+            "a stale plan overwrote a newer file"
+        );
+    }
+
+    /// A plan is a permission to write once.
+    #[test]
+    fn a_committed_plan_cannot_be_replayed() {
+        let (_dir, _guard, _path) = claude_config("{}");
+        let store = PlanStore::default();
+
+        let view = plan_claude(&store, HarnessAction::Connect);
+        let id = view.plan_id.expect("a committable plan");
+        commit(&store, id).expect("commit");
+        assert_eq!(
+            commit(&store, id).expect_err("already used"),
+            ERR_PLAN_UNKNOWN
+        );
+    }
+
+    fn row(facade: &str, offset: i64) -> crate::routing::RoutedExchange {
+        crate::routing::RoutedExchange {
+            id: None,
+            started_at: Utc.timestamp_opt(1_700_000_000 + offset, 0).unwrap(),
+            client_session_id: None,
+            total_ms: None,
+            facade: facade.to_string(),
+            backend: "somewhere".to_string(),
+            requested_model: None,
+            served_model: None,
+            upstream_id: None,
+            request_sha256: None,
+            response_sha256: None,
+            body_ref: None,
+            rung: "same_model".to_string(),
+            attempts: 1,
+            input_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            output_tokens: None,
+            cost_usd: None,
+            status: 200,
+        }
+    }
+
+    #[test]
+    fn activity_is_grouped_by_family_and_keeps_the_latest_call() {
+        let activity = family_activity(
+            &[row("anthropic", 0), row("anthropic", 60), row("openai", 10)],
+            true,
+        );
+        assert_eq!(activity.families.len(), 2);
+        assert_eq!(
+            activity.last_call_for("anthropic"),
+            Some(Utc.timestamp_opt(1_700_000_060, 0).unwrap())
+        );
+        assert_eq!(
+            activity.last_call(),
+            Some(Utc.timestamp_opt(1_700_000_060, 0).unwrap())
+        );
+        assert_eq!(activity.last_call_for("gemini"), None);
+    }
+
+    /// The point of the type: a surface can say a call arrived without any
+    /// tool being nameable.
+    #[test]
+    fn a_call_is_reportable_with_no_tool_named() {
+        let activity = family_activity(&[row("anthropic", 0)], true);
+        assert!(activity.last_call().is_some());
+        // Nothing on this value names a tool.
+        assert!(activity.families.iter().all(|(f, _, _)| f == "anthropic"));
+    }
+
+    #[test]
+    fn an_unreadable_ledger_reports_no_families_and_says_so() {
+        let activity = family_activity(&[], false);
+        assert!(!activity.readable);
+        assert_eq!(activity.last_call(), None);
+    }
+
+    /// With no catalog the list is the two built-in tools, and every row is
+    /// still a full row -- installed or not.
+    #[test]
+    fn the_list_degrades_to_the_two_built_in_tools() {
+        let rows = list(&Catalog::default(), &FamilyActivity::default());
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["claude", "codex"]);
+        assert_eq!(rows[0].family, Some("anthropic"));
+        assert_eq!(rows[1].family, Some("openai"));
+    }
+
+    /// Every row carries a state, and with no readable ledger a connected
+    /// tool is `unknown` rather than "no calls yet".
+    #[test]
+    fn no_ledger_never_reports_no_calls_yet() {
+        let rows = list(&Catalog::default(), &FamilyActivity::default());
+        for row in rows {
+            assert!(
+                matches!(
+                    row.state,
+                    HarnessState::NotConnected | HarnessState::Unknown
+                ),
+                "{row:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_tool_id_is_refused_rather_than_planned() {
+        let store = PlanStore::default();
+        let err = plan(
+            &store,
+            &Catalog::default(),
+            "not-a-tool",
+            HarnessAction::Connect,
+            Some(8463),
+        )
+        .expect_err("an unknown id has no plan");
+        assert_eq!(err, ERR_UNKNOWN_HARNESS);
+    }
+
+    #[test]
+    fn a_connect_with_no_destination_is_refused_by_name() {
+        let store = PlanStore::default();
+        let err = plan(
+            &store,
+            &Catalog::default(),
+            "claude",
+            HarnessAction::Connect,
+            None,
+        )
+        .expect_err("nothing is answering, so there is no port to name");
+        assert_eq!(err, ERR_NO_DESTINATION);
+    }
+
+    #[test]
+    fn a_plan_id_is_single_use() {
+        let store = PlanStore::default();
+        let id = Uuid::new_v4();
+        assert!(commit(&store, id).is_err());
+    }
+
+    #[test]
+    fn an_unheld_plan_id_is_named_rather_than_written() {
+        let store = PlanStore::default();
+        assert_eq!(
+            commit(&store, Uuid::new_v4()).expect_err("nothing was minted"),
+            ERR_PLAN_UNKNOWN
+        );
+    }
+}
