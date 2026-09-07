@@ -83,11 +83,105 @@ If that proves annoying in use, the fix is an upstream IronWire capability —
 a per-tool pass-through in the control API — and this design should be revisited
 then rather than worked around here.
 
+## The flow, and why the decomposition changes
+
+The mechanism above is sound. The *shape* it was going to be dropped into is
+not, and this section supersedes a naive reading of "add a list to the
+destination".
+
+### The defect in today's shape
+
+Today the contributor is asked one question: "answer model calls on this
+computer?" That question is about a **listener**, and nobody wants a listener.
+Turning it on and connecting no tools achieves nothing observable -- which is
+precisely the "I turned it on and nothing happened" failure that had this
+feature sitting on a buried settings toggle. Adding a tool list beside the
+switch fixes discoverability while leaving that empty middle intact.
+
+### The unit of decision is a tool
+
+"Claude Code -- send its calls here" is a sentence with a meaning a contributor
+can act on. "Answer model calls on this computer" is an implementation detail
+they are currently asked to reason about first, before anything can happen.
+
+So the destination leads with the harness list, and connecting a harness is the
+primary action. The listener starts because a tool needed it, not as a
+precondition the contributor must discover.
+
+### The exposure decision stays separate, but moves
+
+One consequence genuinely does not follow from "connect Claude Code": the
+listener is open to **everything** on this machine, not only the tool just
+connected. That is `OFFER_EXPOSURE`, and it is the reason the switch exists at
+all.
+
+It must therefore still be asked -- but as a **gate on the first connect**,
+where it is finally about something concrete, rather than as a standalone
+switch flipped into a void. Once answered it is not asked again
+(`offer_asked_once` already covers this).
+
+The master switch does not disappear. It becomes what it actually is: a kill
+switch -- **stop answering everything** -- which is a real thing to want, is the
+safe direction, and is exactly what the tray's off action already does.
+
+### Configured is not working
+
+`Tool.wired` proves a config file has the right value in it. It does not prove
+a single call was ever answered. A contributor who connects a harness, restarts
+it, and still sees no evidence is back in the original failure.
+
+So each harness reports three states, not two:
+
+| state | meaning |
+|---|---|
+| not connected | its config does not send calls here |
+| connected, nothing seen | config is right; no call has arrived yet |
+| answering | a call actually arrived, with when |
+
+Only the third means it works, and it is the one the surface should make
+obvious.
+
+**Attribution is approximate, and must be described as such.** The ledger
+records `path`, not a tool id. Protocol family separates the two built-in tools
+today -- Claude Code speaks Anthropic, Codex speaks OpenAI -- but two tools of
+the same family are indistinguishable. The surface must not claim per-tool
+activity it cannot support: attribute where the family is unambiguous, and
+otherwise report activity without naming a tool. Making this exact needs an
+upstream change -- a per-tool path chosen at connect time, which
+`plan_connect(id, port, catalog)` does not currently expose.
+
+### The states that are not the happy path
+
+These carry most of the real experience and need real copy, not a fallback:
+
+- **Nothing detected.** Say what was looked for, not "no tools". An empty list
+  that explains nothing is indistinguishable from a broken one.
+- **Installed, slot already taken.** `Planned.occupied` means the contributor
+  already sends that tool's calls somewhere. Show the value, say it was left
+  alone, and do not offer to take it over.
+- **Needs restarting.** The config changed under a running process. Say so, and
+  keep saying it until a call arrives.
+- **Config unparseable.** Refused deliberately. Distinguish it from "nothing to
+  change", and name the file.
+
+### The resulting first run
+
+1. Destination lists the harnesses found on this machine, each with its state.
+2. Contributor turns on the one they care about.
+3. First connect only: the exposure sentence, and an explicit accept.
+4. Preview of the exact file change; confirm.
+5. "Restart Claude Code" until a call is seen.
+6. State becomes *answering*, with when -- the proof that was missing.
+
+Nothing in that sequence asks about a listener.
+
 ## Scope
 
-**In:** listing the harnesses in the Model calls destination with their real
-state; connecting and disconnecting one at a time, with a preview of exactly what
-would change; showing which need restarting.
+**In:** the harness list as the destination's primary surface; connect and
+disconnect one at a time with a preview of the exact file change; the exposure
+question moved to a first-connect gate; the master switch reduced to a kill
+switch; the three-valued per-harness state including whether a call has actually
+been answered; and the non-happy-path states above.
 
 **Out:** any change to the master switch's behaviour; the global hotkey (still
 cut 2); routing decisions per model or per project; anything that writes more
