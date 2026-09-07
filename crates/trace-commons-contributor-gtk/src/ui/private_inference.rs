@@ -469,6 +469,9 @@ mod tests {
 
     /// The write records that the question has been answered, so the
     /// first-run offer is not asked again of somebody who found this screen.
+    ///
+    /// `set_settings` carries both keys in one call: two writes could land
+    /// half-applied, and the half that landed would be the switch.
     #[test]
     fn turning_it_on_here_also_answers_the_offer() {
         let body = SOURCE
@@ -477,5 +480,84 @@ mod tests {
             .expect("send is in this file");
         assert!(body.contains("\"private_inference\": on"));
         assert!(body.contains("\"private_inference_offer_seen\": true"));
+        assert!(
+            body.contains("set_settings"),
+            "the switch must go through set_settings"
+        );
+    }
+
+    /// The tone this shell paints a state in comes from the shared table,
+    /// not from a second copy written out here.
+    ///
+    /// Reads this file's own source, the way the routing twin does. The
+    /// words could not drift -- they are `pub use`d -- but the branching
+    /// could, in three shells, and nothing in this repository would notice.
+    ///
+    /// Held here rather than on the settings card it used to guard: the
+    /// card no longer reads a tone at all, and this screen is the only
+    /// place in this shell that does.
+    #[test]
+    fn the_tone_is_not_branched_on_in_this_shell() {
+        let start = SOURCE
+            .find("fn indicator_tone(")
+            .expect("the tone mapper exists");
+        let end = SOURCE[start..].find("\n}\n").expect("its body ends") + start;
+        let body = &SOURCE[start..end];
+        for spelled in [
+            "running_no_backends",
+            "running_elsewhere",
+            "port_in_use",
+            "start_failed",
+            "crashed",
+        ] {
+            assert!(
+                !body.contains(spelled),
+                "the state is branched on in this shell: {spelled}"
+            );
+        }
+    }
+
+    /// Every state this daemon can report gets a tone, and only one of them
+    /// may be painted as working.
+    ///
+    /// The named value matters more than the mapping: `running_no_backends`
+    /// is a listener that answers a health check and can pass no call on,
+    /// and a green light over it is the exact thing that state exists to
+    /// prevent.
+    #[test]
+    fn only_a_listener_with_somewhere_to_send_is_painted_clear() {
+        let tone = |label: &str| indicator_tone(copy::private_inference_state_tone(label));
+        assert_eq!(tone("running"), Tone::Clear);
+        assert_eq!(tone("running_no_backends"), Tone::Attention);
+        assert_ne!(tone("running_no_backends"), Tone::Clear);
+        assert_eq!(tone("running_elsewhere"), Tone::Held);
+        assert_eq!(tone("off"), Tone::Neutral);
+        assert_eq!(tone("stopping"), Tone::Held);
+        assert_ne!(
+            copy::private_inference_state_line(""),
+            copy::private_inference_state_line("off")
+        );
+        assert_ne!(
+            copy::private_inference_state_line("stopping"),
+            copy::private_inference_state_line("off")
+        );
+        for failure in ["port_in_use", "start_failed", "crashed"] {
+            assert_eq!(tone(failure), Tone::Refused, "{failure}");
+        }
+        // A state a later daemon grows, and a daemon that reports none at
+        // all, both claim nothing rather than falling through to the
+        // working light.
+        assert_eq!(tone("a_state_from_a_later_daemon"), Tone::Neutral);
+        assert_eq!(tone(""), Tone::Neutral);
+    }
+
+    /// A refusal names the way out, and the way out is the switch -- which
+    /// is on this screen, beside the sentence saying so.
+    #[test]
+    fn a_refusal_on_this_screen_says_what_to_do() {
+        for failure in ["port_in_use", "start_failed", "crashed"] {
+            let line = copy::private_inference_state_line(failure);
+            assert!(line.contains("off and on again"), "{failure}: {line}");
+        }
     }
 }

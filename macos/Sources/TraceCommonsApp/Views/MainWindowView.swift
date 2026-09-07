@@ -164,7 +164,7 @@ struct MainWindowView: View {
         switch section {
         case .queue: QueueView()
         case .history: HistoryView()
-        case .settings: SettingsView()
+        case .settings: SettingsView(navigation: navigation)
         case .compute: EmptyView()
         case .privateInference: PrivateInferenceView()
         }

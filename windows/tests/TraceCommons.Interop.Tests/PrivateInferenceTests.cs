@@ -428,45 +428,46 @@ public class PrivateInferenceTests
     }
 
     /// <summary>
-    /// The settings card picks its colour from the tone, never by reading the
-    /// sentence back. Three of the seven sentences begin with the same two
-    /// words, so a colour recovered from the text would be recovered from a
-    /// prefix match.
+    /// The page that holds the switch picks its colour from the tone, never
+    /// by reading the sentence back. Three of the seven sentences begin with
+    /// the same two words, so a colour recovered from the text would be
+    /// recovered from a prefix match.
+    ///
+    /// <para>
+    /// It reads the destination rather than the settings card, because the
+    /// settings card no longer reports a state at all: it holds a pointer,
+    /// and the control and its indicator moved together.
+    /// </para>
     /// </summary>
     [Fact]
     public void ThePrivateInferenceStateIsPaintedFromTheToneAndNotFromItsOwnText()
     {
         string viewModel = File.ReadAllText(
-            Path.Combine(AppContext.BaseDirectory, "ContributorSettingsViewModel.cs.txt"));
+            Path.Combine(AppContext.BaseDirectory, "PrivateInferenceViewModel.cs.txt"));
         foreach (string forbidden in new[]
         {
-            "PrivateInferenceStateText ==",
-            "PrivateInferenceStateText.Contains",
-            "PrivateInferenceStateText.StartsWith",
+            "StateText ==",
+            "StateText.Contains",
+            "StateText.StartsWith",
         })
         {
             Assert.DoesNotContain(forbidden, viewModel, StringComparison.Ordinal);
         }
 
         Assert.Contains(
-            "PrivateInferenceSurface.Tone(_privateInferenceState)",
+            "PrivateInferenceSurface.Tone(_state)",
             viewModel,
             StringComparison.Ordinal);
 
         string markup = File.ReadAllText(
-            Path.Combine(AppContext.BaseDirectory, "SettingsView.xaml.txt"));
-        int start = markup.IndexOf("Settings.PrivateInferenceTitle", StringComparison.Ordinal);
-        Assert.True(start >= 0, "the private-inference card is not on the settings screen");
-        int end = markup.IndexOf("The redaction witness", start, StringComparison.Ordinal);
-        Assert.True(end > start, "the private-inference card does not end where expected");
-        string card = markup[start..end];
+            Path.Combine(AppContext.BaseDirectory, "PrivateInferenceView.xaml.txt"));
 
         // The refusal wears the refusal colour, and the exposure sentence is
-        // on this card as well as in the offer.
-        Assert.Contains("PrivateInferenceStateIsRefused", card, StringComparison.Ordinal);
-        Assert.Contains("TcCoralTextBrush", card, StringComparison.Ordinal);
-        Assert.Contains("Settings.PrivateInferenceExposure", card, StringComparison.Ordinal);
-        foreach (Match match in Regex.Matches(card, "(Text|Content|Header)=\"([^\"]*)\""))
+        // beside the switch as well as in the offer.
+        Assert.Contains("ViewModel.StateIsRefused", markup, StringComparison.Ordinal);
+        Assert.Contains("TcCoralTextBrush", markup, StringComparison.Ordinal);
+        Assert.Contains("ViewModel.Exposure", markup, StringComparison.Ordinal);
+        foreach (Match match in Regex.Matches(markup, "(Text|Content|Header)=\"([^\"]*)\""))
         {
             Assert.StartsWith("{x:Bind", match.Groups[2].Value, StringComparison.Ordinal);
         }
@@ -531,22 +532,24 @@ public class PrivateInferenceTests
     /// A refused or failed write snaps the switch back to what the daemon
     /// holds, rather than leaving it wherever the contributor dragged it.
     ///
-    /// The toggle is bound one-way to <c>PrivateInferenceEnabled</c>, so the
-    /// only thing that returns it to the daemon's value is a change
-    /// notification. Every path out of the write must raise one: the two
-    /// early returns, which fire when a second press arrives while one is in
-    /// flight, and the catch, which is where a daemon that refused lands.
-    /// Without it the card says "on" over a listener that was never started,
-    /// which is the shape this card's own comments argue against.
+    /// The toggle is bound one-way to <c>Enabled</c>, so the only thing that
+    /// returns it to the daemon's value is a change notification. Every path
+    /// out of the write must raise one: the early return, which fires when a
+    /// second press arrives while one is in flight, the error frame, and the
+    /// catch, which is where a daemon that refused lands. Without it the page
+    /// says "on" over a listener that was never started, which is the shape
+    /// this whole surface is built to avoid.
+    ///
+    /// It reads the destination's view model, which owns the switch now.
     /// </summary>
     [Fact]
     public void AFailedSwitchWriteSnapsTheToggleBack()
     {
         string viewModel = File.ReadAllText(
-            Path.Combine(AppContext.BaseDirectory, "ContributorSettingsViewModel.cs.txt"));
-        string body = MethodBody(viewModel, "public async Task SetPrivateInferenceAsync(");
+            Path.Combine(AppContext.BaseDirectory, "PrivateInferenceViewModel.cs.txt"));
+        string body = MethodBody(viewModel, "public async Task SetAsync(");
 
-        const string raise = "Raise(nameof(PrivateInferenceEnabled));";
+        const string raise = "Raise(nameof(Enabled));";
         int guardReturn = body.IndexOf("return;", StringComparison.Ordinal);
         Assert.True(guardReturn >= 0, "the busy/unloaded guard is gone");
         Assert.Contains(
@@ -555,10 +558,9 @@ public class PrivateInferenceTests
             StringComparison.Ordinal);
 
         // The refusal path proper: a well-formed error frame. The call
-        // returned, so neither the guard nor the catch fires, and
-        // FillPrivateInference is never reached -- which is precisely the
-        // case where the daemon said no and the toggle is still sitting where
-        // the contributor put it.
+        // returned, so neither the guard nor the catch fires, and Fill is
+        // never reached -- which is precisely the case where the daemon said
+        // no and the toggle is still sitting where the contributor put it.
         int elseAt = body.IndexOf("else", StringComparison.Ordinal);
         Assert.True(elseAt >= 0, "the error frame is no longer handled");
         int catchAt = body.IndexOf("catch", StringComparison.Ordinal);
@@ -628,7 +630,7 @@ public class PrivateInferenceTests
         "// --- The daily-budget banner")]
     [InlineData(
         "ContributorSettingsViewModel.cs.txt",
-        "// Answering model calls on this computer. Its own block rather than a row",
+        "// Answering model calls on this computer. The switch, the exposure",
         "<summary>Whether the witness actions may be pressed.</summary>")]
     public void NoWordingIsAuthoredInThePrivateInferenceViewModels(
         string file, string opens, string closes)
