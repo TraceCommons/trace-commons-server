@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using TraceCommons.Interop;
 using Xunit;
@@ -232,16 +233,31 @@ public class HarnessSurfaceTests
     }
 
     /// <summary>
-    /// A plan is single-use and short-lived. When the daemon has forgotten
-    /// one, the shell re-fetches rather than treating it as a failed write.
+    /// Every commit refusal is the same refusal, and none of them leaves
+    /// anything to commit again.
     /// </summary>
+    /// <remarks>
+    /// The daemon takes the plan out of its store BEFORE it re-checks the
+    /// file digest and before it writes, so an expired plan, a spent one, a
+    /// file that moved underneath it and a write that failed all end with no
+    /// plan and nothing written. A shell that told these apart would be
+    /// offering a retry against nothing, or re-planning a write on the
+    /// contributor's behalf that they were never shown.
+    /// </remarks>
     [Fact]
-    public void AForgottenPlanIsRecognisedRatherThanReportedAsAFailedWrite()
+    public void NoCommitRefusalIsRetryable()
     {
-        Assert.True(HarnessSurface.PlanIsStale(new DaemonError { Code = "unavailable", Message = "harness-plan-unknown" }));
-        Assert.True(HarnessSurface.PlanIsStale(new DaemonError { Code = "unavailable", Message = "harness-config-changed" }));
-        Assert.False(HarnessSurface.PlanIsStale(new DaemonError { Code = "unavailable", Message = "harness-commit-failed" }));
-        Assert.False(HarnessSurface.PlanIsStale(null));
+        foreach (string message in new[]
+        {
+            "harness-plan-unknown", "harness-config-changed", "harness-commit-failed",
+            "something-a-later-daemon-says",
+        })
+        {
+            Assert.False(HarnessSurface.CommitIsRetryable(
+                new DaemonError { Code = "unavailable", Message = message }));
+        }
+
+        Assert.False(HarnessSurface.CommitIsRetryable(null));
     }
 
     /// <summary>
@@ -283,8 +299,6 @@ public class HarnessSurfaceTests
             [HarnessState.NotConnected] = copy!.HarnessNotConnected,
             [HarnessState.ConnectedNoCalls] = copy.HarnessConnectedNothingSeen,
             [HarnessState.Answering] = copy.HarnessAnswering,
-            [HarnessState.ActivityShared] = string.Empty,
-            [HarnessState.Unknown] = string.Empty,
         };
 
         foreach (KeyValuePair<HarnessState, string> pair in expected)
@@ -294,32 +308,100 @@ public class HarnessSurfaceTests
     }
 
     /// <summary>
-    /// An unattributable call must never be described with the answering
-    /// sentence.
+    /// Two states have no sentence on the payload, and neither may borrow one.
     /// </summary>
     /// <remarks>
-    /// The sentence reads "Answering. A call from <em>it</em> reached this
-    /// computer and was answered here." The pronoun names the row's own tool.
-    /// <see cref="HarnessState.ActivityShared"/> exists precisely because the
-    /// call cannot be attributed to one tool of a shared family, so borrowing
-    /// that sentence would assert the one thing the state says is unknown.
-    ///
-    /// Asserted against the sentence itself rather than against an empty
-    /// string, so that adding a real ActivityShared sentence later satisfies
-    /// this test while still failing if it reaches for the answering one.
-    ///
-    /// This mirrors the macOS surface, which returns nil for the same state.
-    /// The two shells must not disagree about what an unattributable call is
-    /// called.
+    /// <c>HarnessAnswering</c> would claim an attribution the ledger cannot
+    /// make -- it records a protocol family, and a family two connected tools
+    /// both speak names neither of them. <c>HarnessConnectedNothingSeen</c>
+    /// would be flatly false: something did arrive. So the row draws no state
+    /// line, at a tone that is not the working one. This test is what fails if
+    /// someone later fills the gap by pointing at the nearest sentence instead
+    /// of adding the missing one.
     /// </remarks>
     [Fact]
-    public void AnUnattributableCallNeverBorrowsTheAnsweringSentence()
+    public void TheTwoStatesWithNoSentenceBorrowNeither()
     {
         PrivateInferenceCopy? copy = PrivateInferenceSurface.Copy();
         Assert.NotNull(copy);
 
-        string shared = HarnessSurface.StateSentence(HarnessState.ActivityShared, copy!);
-        Assert.NotEqual(copy!.HarnessAnswering, shared);
-        Assert.False(HarnessSurface.ReadsAsWorking(HarnessState.ActivityShared));
+        foreach (HarnessState state in new[] { HarnessState.ActivityShared, HarnessState.Unknown })
+        {
+            string sentence = HarnessSurface.StateSentence(state, copy!);
+            Assert.Equal(string.Empty, sentence);
+            Assert.NotEqual(copy!.HarnessAnswering, sentence);
+            Assert.NotEqual(copy.HarnessConnectedNothingSeen, sentence);
+            Assert.False(HarnessSurface.ReadsAsWorking(state));
+        }
+    }
+
+    /// <summary>
+    /// A timestamp with fractional seconds does not empty the list.
+    /// </summary>
+    /// <remarks>
+    /// The daemon writes <c>to_rfc3339()</c>, which carries fractional
+    /// seconds, and <c>last_call_at</c> sits INSIDE the list envelope -- so a
+    /// decoder strict enough to reject it loses every tool, not one field.
+    /// This shell carries the value as the string the daemon wrote and never
+    /// parses it, because it renders no sentence about when: the one that
+    /// exists lives in the Rust and is not exported across the ABI. That makes
+    /// this a guard on the decision, not on a parser, and it is the thing that
+    /// fails if someone later reaches for a strict date type here.
+    /// </remarks>
+    [Theory]
+    [InlineData("2026-09-07T11:22:33.123456789+00:00")]
+    [InlineData("2026-09-07T11:22:33.123456789Z")]
+    [InlineData("2026-09-07T11:22:33+00:00")]
+    [InlineData("2026-09-07T11:22:33.5-07:00")]
+    public void AFractionalSecondTimestampKeepsTheWholeList(string stamp)
+    {
+        const string template =
+            """
+            {"catalog_present":false,"destination_port":8787,
+             "harnesses":[{"id":"claude","name":"Claude Code","installed":true,
+               "connected":true,"config_path":"/p","connect_command":"c",
+               "family":"anthropic","state":"answering","last_call_at":"STAMP",
+               "can_connect":false,"can_disconnect":true}],
+             "activity":{"readable":true,"window_hours":24,
+               "last_call_at":"STAMP","families":[]}}
+            """;
+
+        IReadOnlyList<HarnessRow> rows =
+            HarnessSurface.ParseRows(template.Replace("STAMP", stamp, StringComparison.Ordinal));
+
+        Assert.Single(rows);
+        Assert.Equal(stamp, rows[0].LastCallAt);
+        Assert.Equal(HarnessState.Answering, rows[0].State);
+    }
+
+    /// <summary>
+    /// The exposure question is asked off the LISTENER, not off the marker,
+    /// and is therefore wider than the first-run offer.
+    /// </summary>
+    /// <remarks>
+    /// A contributor who accepted once and has since used the kill switch is
+    /// making the exposure decision afresh: a connect would reopen the
+    /// listener they turned off. The first-run offer's own branch stays
+    /// exactly as it is -- this is a second, wider question, in the shape the
+    /// other two shells use.
+    /// </remarks>
+    [Fact]
+    public void AConnectThatWouldReopenTheListenerAsksAgain()
+    {
+        Assert.True(HarnessSurface.ConnectNeedsExposure(listenerOn: false));
+        Assert.False(HarnessSurface.ConnectNeedsExposure(listenerOn: true));
+    }
+
+    /// <summary>
+    /// The gate is wider than <c>ShouldOffer</c>, which is why it exists
+    /// separately rather than calling it.
+    /// </summary>
+    [Fact]
+    public void TheConnectGateIsWiderThanTheFirstRunOffer()
+    {
+        // Answered, and then switched off. The first-run offer is done with
+        // this contributor; a connect is not.
+        Assert.False(PrivateInferenceSurface.ShouldOffer(known: true, answered: true, on: false));
+        Assert.True(HarnessSurface.ConnectNeedsExposure(listenerOn: false));
     }
 }
